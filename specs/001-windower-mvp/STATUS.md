@@ -1,8 +1,8 @@
 # Spec Status
 
-Current phase: **3 — Window Control** (not started)
-Active phase file: `tasks/phase-3-window-control.md`
-Previous: Phase 2 (macOS Enumeration & Permissions) — complete, see below.
+Current phase: **4 — Video Capture** (not started)
+Active phase file: `tasks/phase-4-video-capture.md`
+Previous: Phase 3 (Window Control) — complete, see below.
 
 Blocked: none
 
@@ -12,9 +12,14 @@ Planned (v1.1): Phase 15 (Post-Processing: trim, auto-zoom, ripples, gif/webm)
 
 Planned (post-MVP): Phase 16 (Windows backend), Phase 17 (Linux backend)
 
-Completed: Phase 0 (Foundation), Phase 1 (Sidecar Protocol & Capability Model), Phase 2 (macOS Enumeration & Permissions)
+Completed: Phase 0 (Foundation), Phase 1 (Sidecar Protocol & Capability Model), Phase 2 (macOS Enumeration & Permissions), Phase 3 (Window Control)
 
 ## Recently completed
+
+- **Phase 3 — Window Control** (2026-08-09): `resizeWindow` implemented in the macOS sidecar.
+  - `native/macos/Sources/WindowerSidecarCore/WindowControl.swift`: `CGWindowID` → owning pid (`CGWindowListCopyWindowInfo`) → `AXUIElementCreateApplication` → best-match `AXUIElement` window (position/size Euclidean distance + title tiebreaker, since AX has no direct `CGWindowID` lookup) → `AXUIElementIsAttributeSettable` pre-check (`RESIZE_UNSUPPORTED` if not resizable) → pixels→points via the same `backingScaleFactor` convention `EnumerationService.mapWindow` already established → `AXUIElementSetAttributeValue` for position/size → read-back → points→pixels → epsilon (1.0px) comparison for `result: "success"|"partial"`. `TARGET_NOT_FOUND` on stale/unmatched windowID. Wired into `main.swift` (`"window-control"` now advertised in `describe`). `packages/core`'s `resizeWindow` client/schema needed zero changes — Phase 1 already shipped it correctly.
+  - 16 new headless XCTest cases (coordinate math round-trips including negative-origin/secondary-display, epsilon comparison, best-match heuristic, wire-shape encode/decode). `swift test`: 27/27 passing. `pnpm build` + `pnpm turbo run test`: 12/12 tasks passing.
+  - Not verified in this sandbox (no interactive GUI/TCC/Accessibility grant, per CLAUDE.md's CI note): the exit criteria's 3-real-app resize test (Safari/Terminal/non-resizable dialog), real Retina pixel-bounds correctness, real secondary-display negative-origin placement. Deferred to Phase 13's local e2e process.
 
 - **Phase 2 — macOS Sidecar: Enumeration & Permissions** (2026-08-09): first real macOS implementation.
   - `native/macos/`: real newline-delimited JSON-RPC 2.0 stdio loop, split into `WindowerSidecarCore` library + thin executable target (required for XCTest `@testable` linking). `describe` advertises exactly `enumerate.displays`/`enumerate.windows`/`enumerate.apps`. `enumerateTargets` via `SCShareableContent`, points→pixels conversion via `backingScaleFactor` happens entirely inside the sidecar. `getPermissions`/`requestPermission` wired to real `CGPreflightScreenCaptureAccess`/`AXIsProcessTrusted`/`AVCaptureDevice` APIs. Error taxonomy correctly applied (`UNSUPPORTED_CAPABILITY` for unknown methods, `PERMISSION_DENIED` for TCC denials). 11/11 XCTest passing.

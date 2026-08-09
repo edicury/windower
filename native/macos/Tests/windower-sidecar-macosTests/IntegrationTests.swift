@@ -57,9 +57,10 @@ final class IntegrationTests: XCTestCase {
         let capabilities = try XCTUnwrap(result["capabilities"] as? [String])
         XCTAssertTrue(capabilities.contains("enumerate.displays"))
         XCTAssertTrue(capabilities.contains("enumerate.windows"))
+        // Implemented as of Phase 3.
+        XCTAssertTrue(capabilities.contains("window-control"))
         // Not yet implemented at this phase — must not be advertised.
         XCTAssertFalse(capabilities.contains("capture.display"))
-        XCTAssertFalse(capabilities.contains("window-control"))
     }
 
     func testUnknownMethodReturnsUnsupportedCapabilityTaxonomyCode() throws {

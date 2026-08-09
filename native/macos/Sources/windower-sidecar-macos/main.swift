@@ -10,15 +10,16 @@ import WindowerSidecarCore
 
 let sidecarVersion = "0.1.0"
 
-/// Capabilities this backend actually implements at this phase. Window
-/// control (Phase 3), capture.* (Phase 4/5), audio.* (Phase 5), and
-/// eventTimeline.* (Phase 10) are deliberately NOT advertised yet — the
-/// daemon gates on `describe().capabilities` before calling anything, per
-/// CLAUDE.md "protocol before platform".
+/// Capabilities this backend actually implements at this phase. capture.*
+/// (Phase 4/5), audio.* (Phase 5), and eventTimeline.* (Phase 10) are
+/// deliberately NOT advertised yet — the daemon gates on
+/// `describe().capabilities` before calling anything, per CLAUDE.md
+/// "protocol before platform".
 let supportedCapabilities: [String] = [
     "enumerate.displays",
     "enumerate.windows",
     "enumerate.apps",
+    "window-control",
 ]
 
 func logStderr(_ message: String) {
@@ -110,7 +111,13 @@ func handleRequest(id: JSONValue, method: String, params: JSONValue?) {
             semaphore.wait()
             resultValue = try JSONCodec.encode(RequestPermissionResult(status: status))
 
-        case "resizeWindow", "startCapture", "stopCapture", "cancelCapture":
+        case "resizeWindow":
+            let decodedParams = try decodeParams(ResizeWindowParams.self, from: params)
+            let result = try WindowControlService.resizeWindow(
+                targetId: decodedParams.targetId, bounds: decodedParams.bounds)
+            resultValue = try JSONCodec.encode(result)
+
+        case "startCapture", "stopCapture", "cancelCapture":
             throw SidecarRpcError.unsupportedCapability(
                 "\(method) is not implemented by this backend at this phase")
 
