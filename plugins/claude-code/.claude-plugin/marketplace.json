@@ -1,0 +1,23 @@
+{
+  "name": "windower",
+  "owner": {
+    "name": "Windower"
+  },
+  "metadata": {
+    "description": "Windower — AI-native screen recorder plugin for Claude Code",
+    "version": "0.0.0"
+  },
+  "plugins": [
+    {
+      "name": "windower",
+      "source": "./",
+      "description": "AI-native screen recorder: enumerate targets, size a window, record a demo, narrate, and get back a video + manifest — driven by the windower MCP server.",
+      "version": "0.0.0",
+      "author": {
+        "name": "Windower"
+      },
+      "category": "development",
+      "keywords": ["screen-recording", "mcp", "demo", "video"]
+    }
+  ]
+}

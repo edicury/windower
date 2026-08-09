@@ -4,5 +4,13 @@
   "description": "AI-native screen recorder: enumerate targets, size a window, record a demo, narrate, and get back a video + manifest — driven by the windower CLI/MCP server.",
   "author": {
     "name": "Windower"
+  },
+  "mcpServers": {
+    "windower": {
+      "command": "node",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/../../packages/mcp-server/dist/index.js"
+      ]
+    }
   }
 }

@@ -1,8 +1,8 @@
 # Spec Status
 
-Current phase: **9 — Claude Code Plugin + Skill** (not started)
-Active phase file: `tasks/phase-9-claude-code-plugin-skill.md`
-Previous: Phase 8 (MCP Server) — complete, see below.
+Current phase: **10 — Event Timeline** (not started)
+Active phase file: `tasks/phase-10-event-timeline.md`
+Previous: Phase 9 (Claude Code Plugin + Skill) — complete, see below.
 
 Blocked: none
 
@@ -12,11 +12,16 @@ Planned (v1.1): Phase 15 (Post-Processing: trim, auto-zoom, ripples, gif/webm)
 
 Planned (post-MVP): Phase 16 (Windows backend), Phase 17 (Linux backend)
 
-Completed: Phase 0 (Foundation), Phase 1 (Sidecar Protocol & Capability Model), Phase 2 (macOS Enumeration & Permissions), Phase 3 (Window Control), Phase 4 (Video Capture), Phase 5 (Audio), Phase 6 (Daemon & Session Lifecycle), Phase 7 (CLI), Phase 8 (MCP Server)
+Completed: Phase 0 (Foundation), Phase 1 (Sidecar Protocol & Capability Model), Phase 2 (macOS Enumeration & Permissions), Phase 3 (Window Control), Phase 4 (Video Capture), Phase 5 (Audio), Phase 6 (Daemon & Session Lifecycle), Phase 7 (CLI), Phase 8 (MCP Server), Phase 9 (Claude Code Plugin + Skill)
 
 ## Recently completed
 
-- **Phase 8 — MCP Server** (2026-08-09): `packages/mcp-server` implemented — all 9 `contracts/mcp-tools.md` tools over stdio, thin wrappers over the Phase 6 `DaemonClient`.
+- **Phase 9 — Claude Code Plugin + Skill** (2026-08-09): `plugins/claude-code` packaged as a real installable Claude Code plugin — manifest + `SKILL.md` teaching the record-a-demo workflow over the Phase 8 MCP tools.
+  - Built via 2 parallel subagents (disjoint files): one authored `.claude-plugin/plugin.json` (MCP server wiring), the other authored `SKILL.md` (workflow content) — then this session added `.claude-plugin/marketplace.json` directly (small/mechanical) to make the plugin locally installable for dogfooding, since neither subagent's scope covered plugin distribution.
+  - `plugin.json`: `mcpServers.windower` → `node ${CLAUDE_PLUGIN_ROOT}/../../packages/mcp-server/dist/index.js`. **Flagged deviation**: this is monorepo-relative dev wiring (assumes `plugins/claude-code/` and `packages/mcp-server/` stay sibling dirs with `dist/` pre-built) — Phase 14 should switch to `npx @windower/mcp-server` once the package is published. No `skills` field needed/added — confirmed via two real installed-plugin examples (`context-mode`, `caveman`) that a bare top-level `SKILL.md` (our existing layout) is auto-discovered by convention, an explicit `skills` field is only for `skills/<name>/` subdirectory layouts. No `commands/` dir added — no spec/prior-art basis for re-exposing CLI flags as slash-commands; MCP tools are the agent-facing surface.
+  - `SKILL.md`: YAML frontmatter (`name`/`description` with trigger phrases, matching real installed-skill conventions) + the workflow (enumerate → resize → start → act → stop → report), a bolded "wrong vs right" contrast on the non-blocking two-call `start_recording`/`stop_recording` pattern, worked recipes (browser demo, terminal session, narrated demo — narration correctly placed on `stop_recording`'s `narration: {filePath, offsetMs}` param per `contracts/mcp-tools.md`, not on `start_recording`), first-run permission guidance (explicit "do not loop `check_permissions`/`request_permission`" instruction — tell the user and stop), and a reporting-results section (`outputPath`/`manifestPath`/`eventTimelinePath`, never just "done").
+  - **Exit criteria verified live, not just authored**: validated the manifest (`claude plugin validate`), added the local marketplace, ran `claude plugin install windower@windower` (scope: user), confirmed `plugin:windower:windower` MCP server connected and the `windower:windower` skill loaded after a session restart, removed the earlier ad-hoc `claude mcp add` registration from Phase 8's dogfood so this test exercised the real plugin-install path only. Then ran the actual dogfood prompt from the phase file — a naive "record yourself creating a new file in this project" with no CLI flags or tool names mentioned — and the skill correctly drove `check_permissions` → `list_targets` → `start_recording` (returned instantly with just `{sessionId}`, confirming the two-call semantic holds through the plugin path) → created a real file on screen → `stop_recording`, producing a real 16.5MB/7.8s h264 mp4 + manifest, opened and visually confirmed playing correctly by the user.
+  - Missing-permissions handling verified by inspection of the `SKILL.md` text (not exercised live since this machine already has all three grants) — deferred to a real first-run machine if that scenario needs a second live check. `packages/mcp-server` implemented — all 9 `contracts/mcp-tools.md` tools over stdio, thin wrappers over the Phase 6 `DaemonClient`.
   - Built via 2 subagents: foundation (scaffold + read-only tools) then a parallel-safe follow-on (session-lifecycle tools in a disjoint file), integrating through a `tools/index.ts` barrel.
   - `packages/mcp-server/src/`: `server.ts` (`createServer()`, `@modelcontextprotocol/sdk` `McpServer`, name `windower`), `index.ts` (`#!/usr/bin/env node` entrypoint, `StdioServerTransport`), `daemon-client.ts` (`getDaemonClient()` — memoized per-process `DaemonClient` via `ensureDaemonRunning()`, **not** disposed per call like the CLI's `withDaemon`, since an MCP server is long-lived; `toMcpError(err)` maps `DaemonError`/`ZodError`/generic errors to the SDK's `{content, isError: true}` shape), `tools/read.ts` (`list_targets`, `check_permissions`, `request_permission`, `resize_window`), `tools/session.ts` (`start_recording`, `get_session`, `stop_recording`, `cancel_recording`, `list_sessions`), `tools/index.ts` barrel.
   - Every tool's input/output schema is the exact `@windower/core` Zod schema (`ListTargetsParamsSchema`, `StartRecordingResultSchema`, etc.) passed straight to `server.registerTool(name, {title, description, inputSchema, outputSchema}, handler)` — zero hand-written parallel schemas, matching the phase file's single-source-of-truth requirement.
