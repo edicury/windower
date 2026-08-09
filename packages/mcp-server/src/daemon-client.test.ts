@@ -1,7 +1,24 @@
-import { DaemonError } from "@windower/core";
-import { describe, expect, it } from "vitest";
+import { DaemonError, type DaemonClient } from "@windower/core";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type ZodError, z } from "zod";
-import { toMcpError } from "./daemon-client.js";
+import { getDaemonClient, resetDaemonClientForTests, toMcpError } from "./daemon-client.js";
+
+const { ensureDaemonRunningMock } = vi.hoisted(() => ({
+  ensureDaemonRunningMock: vi.fn(),
+}));
+
+vi.mock("@windower/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@windower/core")>();
+  return {
+    ...actual,
+    ensureDaemonRunning: ensureDaemonRunningMock,
+  };
+});
+
+/** Minimal fake standing in for `DaemonClient` — only `isDisposed` matters here. */
+function makeFakeClient(): { isDisposed: boolean } {
+  return { isDisposed: false };
+}
 
 describe("toMcpError", () => {
   it("maps a DaemonError to an isError result carrying its code", () => {
@@ -36,5 +53,51 @@ describe("toMcpError", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0]?.text).toContain("INTERNAL_ERROR");
     expect(result.content[0]?.text).toContain("just a string");
+  });
+});
+
+describe("getDaemonClient", () => {
+  beforeEach(() => {
+    resetDaemonClientForTests();
+    ensureDaemonRunningMock.mockReset();
+  });
+
+  it("memoizes the client across calls while it stays connected", async () => {
+    const client = makeFakeClient();
+    ensureDaemonRunningMock.mockResolvedValue(client);
+
+    const first = await getDaemonClient();
+    const second = await getDaemonClient();
+
+    expect(first).toBe(client);
+    expect(second).toBe(client);
+    expect(ensureDaemonRunningMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("self-heals: reconnects once the memoized client dies mid-session instead of replaying DAEMON_UNREACHABLE forever", async () => {
+    const deadClient = makeFakeClient();
+    const freshClient = makeFakeClient();
+    ensureDaemonRunningMock
+      .mockResolvedValueOnce(deadClient as unknown as DaemonClient)
+      .mockResolvedValueOnce(freshClient as unknown as DaemonClient);
+
+    const first = await getDaemonClient();
+    expect(first).toBe(deadClient);
+    expect(ensureDaemonRunningMock).toHaveBeenCalledTimes(1);
+
+    // Simulate the underlying daemon dying mid-session (crash, `windower
+    // daemon stop`, a restart for a new build, ...): the socket closes and
+    // the memoized DaemonClient flips to disposed.
+    deadClient.isDisposed = true;
+
+    const second = await getDaemonClient();
+    expect(second).toBe(freshClient);
+    expect(ensureDaemonRunningMock).toHaveBeenCalledTimes(2);
+
+    // And it stays memoized/healthy afterwards rather than reconnecting on
+    // every call.
+    const third = await getDaemonClient();
+    expect(third).toBe(freshClient);
+    expect(ensureDaemonRunningMock).toHaveBeenCalledTimes(2);
   });
 });

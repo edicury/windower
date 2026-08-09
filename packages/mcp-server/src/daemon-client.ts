@@ -17,6 +17,13 @@ let clientPromise: Promise<DaemonClient> | undefined;
  * daemon if needed) on first call. Subsequent calls reuse the same
  * connection. If a previous connection attempt failed, the next call retries
  * rather than replaying the rejection forever.
+ *
+ * Self-heals mid-session too: if the previously-successful connection's
+ * underlying daemon process has since died (crash, `windower daemon stop`,
+ * a restart for a new build, ...), the memoized `DaemonClient` becomes
+ * `isDisposed` and would otherwise keep erroring with `DAEMON_UNREACHABLE`
+ * forever. We detect that here, drop the stale memoized promise, and
+ * reconnect before returning.
  */
 export function getDaemonClient(): Promise<DaemonClient> {
   if (!clientPromise) {
@@ -27,7 +34,16 @@ export function getDaemonClient(): Promise<DaemonClient> {
       throw err;
     });
   }
-  return clientPromise;
+  const pending = clientPromise;
+  return pending.then((client) => {
+    if (!client.isDisposed) return client;
+    // Only clear if nothing else has already replaced this promise (e.g. a
+    // concurrent call already reconnected).
+    if (clientPromise === pending) {
+      clientPromise = undefined;
+    }
+    return getDaemonClient();
+  });
 }
 
 /** Test-only hook to reset the memoized client between test cases. */

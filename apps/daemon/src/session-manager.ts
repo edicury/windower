@@ -16,6 +16,10 @@ import {
   VideoSettingsSchema,
 } from "@windower/core";
 import { EventTimelineWriter } from "./event-timeline-writer.js";
+import {
+  muxNarration as defaultMuxNarration,
+  validateNarrationFile as defaultValidateNarrationFile,
+} from "./narration-mux.js";
 import type { SessionStore } from "./session-store.js";
 
 /** Placeholder until Phase 14 wires a real package-version read (manifest.json's `windowerVersion` field). */
@@ -50,6 +54,10 @@ export type SidecarFactory = (options: SpawnSidecarOptions) => SidecarHandle;
 export interface SessionManagerOptions {
   store: SessionStore;
   spawnSidecar: SidecarFactory;
+  /** Injectable for tests — defaults to the real ffmpeg-backed implementation in narration-mux.ts. */
+  validateNarrationFile?: typeof defaultValidateNarrationFile;
+  /** Injectable for tests — defaults to the real ffmpeg-backed implementation in narration-mux.ts. */
+  muxNarration?: typeof defaultMuxNarration;
 }
 
 function nowIso(): string {
@@ -93,6 +101,8 @@ function toDaemonError(err: unknown): DaemonError {
 export class SessionManager {
   private readonly store: SessionStore;
   private readonly spawnSidecar: SidecarFactory;
+  private readonly validateNarrationFile: typeof defaultValidateNarrationFile;
+  private readonly muxNarration: typeof defaultMuxNarration;
   private readonly activeSidecars = new Map<string, SidecarHandle>();
   private readonly activeTargetKeys = new Map<string, string>();
   private readonly eventWriters = new Map<string, EventTimelineWriter>();
@@ -101,6 +111,8 @@ export class SessionManager {
   constructor(options: SessionManagerOptions) {
     this.store = options.store;
     this.spawnSidecar = options.spawnSidecar;
+    this.validateNarrationFile = options.validateNarrationFile ?? defaultValidateNarrationFile;
+    this.muxNarration = options.muxNarration ?? defaultMuxNarration;
   }
 
   get activeSessionCount(): number {
@@ -223,6 +235,13 @@ export class SessionManager {
       );
     }
 
+    if (params.narration) {
+      // Fail fast, before touching capture state: an invalid narration file
+      // must leave the session exactly as it was (still "recording"), not
+      // half-stopped. See narration-mux.ts's top-of-file comment block.
+      await this.validateNarrationFile(params.narration.filePath);
+    }
+
     await this.store.save({ ...session, state: "stopping" });
 
     let result: {
@@ -242,9 +261,6 @@ export class SessionManager {
 
     const outputPath = result.outputFilePath;
     const manifestPath = manifestPathFor(outputPath);
-    const fileSize = await stat(outputPath)
-      .then((s) => s.size)
-      .catch(() => 0);
 
     const writer = this.eventWriters.get(session.id);
     const capabilities = this.eventCapabilities.get(session.id) ?? { keystrokes: false };
@@ -254,13 +270,46 @@ export class SessionManager {
       try {
         await writer.finalize(candidatePath, capabilities);
         eventTimelinePath = candidatePath;
-      } catch {
+      } catch (err) {
         // A bad/corrupt events file shouldn't fail an otherwise-successful
-        // recording — log and continue without an eventTimelinePath.
+        // recording — logged below and continue without an eventTimelinePath.
+        console.error(
+          `[SessionManager] event timeline finalize failed for session ${session.id}:`,
+          err,
+        );
       }
       this.eventWriters.delete(session.id);
       this.eventCapabilities.delete(session.id);
     }
+
+    let narration: OutputManifest["narration"];
+    if (params.narration) {
+      try {
+        await this.muxNarration({
+          videoPath: outputPath,
+          narrationFilePath: params.narration.filePath,
+          offsetMs: params.narration.offsetMs,
+          videoDurationMs: result.actualDurationMs,
+        });
+        narration = {
+          filePath: params.narration.filePath,
+          offsetMs: params.narration.offsetMs,
+          trackIndex: session.audio.tracks.length,
+        };
+      } catch (err) {
+        // Mux failure must not fail an otherwise-successful recording — the
+        // base video is already finalized on disk. Logged below, then
+        // continue without populating manifest.narration, matching the same
+        // swallow pattern used above for writer.finalize() failures.
+        console.error(`[SessionManager] narration mux failed for session ${session.id}:`, err);
+      }
+    }
+
+    // Stat'd after the (optional) narration mux, since a successful mux
+    // rewrites `outputPath` in place and changes its size.
+    const fileSize = await stat(outputPath)
+      .then((s) => s.size)
+      .catch(() => 0);
 
     const manifest: OutputManifest = {
       windowerVersion: WINDOWER_VERSION,
@@ -277,6 +326,7 @@ export class SessionManager {
           trackIndex: index,
         })),
       },
+      ...(narration ? { narration } : {}),
       createdAt: nowIso(),
       file: {
         path: outputPath,

@@ -98,6 +98,18 @@ export class DaemonClient {
     return this.call("shutdown", {});
   }
 
+  /**
+   * Whether this client's underlying transport has been closed (explicitly
+   * via `dispose()`, or because the daemon process died / the socket
+   * closed). Once true, every call rejects with `DAEMON_UNREACHABLE` and the
+   * client can never recover — callers that memoize a `DaemonClient` (e.g.
+   * the MCP server) should check this and reconnect rather than keep
+   * returning a dead client.
+   */
+  get isDisposed(): boolean {
+    return this.disposed;
+  }
+
   /** Closes the underlying transport and rejects any in-flight calls. */
   dispose(): void {
     if (this.disposed) return;

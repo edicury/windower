@@ -9,7 +9,7 @@ import {
   WINDOWER_HOME_ENV,
 } from "@windower/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SessionManager } from "./session-manager.js";
+import { SessionManager, type SessionManagerOptions } from "./session-manager.js";
 import { SessionStore } from "./session-store.js";
 import { createFakeSidecarFactory } from "./test-helpers/fake-sidecar-factory.js";
 
@@ -237,5 +237,85 @@ describe("SessionManager", () => {
     );
     const timeline = EventTimelineSchema.parse(JSON.parse(raw));
     expect(timeline.capabilities.keystrokes).toBe(false);
+  });
+
+  describe("narration", () => {
+    function makeManagerWithNarration(overrides: {
+      validateNarrationFile?: SessionManagerOptions["validateNarrationFile"];
+      muxNarration?: SessionManagerOptions["muxNarration"];
+    }) {
+      const store = new SessionStore();
+      const { spawnSidecar } = createFakeSidecarFactory({
+        targets: [DISPLAY_TARGET, WINDOW_TARGET],
+      });
+      const manager = new SessionManager({ store, spawnSidecar, ...overrides });
+      return { manager, store };
+    }
+
+    it("stop with narration pointing at a missing file throws INVALID_ARGS and leaves the session untouched", async () => {
+      const validateNarrationFile = async () => {
+        throw new DaemonError("INVALID_ARGS", "Narration file not found");
+      };
+      const { manager } = makeManagerWithNarration({ validateNarrationFile });
+
+      const { sessionId } = await manager.startRecording({ target: DISPLAY_TARGET });
+
+      await expect(
+        manager.stopRecording({
+          sessionId,
+          narration: { filePath: "/nonexistent/narration.wav", offsetMs: 0 },
+        }),
+      ).rejects.toMatchObject({ code: "INVALID_ARGS" });
+
+      const session = manager.getSession({ sessionId });
+      expect(session.state).toBe("recording");
+      expect(manager.activeSessionCount).toBe(1);
+    });
+
+    it("stop with valid narration populates manifest.narration with the correct trackIndex", async () => {
+      let muxCalledWith: unknown;
+      const validateNarrationFile = async () => {};
+      const muxNarration = async (opts: unknown) => {
+        muxCalledWith = opts;
+      };
+      const { manager } = makeManagerWithNarration({ validateNarrationFile, muxNarration });
+
+      const { sessionId } = await manager.startRecording({ target: DISPLAY_TARGET });
+      const result = await manager.stopRecording({
+        sessionId,
+        narration: { filePath: "/tmp/narration.wav", offsetMs: 1500 },
+      });
+
+      expect(muxCalledWith).toMatchObject({
+        narrationFilePath: "/tmp/narration.wav",
+        offsetMs: 1500,
+      });
+      expect(result.manifest.narration).toEqual({
+        filePath: "/tmp/narration.wav",
+        offsetMs: 1500,
+        trackIndex: 0,
+      });
+    });
+
+    it("a throwing muxNarration does not fail stopRecording; base video/manifest still saved, manifest.narration absent", async () => {
+      const validateNarrationFile = async () => {};
+      const muxNarration = async () => {
+        throw new Error("ffmpeg exploded");
+      };
+      const { manager } = makeManagerWithNarration({ validateNarrationFile, muxNarration });
+
+      const { sessionId } = await manager.startRecording({ target: DISPLAY_TARGET });
+      const result = await manager.stopRecording({
+        sessionId,
+        narration: { filePath: "/tmp/narration.wav", offsetMs: 0 },
+      });
+
+      expect(result.outputPath).toBeTruthy();
+      expect(result.manifest.narration).toBeUndefined();
+
+      const session = manager.getSession({ sessionId });
+      expect(session.state).toBe("finalized");
+      expect(session.outputPath).toBe(result.outputPath);
+    });
   });
 });
