@@ -7,6 +7,12 @@ import {
   RecordingEngine,
   SessionStore,
 } from "@windower/engine";
+// `apps/daemon` is the one host that runs narration-muxed recordings, so it
+// is (deliberately) the one place outside `@windower/engine-narration`
+// itself that imports it — see `packages/engine/src/index.ts`'s top-of-file
+// comment and `RecordingEngineOptions.muxNarration`'s doc comment for why
+// `@windower/engine` itself never does.
+import { muxNarration, validateNarrationFile } from "@windower/engine-narration";
 import { loadDaemonConfig } from "./config.js";
 import { DaemonServer } from "./server.js";
 
@@ -48,6 +54,8 @@ export async function runDaemon(options: RunDaemonOptions = {}): Promise<Running
     store,
     spawnSidecar,
     targetLock: new FileTargetLock(),
+    muxNarration,
+    validateNarrationFile,
   });
   await sessionManager.recoverCrashedSessions();
 

@@ -1,12 +1,12 @@
 {
-  "name": "@windower/daemon",
+  "name": "@windower/engine-narration",
   "version": "0.1.0",
   "license": "UNLICENSED",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "bin": {
-    "windower-daemon": "./dist/bin.js"
+  "exports": {
+    ".": "./dist/index.js"
   },
   "files": ["dist", "README.md"],
   "publishConfig": {
@@ -20,9 +20,7 @@
   },
   "dependencies": {
     "@windower/core": "workspace:*",
-    "@windower/engine": "workspace:*",
-    "@windower/engine-narration": "workspace:*",
-    "zod": "^4.4.3"
+    "ffmpeg-static": "^5.3.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

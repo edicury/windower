@@ -7,9 +7,21 @@
  * `RecordingEngine` instance. `apps/daemon` keeps only socket + lifecycle
  * (`server.ts`/`main.ts`/`bin.ts`) on top of this package.
  *
- * `narration-mux.ts` (and its `ffmpeg-static` dependency, ~70MB) lives here,
- * not in `@windower/core` — `@windower/mcp-server` depends on `@windower/core`
- * without dragging that binary in.
+ * `narration-mux.ts` (and its `ffmpeg-static` dependency, ~70MB) does NOT
+ * live in this package — it was split out into `@windower/engine-narration`
+ * (Phase 20 follow-up; see `STATUS.md`'s Phase 20 section) precisely
+ * because `@windower/mcp-server` depends on this package (for
+ * `LocalWindower`) without ever needing narration muxing, and a declared
+ * `ffmpeg-static` dependency drags the binary into `mcp-server`'s resolved
+ * tree regardless of whether any code path actually imports it. Instead,
+ * `RecordingEngine` (`recording-engine.ts`) takes `muxNarration`/
+ * `validateNarrationFile` as injected constructor options with NO default —
+ * `apps/daemon` (the only host that runs narration-muxed recordings; see
+ * `apps/daemon/src/main.ts`) imports `@windower/engine-narration` itself
+ * and passes the real implementations in. `LocalWindower` and
+ * `packages/cli/src/commands/operate.ts`'s direct `RecordingEngine`
+ * construction never pass narration params, so they never need the
+ * injection.
  */
 export const ENGINE_PACKAGE_NAME = "@windower/engine";
 
@@ -25,4 +37,3 @@ export * from "./operator-run-engine.js";
 export * from "./local-windower.js";
 export * from "./output-resolver.js";
 export * from "./event-timeline-writer.js";
-export * from "./narration-mux.js";

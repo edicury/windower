@@ -26,15 +26,32 @@ import {
   writeManifest,
 } from "./manifest.js";
 import {
-  muxNarration as defaultMuxNarration,
-  validateNarrationFile as defaultValidateNarrationFile,
-} from "./narration-mux.js";
-import {
   ensureWritableOutputDir,
   resolveFilenameTemplate,
   resolveUniqueOutputPath,
 } from "./output-resolver.js";
 import type { SessionStore } from "./session-store.js";
+
+/**
+ * Type-only references to `@windower/engine-narration`'s exports —
+ * `typeof import(...)` is erased at compile time, so this does NOT trigger
+ * a runtime import (and thus never resolves that package's `ffmpeg-static`
+ * dependency) just by this file being loaded. `@windower/engine-narration`
+ * is declared only as a `devDependency` below (see `package.json`), used
+ * solely for these type queries — this package has NO runtime dependency
+ * on it or on `ffmpeg-static`. `RecordingEngine` never imports the real
+ * `muxNarration`/`validateNarrationFile` itself; callers that need
+ * narration muxing (`apps/daemon`, the only host that runs narration-muxed
+ * recordings — see `apps/daemon/src/main.ts`) import
+ * `@windower/engine-narration` themselves and inject the real
+ * implementations via `RecordingEngineOptions`. This is what keeps
+ * `@windower/mcp-server` (which depends on `@windower/engine` for
+ * `LocalWindower` but never mux/validates narration) from resolving the
+ * ~70MB `ffmpeg-static` binary at all — see `index.ts`'s top-of-file
+ * comment.
+ */
+type MuxNarrationFn = typeof import("@windower/engine-narration").muxNarration;
+type ValidateNarrationFileFn = typeof import("@windower/engine-narration").validateNarrationFile;
 
 /** This package's own version, read from its `package.json` — used for `OutputManifest.windowerVersion`. */
 const WINDOWER_VERSION = packageVersion(import.meta.url);
@@ -134,10 +151,22 @@ export class InMemoryTargetLock implements TargetLock {
 export interface RecordingEngineOptions {
   store: SessionStore;
   spawnSidecar: SidecarFactory;
-  /** Injectable for tests — defaults to the real ffmpeg-backed implementation in narration-mux.ts. */
-  validateNarrationFile?: typeof defaultValidateNarrationFile;
-  /** Injectable for tests — defaults to the real ffmpeg-backed implementation in narration-mux.ts. */
-  muxNarration?: typeof defaultMuxNarration;
+  /**
+   * Injectable — tests pass a fake; `apps/daemon` (`main.ts`) passes the
+   * real `@windower/engine-narration` implementation. Deliberately has NO
+   * default: this package must never import `@windower/engine-narration`
+   * (or its `ffmpeg-static` dependency) at runtime — see `MuxNarrationFn`'s
+   * doc comment above. A caller that omits this and then requests
+   * `stopRecording` with a `narration` param gets a clear `INTERNAL_ERROR`
+   * (`requireValidateNarrationFile` below) instead of a real mux happening.
+   */
+  validateNarrationFile?: ValidateNarrationFileFn;
+  /**
+   * Injectable — tests pass a fake; `apps/daemon` (`main.ts`) passes the
+   * real `@windower/engine-narration` implementation. Deliberately has NO
+   * default — see `validateNarrationFile`'s doc comment above.
+   */
+  muxNarration?: MuxNarrationFn;
   /** Injectable — defaults to `InMemoryTargetLock`. A daemon should pass the real file-lock-backed `TargetLock`. */
   targetLock?: TargetLock;
 }
@@ -191,8 +220,8 @@ function toDaemonError(err: unknown): DaemonError {
 export class RecordingEngine {
   private readonly store: SessionStore;
   private readonly spawnSidecar: SidecarFactory;
-  private readonly validateNarrationFile: typeof defaultValidateNarrationFile;
-  private readonly muxNarration: typeof defaultMuxNarration;
+  private readonly validateNarrationFileFn: ValidateNarrationFileFn | undefined;
+  private readonly muxNarrationFn: MuxNarrationFn | undefined;
   private readonly targetLock: TargetLock;
   private readonly activeSidecars = new Map<string, SidecarHandle>();
   private readonly eventWriters = new Map<string, EventTimelineWriter>();
@@ -205,9 +234,42 @@ export class RecordingEngine {
   constructor(options: RecordingEngineOptions) {
     this.store = options.store;
     this.spawnSidecar = options.spawnSidecar;
-    this.validateNarrationFile = options.validateNarrationFile ?? defaultValidateNarrationFile;
-    this.muxNarration = options.muxNarration ?? defaultMuxNarration;
+    this.validateNarrationFileFn = options.validateNarrationFile;
+    this.muxNarrationFn = options.muxNarration;
     this.targetLock = options.targetLock ?? new InMemoryTargetLock();
+  }
+
+  /**
+   * Returns the injected `validateNarrationFile`, or throws `INTERNAL_ERROR`
+   * if the host constructed this `RecordingEngine` without one — see
+   * `RecordingEngineOptions.validateNarrationFile`'s doc comment. Only
+   * reached when `stopRecording` is actually called with a `narration`
+   * param, so hosts that never pass narration (e.g. `LocalWindower`,
+   * `operate.ts`'s `RecordingEngine`) are unaffected by omitting it.
+   */
+  private requireValidateNarrationFile(): ValidateNarrationFileFn {
+    if (!this.validateNarrationFileFn) {
+      throw new DaemonError(
+        "INTERNAL_ERROR",
+        "This RecordingEngine was constructed without a validateNarrationFile implementation — narration muxing is unavailable in this process.",
+      );
+    }
+    return this.validateNarrationFileFn;
+  }
+
+  /**
+   * Returns the injected `muxNarration`, or throws `INTERNAL_ERROR` if the
+   * host constructed this `RecordingEngine` without one — see
+   * `RecordingEngineOptions.muxNarration`'s doc comment.
+   */
+  private requireMuxNarration(): MuxNarrationFn {
+    if (!this.muxNarrationFn) {
+      throw new DaemonError(
+        "INTERNAL_ERROR",
+        "This RecordingEngine was constructed without a muxNarration implementation — narration muxing is unavailable in this process.",
+      );
+    }
+    return this.muxNarrationFn;
   }
 
   get activeSessionCount(): number {
@@ -458,7 +520,8 @@ export class RecordingEngine {
       // Fail fast, before touching capture state: an invalid narration file
       // must leave the session exactly as it was (still "recording"), not
       // half-stopped. See narration-mux.ts's top-of-file comment block.
-      await this.validateNarrationFile(params.narration.filePath);
+      const validateNarrationFile = this.requireValidateNarrationFile();
+      await validateNarrationFile(params.narration.filePath);
     }
 
     await this.store.save({ ...session, state: "stopping" });
@@ -515,7 +578,8 @@ export class RecordingEngine {
     let narration: OutputManifest["narration"];
     if (params.narration) {
       try {
-        await this.muxNarration({
+        const muxNarration = this.requireMuxNarration();
+        await muxNarration({
           videoPath: outputPath,
           narrationFilePath: params.narration.filePath,
           offsetMs: params.narration.offsetMs,
