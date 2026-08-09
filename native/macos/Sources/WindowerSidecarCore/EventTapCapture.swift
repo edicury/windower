@@ -36,30 +36,36 @@ public struct TimelineEventWire: Codable, Equatable {
     public let y: Double?
     public let button: String?
     public let key: String?
+    /// Phase 19 — `"user"` (real human input) or `"operator"` (input this
+    /// sidecar synthesized via `performInput`, identified by the
+    /// `WindowerEventTag.magic` stamp on the event's `eventSourceUserData`).
+    /// Optional in the schema; always populated by this backend.
+    public let source: String?
 
-    public init(t: Double, type: String, x: Double? = nil, y: Double? = nil, button: String? = nil, key: String? = nil) {
+    public init(t: Double, type: String, x: Double? = nil, y: Double? = nil, button: String? = nil, key: String? = nil, source: String? = nil) {
         self.t = t
         self.type = type
         self.x = x
         self.y = y
         self.button = button
         self.key = key
+        self.source = source
     }
 
-    public static func cursorMove(t: Double, x: Double, y: Double) -> TimelineEventWire {
-        TimelineEventWire(t: t, type: "cursor_move", x: x, y: y)
+    public static func cursorMove(t: Double, x: Double, y: Double, source: String? = nil) -> TimelineEventWire {
+        TimelineEventWire(t: t, type: "cursor_move", x: x, y: y, source: source)
     }
 
-    public static func mouseButton(t: Double, type: String, x: Double, y: Double, button: String) -> TimelineEventWire {
-        TimelineEventWire(t: t, type: type, x: x, y: y, button: button)
+    public static func mouseButton(t: Double, type: String, x: Double, y: Double, button: String, source: String? = nil) -> TimelineEventWire {
+        TimelineEventWire(t: t, type: type, x: x, y: y, button: button, source: source)
     }
 
-    public static func key(t: Double, type: String, key: String) -> TimelineEventWire {
-        TimelineEventWire(t: t, type: type, key: key)
+    public static func key(t: Double, type: String, key: String, source: String? = nil) -> TimelineEventWire {
+        TimelineEventWire(t: t, type: type, key: key, source: source)
     }
 
     private enum CodingKeys: String, CodingKey {
-        case t, type, x, y, button, key
+        case t, type, x, y, button, key, source
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -77,6 +83,12 @@ public struct TimelineEventWire: Codable, Equatable {
             try container.encode(key, forKey: .key)
         default:
             break
+        }
+        // `source` applies to every variant (data-model.md §TimelineEvent);
+        // omitted entirely when unknown rather than guessed, since the schema
+        // marks it optional.
+        if let source = source {
+            try container.encode(source, forKey: .source)
         }
     }
 }
@@ -361,25 +373,26 @@ public final class EventTapSource {
         let location = event.location
         let scaleFactor = scaleFactorResolver(location)
         let pixels = EventCoordinateConversion.toPixels(location, scaleFactor: scaleFactor)
+        let source = Self.source(for: event)
 
         switch type {
         case .mouseMoved:
             guard EventThrottle.shouldEmit(nowMs: nowMs, lastEmittedMs: lastCursorMoveEmittedMs) else { return }
             lastCursorMoveEmittedMs = nowMs
-            emitEvent(.cursorMove(t: nowMs, x: pixels.x, y: pixels.y))
+            emitEvent(.cursorMove(t: nowMs, x: pixels.x, y: pixels.y, source: source))
 
         case .leftMouseDown:
-            emitEvent(.mouseButton(t: nowMs, type: "mouse_down", x: pixels.x, y: pixels.y, button: "left"))
+            emitEvent(.mouseButton(t: nowMs, type: "mouse_down", x: pixels.x, y: pixels.y, button: "left", source: source))
         case .leftMouseUp:
-            emitEvent(.mouseButton(t: nowMs, type: "mouse_up", x: pixels.x, y: pixels.y, button: "left"))
+            emitEvent(.mouseButton(t: nowMs, type: "mouse_up", x: pixels.x, y: pixels.y, button: "left", source: source))
         case .rightMouseDown:
-            emitEvent(.mouseButton(t: nowMs, type: "mouse_down", x: pixels.x, y: pixels.y, button: "right"))
+            emitEvent(.mouseButton(t: nowMs, type: "mouse_down", x: pixels.x, y: pixels.y, button: "right", source: source))
         case .rightMouseUp:
-            emitEvent(.mouseButton(t: nowMs, type: "mouse_up", x: pixels.x, y: pixels.y, button: "right"))
+            emitEvent(.mouseButton(t: nowMs, type: "mouse_up", x: pixels.x, y: pixels.y, button: "right", source: source))
         case .otherMouseDown:
-            emitEvent(.mouseButton(t: nowMs, type: "mouse_down", x: pixels.x, y: pixels.y, button: "other"))
+            emitEvent(.mouseButton(t: nowMs, type: "mouse_down", x: pixels.x, y: pixels.y, button: "other", source: source))
         case .otherMouseUp:
-            emitEvent(.mouseButton(t: nowMs, type: "mouse_up", x: pixels.x, y: pixels.y, button: "other"))
+            emitEvent(.mouseButton(t: nowMs, type: "mouse_up", x: pixels.x, y: pixels.y, button: "other", source: source))
         default:
             break
         }
@@ -388,14 +401,26 @@ public final class EventTapSource {
     private func handleKeyEvent(type: CGEventType, event: CGEvent) {
         let nowMs = Date().timeIntervalSince(startedAt) * 1000
         let key = Self.keyDescription(for: event)
+        let source = Self.source(for: event)
         switch type {
         case .keyDown:
-            emitEvent(.key(t: nowMs, type: "key_down", key: key))
+            emitEvent(.key(t: nowMs, type: "key_down", key: key, source: source))
         case .keyUp:
-            emitEvent(.key(t: nowMs, type: "key_up", key: key))
+            emitEvent(.key(t: nowMs, type: "key_up", key: key, source: source))
         default:
             break
         }
+    }
+
+    /// Phase 19 — attribute a tapped event to the human or to the operator
+    /// loop. `InputSynthesisService` stamps `WindowerEventTag.magic` onto
+    /// `.eventSourceUserData` for every event it posts; anything else (real
+    /// hardware input, or another process's synthetic input) reads as
+    /// `"user"`. The tap itself stays `.listenOnly` — synthesis posts on a
+    /// completely separate path (`CGEventPost`), it never re-injects through
+    /// this tap.
+    static func source(for event: CGEvent) -> String {
+        WindowerEventTag.source(forUserData: event.getIntegerValueField(.eventSourceUserData))
     }
 
     /// Best-effort key description (phase-10 explicitly does not require a

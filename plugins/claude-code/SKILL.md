@@ -4,11 +4,14 @@ description: |
   Record a screen demo (window, display, or region) using the Windower MCP
   tools (list_targets, check_permissions, request_permission, resize_window,
   start_recording, get_session, stop_recording, cancel_recording,
-  list_sessions). Use whenever the user asks to record, capture, screen-record,
-  or make a video/demo/screencast of an app, browser, terminal, or workflow —
-  including narrated demos. Triggers: "record a demo", "screen record",
-  "capture this", "make a video of", "record yourself doing X", "narrate a
-  recording".
+  list_sessions) — and, when you have no tool that can drive the UI in
+  question, hand the whole task to Windower's own operator (run_operator,
+  get_operator_run, abort_operator_run). Use whenever the user asks to record,
+  capture, screen-record, or make a video/demo/screencast of an app, browser,
+  terminal, or workflow — including narrated demos. Triggers: "record a demo",
+  "screen record", "capture this", "make a video of", "record yourself doing
+  X", "narrate a recording", "log in and record it", "do this in the app and
+  record it".
 ---
 
 # Windower — record-a-demo skill
@@ -51,6 +54,84 @@ stop_recording({ sessionId: "abc123" })      # → { outputPath, manifestPath, .
 ```
 
 If you find yourself calling `stop_recording` in the same turn as `start_recording` with no real work in between, stop — you have not actually recorded anything worth keeping.
+
+## Driving the UI yourself vs. delegating to the operator
+
+**The two-call flow above, where *you* perform the on-screen actions with your
+own tools, is the default. Reach for it first.** You are the agent that
+understands the user's intent, so you drive; Windower records. Don't hand a
+task to the operator just because it sounds autonomous.
+
+`run_operator` exists for the cases where "step 4 — perform the actions being
+demoed" is something you genuinely cannot do:
+
+- **Native / desktop UI you have no tool for.** Your browser tool is
+  browser-only. A macOS app, a preferences pane, a native installer, an
+  Electron app's OS-level chrome, a menu bar item, a system dialog — you have
+  no way to click those. The operator does: it perceives the screen with
+  `captureFrame` and drives real mouse/keyboard input through the sidecar.
+- **The user handed you one instruction to be executed and recorded
+  end-to-end.** "Open the app, log in with these creds, create an incident to
+  showcase, record it in 1080p" is a single natural-language task with a video
+  as the deliverable. Passing it through verbatim is both simpler and closer
+  to what was asked than decomposing it into a dozen tool calls of your own.
+
+Keep driving it yourself when:
+
+- The whole demo happens in a browser and your browser tool can reach it —
+  you'll be faster, more reliable, and more precise than pixel-level input.
+- You need to interleave non-UI work (run a command, edit a file, call an API)
+  with the on-screen steps. The operator's tool surface is deliberately closed:
+  screenshot, mouse, keyboard, wait, list targets, resize, done/fail. It has
+  no shell, no filesystem, no network tool.
+- The user wants to review or steer each step. The operator runs to completion
+  on its own; there is no per-step approval surface.
+
+### Using it
+
+```
+run_operator({
+  task: "Open the app, log in as {{user}} / {{password}}, create an incident called 'Checkout latency'",
+  model: { provider: "anthropic", model: "claude-sonnet-5" },
+  secrets: [
+    { name: "user", source: "env", ref: "DEMO_USER" },
+    { name: "password", source: "keychain", ref: "waroom-demo" }
+  ],
+  recording: {
+    video: { resolution: { width: 1920, height: 1080 }, fps: 30 },
+    outputDir: "~/Desktop"
+  },
+  guardrails: { maxSteps: 40, timeoutSeconds: 300 }
+})
+# → { runId: "op_9c31" } — returns immediately, same non-blocking shape as start_recording
+```
+
+Then poll `get_operator_run({ runId })` for `state`
+(`running|succeeded|failed|aborted`) and the step transcript, and
+`abort_operator_run({ runId })` to stop a run that's gone wrong — an active
+recording is finalized rather than discarded.
+
+**Credentials.** Never put a password, token, or API key in the `task` string.
+Pass it as a secret ref (`env`, `keychain`, or — discouraged — `literal`) and
+refer to it in the task as `{{name}}`. The operator's model only ever sees the
+`{{name}}` placeholder; the real value is substituted immediately before the
+input is typed, and a redaction filter scrubs the transcript, the logs, and
+the event timeline before anything is written to disk. If a user pastes a
+credential to you directly, tell them to store it in the keychain or an env
+var and pass the ref instead.
+
+**Guardrails are real, not advisory.** The step cap (default 40), the
+wall-clock timeout (default 5 min), the clamp of every coordinate to the
+recorded target's bounds, and abort are all enforced by the Windower runtime,
+not requested in the model's prompt. A run that hits one ends as `failed` with
+a structured error — you don't need to police the operator yourself, but you
+should report those failures to the user plainly rather than retrying blindly.
+
+**Reporting.** An operator run writes the usual video + `manifest.json` +
+event timeline, plus `<recording>.operator.json` — the step-by-step transcript
+of what it saw and did. Mention it alongside the other paths. Synthetic input
+is tagged `source: "operator"` in the event timeline, so a later editing pass
+can tell operator clicks from a human's.
 
 ## Recipes
 

@@ -116,6 +116,8 @@ export class SessionManager {
   private readonly eventCapabilities = new Map<string, { keystrokes: boolean }>();
   /** Final destination (in the configured output dir) planned at `start`, moved to at `stop` — see output-resolver.ts. */
   private readonly plannedOutputPaths = new Map<string, string>();
+  /** Phase 19: `<recording>.operator.json` for operator-driven sessions, surfaced as `OutputManifest.operatorRunPath`. */
+  private readonly operatorRunPaths = new Map<string, string>();
 
   constructor(options: SessionManagerOptions) {
     this.store = options.store;
@@ -126,6 +128,34 @@ export class SessionManager {
 
   get activeSessionCount(): number {
     return this.activeSidecars.size;
+  }
+
+  /**
+   * The sidecar client owned by an active session. Phase 19's
+   * `OperatorRunManager` drives `performInput`/`captureFrame` through the very
+   * same process that is recording, so synthesized input lands inside the
+   * capture rather than in a second, unrelated sidecar.
+   */
+  getSidecarClient(sessionId: string): SidecarClient | undefined {
+    return this.activeSidecars.get(sessionId)?.client;
+  }
+
+  /**
+   * Where this session's video will land at `stop`. Phase 19 derives
+   * `<recording>.operator.json` from it at run start, before the file exists.
+   */
+  getPlannedOutputPath(sessionId: string): string | undefined {
+    return this.plannedOutputPaths.get(sessionId);
+  }
+
+  /**
+   * Links an operator transcript into this session's `OutputManifest` as
+   * `operatorRunPath` (contracts/operator.md §Transcript format). Recorded
+   * here rather than passed to `stopRecording`, since `stop_recording`'s
+   * params are frozen in contracts/mcp-tools.md.
+   */
+  setOperatorRunPath(sessionId: string, operatorRunPath: string): void {
+    this.operatorRunPaths.set(sessionId, operatorRunPath);
   }
 
   /**
@@ -217,9 +247,7 @@ export class SessionManager {
       const describeResult = await handle.client.describe();
       if (describeResult.version !== EXPECTED_SIDECAR_VERSION) {
         console.warn(
-          `[SessionManager] sidecar version mismatch: expected "${EXPECTED_SIDECAR_VERSION}", ` +
-            `got "${describeResult.version}" — protocol errors may follow if the sidecar predates ` +
-            "or postdates capabilities this daemon expects. Reinstall/rebuild the sidecar to match.",
+          `[SessionManager] sidecar version mismatch: expected "${EXPECTED_SIDECAR_VERSION}", got "${describeResult.version}" — protocol errors may follow if the sidecar predates or postdates capabilities this daemon expects. Reinstall/rebuild the sidecar to match.`,
         );
       }
       const requiredCapability =
@@ -252,6 +280,7 @@ export class SessionManager {
       await handle.terminate().catch(() => {});
       await this.discardEventWriter(sessionId);
       this.plannedOutputPaths.delete(sessionId);
+      this.operatorRunPaths.delete(sessionId);
       const daemonErr = toDaemonError(err);
       session = {
         ...session,
@@ -331,6 +360,8 @@ export class SessionManager {
 
     const outputPath = plannedOutputPath;
     const manifestPath = manifestPathFor(outputPath);
+    const operatorRunPath = this.operatorRunPaths.get(session.id);
+    this.operatorRunPaths.delete(session.id);
 
     const writer = this.eventWriters.get(session.id);
     const capabilities = this.eventCapabilities.get(session.id) ?? { keystrokes: false };
@@ -405,6 +436,7 @@ export class SessionManager {
         container: session.video.container,
       },
       ...(eventTimelinePath ? { eventTimelinePath } : {}),
+      ...(operatorRunPath ? { operatorRunPath } : {}),
     };
     await mkdir(dirname(manifestPath), { recursive: true });
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
@@ -449,6 +481,7 @@ export class SessionManager {
     this.cleanupActive(session.id, session.target);
     await this.discardEventWriter(session.id);
     this.plannedOutputPaths.delete(session.id);
+    this.operatorRunPaths.delete(session.id);
 
     await this.store.save({ ...session, state: "canceled", stoppedAt: nowIso() });
     return { canceled: true };
@@ -477,6 +510,7 @@ export class SessionManager {
     await handle?.terminate().catch(() => {});
     await this.discardEventWriter(sessionId);
     this.plannedOutputPaths.delete(sessionId);
+    this.operatorRunPaths.delete(sessionId);
     await this.failSession(
       sessionId,
       new DaemonError("CAPTURE_FAILED", `Sidecar-initiated stop: ${reason}`),
@@ -492,6 +526,7 @@ export class SessionManager {
     this.cleanupActive(sessionId, session.target);
     await this.discardEventWriter(sessionId);
     this.plannedOutputPaths.delete(sessionId);
+    this.operatorRunPaths.delete(sessionId);
     await this.failSession(
       sessionId,
       new DaemonError(

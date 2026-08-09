@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AudioSettingsSchema } from "./audio-settings.js";
+import { ModelConfigSchema, OperatorGuardrailsSchema } from "./operator.js";
 import { VideoSettingsSchema } from "./video-settings.js";
 
 /**
@@ -23,5 +24,14 @@ export const WindowerConfigSchema = z.object({
   daemonIdleTimeoutMs: z.number().positive().optional(),
   defaultVideo: VideoSettingsSchema.partial().optional(),
   defaultAudio: AudioSettingsSchema.partial().optional(),
+  /** Phase 19 — operator defaults, see data-model.md §WindowerConfig. */
+  operator: z
+    .object({
+      defaultModel: ModelConfigSchema.optional(),
+      apiKeyEnvVar: z.string().optional(),
+      baseUrl: z.string().optional(),
+      guardrailDefaults: OperatorGuardrailsSchema.optional(),
+    })
+    .optional(),
 });
 export type WindowerConfig = z.infer<typeof WindowerConfigSchema>;

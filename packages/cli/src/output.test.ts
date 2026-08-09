@@ -1,7 +1,11 @@
 import type { Writable } from "node:stream";
 import { DaemonError } from "@windower/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EXIT_DAEMON_UNREACHABLE, EXIT_GENERIC_FAILURE, EXIT_PERMISSION_DENIED } from "./exit-codes.js";
+import {
+  EXIT_DAEMON_UNREACHABLE,
+  EXIT_GENERIC_FAILURE,
+  EXIT_PERMISSION_DENIED,
+} from "./exit-codes.js";
 import { printError, printResult } from "./output.js";
 
 /**

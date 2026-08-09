@@ -64,6 +64,8 @@ export const SidecarErrorCodeSchema = z.enum([
   "UNSUPPORTED_CAPABILITY",
   "SESSION_NOT_FOUND",
   "INTERNAL_ERROR",
+  "INPUT_UNSUPPORTED",
+  "INPUT_OUT_OF_BOUNDS",
 ]);
 export type SidecarErrorCode = z.infer<typeof SidecarErrorCodeSchema>;
 

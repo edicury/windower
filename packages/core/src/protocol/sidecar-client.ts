@@ -125,6 +125,23 @@ export class SidecarClient {
     return this.call("cancelCapture", params);
   }
 
+  /**
+   * Phase 19 — synthesizes a batch of input actions. Requires `input.mouse` /
+   * `input.keyboard` per action `kind` (contracts/sidecar-protocol.md).
+   */
+  performInput(
+    params: SidecarMethodMap["performInput"]["params"],
+  ): Promise<SidecarMethodMap["performInput"]["result"]> {
+    return this.call("performInput", params);
+  }
+
+  /** Phase 19 — one-shot screenshot of a target. Requires `screenshot`. */
+  captureFrame(
+    params: SidecarMethodMap["captureFrame"]["params"],
+  ): Promise<SidecarMethodMap["captureFrame"]["result"]> {
+    return this.call("captureFrame", params);
+  }
+
   /** Closes the underlying transport and rejects any in-flight calls. */
   dispose(): void {
     if (this.disposed) return;

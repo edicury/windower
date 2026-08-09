@@ -25,6 +25,12 @@ export const OutputManifestSchema = z.object({
     })
     .optional(),
   eventTimelinePath: z.string().optional(),
+  /**
+   * Relative path to the `OperatorRun` record (`<recording>.operator.json`),
+   * present when this recording was operator-driven (Phase 19,
+   * contracts/operator.md §Transcript format).
+   */
+  operatorRunPath: z.string().optional(),
   createdAt: z.string(),
   file: z.object({
     path: z.string(),

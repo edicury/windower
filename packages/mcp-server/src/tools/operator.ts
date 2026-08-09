@@ -1,0 +1,147 @@
+/**
+ * Operator MCP tools: `run_operator`, `get_operator_run`, `abort_operator_run`
+ * (contracts/mcp-tools.md §run_operator/§get_operator_run/§abort_operator_run).
+ *
+ * Thin wrappers over `DaemonClient` — the same `@windower/core` client the
+ * CLI's `windower operate` uses — with input/output validated by the exact
+ * Zod schemas `@windower/core` exports, so these results are schema-identical
+ * to `windower operate --json`.
+ *
+ * `list_operator_runs` exists as a daemon RPC (backing `windower operate
+ * list`) but is deliberately NOT exposed here: contracts/mcp-tools.md lists
+ * exactly three operator tools.
+ *
+ * The descriptions below intentionally restate the guidance in
+ * `plugins/claude-code/SKILL.md`, because an agent may reach this server with
+ * no skill loaded (contracts/mcp-tools.md §"Tool descriptions").
+ */
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import {
+  AbortOperatorRunParamsSchema,
+  AbortOperatorRunResultSchema,
+  type DaemonClient,
+  GetOperatorRunParamsSchema,
+  GetOperatorRunResultSchema,
+  RunOperatorParamsSchema,
+  RunOperatorResultSchema,
+} from "@windower/core";
+import { toMcpError } from "../daemon-client.js";
+
+export function registerOperatorTools(
+  server: McpServer,
+  getClient: () => Promise<DaemonClient>,
+): void {
+  server.registerTool(
+    "run_operator",
+    {
+      title: "Delegate a task to Windower's operator (fallback, non-blocking)",
+      description:
+        "Hands ONE natural-language `task` to Windower's own operator agent, which perceives the " +
+        "screen and drives real mouse/keyboard input through the native sidecar while recording. " +
+        "Returns IMMEDIATELY with `{ runId }` — it does NOT wait for the run to finish; poll " +
+        "`get_operator_run` for `state` and the step transcript, and use `abort_operator_run` to " +
+        "stop a run that has gone wrong.\n\n" +
+        "NOT the default. The default remains the two-call `start_recording` → do the on-screen " +
+        "actions with YOUR OWN tools (e.g. your browser tool) → `stop_recording` flow: you " +
+        "understand the user's intent, so you drive and Windower records. Reach for `run_operator` " +
+        "only when (a) the UI is something you have no tool for — a native/desktop app, a system " +
+        "dialog, a preferences pane, an installer, a menu bar item — or (b) the user gave you a " +
+        "single instruction to be executed and recorded end-to-end and decomposing it would add " +
+        "nothing. Keep driving it yourself when the demo is in a browser you can reach, when you " +
+        "need to interleave shell/file/API work with the on-screen steps, or when the user wants " +
+        "to review each step (there is no per-step approval surface).\n\n" +
+        "`model` selects the operator's OWN model (`{ provider, model, baseUrl?, apiKeyEnvVar? }`, " +
+        "e.g. anthropic:claude-sonnet-5, openai:gpt-5, or openai-compatible + `baseUrl` for a " +
+        "local server) — it is independent of whatever model is running you. API keys come from " +
+        "the environment; never pass one in these arguments.\n\n" +
+        "SECRETS: never put a password/token in `task`. Pass `secrets: [{ name, source: " +
+        '"env"|"keychain"|"literal", ref }]` and refer to it in the task as `{{name}}`. The ' +
+        "operator's model only ever sees the `{{name}}` placeholder — the real value is resolved " +
+        "and substituted immediately before the input is typed, and a redaction filter scrubs the " +
+        'transcript, logs, and event timeline before anything is written. `"literal"` is ' +
+        "discouraged (shell/argument exposure); prefer env or keychain.\n\n" +
+        "GUARDRAILS are enforced by the runtime, not requested in a prompt: `maxSteps` (default " +
+        "40), wall-clock `timeoutSeconds` (default 300), a clamp of every coordinate to the " +
+        "recorded target's bounds unless `unbounded` is set, and abort. Hitting one ends the run " +
+        "as `failed` with a structured error — report that plainly rather than retrying blindly. " +
+        "The operator's tool surface is closed: screenshot, mouse, keyboard, wait, list targets, " +
+        "resize window, done/fail. It has no shell, filesystem, or network tool.\n\n" +
+        "Recording is started alongside the run unless `recording.disabled` is true; `recording` " +
+        "also takes partial `video`/`audio` overrides and `outputDir`. The run writes the usual " +
+        "video + manifest + event timeline plus `<recording>.operator.json` (the step transcript), " +
+        'and synthetic input is tagged `source: "operator"` in the timeline.',
+      inputSchema: RunOperatorParamsSchema,
+      outputSchema: RunOperatorResultSchema,
+    },
+    async (params) => {
+      try {
+        const client = await getClient();
+        const result = await client.runOperator(params);
+        return {
+          structuredContent: result,
+          content: [{ type: "text", text: JSON.stringify(result) }],
+        };
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "get_operator_run",
+    {
+      title: "Get operator run status and step transcript",
+      description:
+        "Looks up an operator run by `runId` (as returned by `run_operator`) and returns the full " +
+        "`OperatorRun` record: `state` (pending/running/succeeded/failed/aborted/timed_out), the " +
+        "`steps[]` transcript of what the operator saw and did, the recording `sessionId` if the " +
+        "run is recording, timings, `transcriptPath`, and a structured `error` when the run " +
+        "failed (including guardrail violations such as the step cap, the wall-clock timeout, or " +
+        "an out-of-bounds coordinate). This is the polling half of `run_operator`'s non-blocking " +
+        "two-call shape. Secret values never appear here — tool-call arguments are already " +
+        "redacted to `{{name}}` placeholders.",
+      inputSchema: GetOperatorRunParamsSchema,
+      outputSchema: GetOperatorRunResultSchema,
+    },
+    async (params) => {
+      try {
+        const client = await getClient();
+        const result = await client.getOperatorRun(params);
+        return {
+          structuredContent: result,
+          content: [{ type: "text", text: JSON.stringify(result) }],
+        };
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+
+  server.registerTool(
+    "abort_operator_run",
+    {
+      title: "Abort an in-progress operator run (kill switch)",
+      description:
+        "Stops the operator run identified by `runId` mid-flight — the runtime kill switch for a " +
+        "run that is doing the wrong thing, stuck, or no longer wanted. Any recording attached to " +
+        "the run is stopped and FINALIZED (not discarded), so the partial video, manifest, event " +
+        "timeline, and operator transcript are still written. Returns `{ aborted: true }`. " +
+        "Aborting an already-finished run reports the run is not abortable rather than silently " +
+        "succeeding.",
+      inputSchema: AbortOperatorRunParamsSchema,
+      outputSchema: AbortOperatorRunResultSchema,
+    },
+    async (params) => {
+      try {
+        const client = await getClient();
+        const result = await client.abortOperatorRun(params);
+        return {
+          structuredContent: result,
+          content: [{ type: "text", text: JSON.stringify(result) }],
+        };
+      } catch (err) {
+        return toMcpError(err);
+      }
+    },
+  );
+}

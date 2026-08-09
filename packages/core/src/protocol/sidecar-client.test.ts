@@ -255,7 +255,9 @@ describe("SidecarClient <-> FakeSidecar", () => {
         await new Promise((resolve) => setImmediate(resolve));
 
         expect(received).toHaveLength(3);
-        expect(received[0]).toEqual({ t: 0, type: "cursor_move", x: 1, y: 2 });
+        // Phase 19: `source` defaults to "user" on parse for events emitted
+        // without one (back-compat with pre-Phase-19 sidecars).
+        expect(received[0]).toEqual({ t: 0, type: "cursor_move", x: 1, y: 2, source: "user" });
 
         await client.stopCapture({ sessionId: "session-4" });
       } finally {

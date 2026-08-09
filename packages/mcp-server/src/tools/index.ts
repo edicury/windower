@@ -15,10 +15,12 @@
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { DaemonClient } from "@windower/core";
+import { registerOperatorTools } from "./operator.js";
 import { registerReadTools } from "./read.js";
 import { registerSessionTools } from "./session.js";
 
 export function registerTools(server: McpServer, getClient: () => Promise<DaemonClient>): void {
   registerReadTools(server, getClient);
   registerSessionTools(server, getClient);
+  registerOperatorTools(server, getClient);
 }

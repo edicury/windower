@@ -9,6 +9,7 @@ import { registerConfigCommand } from "./commands/config.js";
 import { registerDaemonCommand } from "./commands/daemon.js";
 import { registerDoctorCommand } from "./commands/doctor.js";
 import { registerListCommand } from "./commands/list.js";
+import { registerOperateCommand } from "./commands/operate.js";
 import { registerPermissionCommand } from "./commands/permission.js";
 import { registerRecordCommand } from "./commands/record.js";
 import { registerResizeCommand } from "./commands/resize.js";
@@ -37,6 +38,7 @@ registerStatusCommand(program);
 registerStopCommand(program);
 registerCancelCommand(program);
 registerRecordCommand(program);
+registerOperateCommand(program);
 registerStubCommands(program);
 
 program.parseAsync(process.argv).catch((err: unknown) => {

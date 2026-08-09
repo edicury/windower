@@ -48,6 +48,18 @@ let supportedCapabilities: [String] = [
     "eventTimeline.cursor",
     "eventTimeline.mouse",
     "eventTimeline.keyboard",
+    // Phase 19 (operator). Advertised statically for the same reason the
+    // eventTimeline.* entries are: `describe` is a one-shot handshake with no
+    // mechanism to report a per-call outcome. `input.*` depends on the
+    // Accessibility grant and `screenshot` on Screen Recording — both are
+    // reported truthfully by `getPermissions`, and both surface
+    // PERMISSION_DENIED per call when missing rather than being silently
+    // dropped from this list. `screenshot` additionally needs macOS 14+
+    // (SCScreenshotManager); a 13.x host answers UNSUPPORTED_CAPABILITY at
+    // call time.
+    "input.mouse",
+    "input.keyboard",
+    "screenshot",
 ]
 
 func logStderr(_ message: String) {
@@ -167,6 +179,16 @@ func handleRequest(id: JSONValue, method: String, params: JSONValue?) {
         case "cancelCapture":
             let decodedParams = try decodeParams(CancelCaptureParams.self, from: params)
             let result = try CaptureSessionManager.shared.cancelCapture(params: decodedParams)
+            resultValue = try JSONCodec.encode(result)
+
+        case "performInput":
+            let decodedParams = try decodeParams(PerformInputParams.self, from: params)
+            let result = try InputSynthesisService.perform(params: decodedParams)
+            resultValue = try JSONCodec.encode(result)
+
+        case "captureFrame":
+            let decodedParams = try decodeParams(CaptureFrameParams.self, from: params)
+            let result = try FrameCaptureService.captureFrame(params: decodedParams)
             resultValue = try JSONCodec.encode(result)
 
         default:

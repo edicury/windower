@@ -12,6 +12,7 @@ import {
   classifyDaemonJsonRpcLine,
 } from "@windower/core";
 import { ZodError } from "zod";
+import type { OperatorRunManager } from "./operator-run-manager.js";
 import type { PassthroughService } from "./passthrough.js";
 import type { SessionManager } from "./session-manager.js";
 
@@ -57,6 +58,7 @@ function toDaemonError(err: unknown): DaemonError {
 export class DaemonServer {
   private readonly sessionManager: SessionManager;
   private readonly passthrough: PassthroughService;
+  private readonly operatorRunManager: OperatorRunManager;
   private readonly options: DaemonServerOptions;
   private server: Server | undefined;
   private idleTimer: NodeJS.Timeout | undefined;
@@ -65,10 +67,12 @@ export class DaemonServer {
   constructor(
     sessionManager: SessionManager,
     passthrough: PassthroughService,
+    operatorRunManager: OperatorRunManager,
     options: DaemonServerOptions,
   ) {
     this.sessionManager = sessionManager;
     this.passthrough = passthrough;
+    this.operatorRunManager = operatorRunManager;
     this.options = options;
   }
 
@@ -214,6 +218,30 @@ export class DaemonServer {
       case "list_sessions":
         return schemas.result.parse(
           this.sessionManager.listSessions(params as DaemonMethodMap["list_sessions"]["params"]),
+        );
+      case "run_operator":
+        return schemas.result.parse(
+          await this.operatorRunManager.runOperator(
+            params as DaemonMethodMap["run_operator"]["params"],
+          ),
+        );
+      case "get_operator_run":
+        return schemas.result.parse(
+          this.operatorRunManager.getOperatorRun(
+            params as DaemonMethodMap["get_operator_run"]["params"],
+          ),
+        );
+      case "abort_operator_run":
+        return schemas.result.parse(
+          await this.operatorRunManager.abortOperatorRun(
+            params as DaemonMethodMap["abort_operator_run"]["params"],
+          ),
+        );
+      case "list_operator_runs":
+        return schemas.result.parse(
+          this.operatorRunManager.listOperatorRuns(
+            params as DaemonMethodMap["list_operator_runs"]["params"],
+          ),
         );
       case "shutdown": {
         const result = schemas.result.parse({ shuttingDown: true });

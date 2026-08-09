@@ -31,3 +31,12 @@ echo "alias windower='node $(pwd)/packages/cli/dist/index.js'" >> ~/.zshrc && so
 The daemon auto-starts on first CLI use (unix socket at `~/.windower/daemon.sock`); no separate process to launch manually. Use `windower daemon status` / `windower daemon stop` for explicit control.
 
 First run will trigger macOS TCC prompts (Screen Recording, Accessibility, Microphone) — grant them via `windower permission request <capability>` or by letting the OS prompt fire, then re-run.
+
+### Extra setup for the operator (`windower operate`)
+
+Recording needs nothing beyond the steps above. The operator (`packages/operator`) additionally pulls in an AI SDK provider package (`@ai-sdk/anthropic`, `@ai-sdk/openai`, or `@ai-sdk/openai-compatible`) via `pnpm install`, and needs a model to talk to:
+
+- **Hosted providers** read their API key from the environment — `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or whatever `ModelConfig.apiKeyEnvVar` names. A key is **never** accepted as a CLI flag (shell history / process listing exposure), so export it in your shell rc before running `windower operate`.
+- **Local / self-hosted models** need no key at all: `--model openai-compatible:<model> --base-url http://localhost:11434/v1` (Ollama, LM Studio, vLLM, …).
+
+This is the one place Windower talks to the network, and only when you invoke the operator — see `specs/001-windower-mvp/spec.md` §7 for the scoped exception to the otherwise local-only design.

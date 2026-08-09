@@ -239,14 +239,19 @@ describe("OutputManifestSchema", () => {
 });
 
 describe("TimelineEventSchema / EventTimelineSchema", () => {
+  // Phase 19 added `source`, defaulted to "user" on parse so pre-Phase-19
+  // `.events.json` files (like `validTimeline` here) still parse unchanged.
   it("parses each timeline event variant", () => {
     for (const event of validTimeline.events) {
-      expect(TimelineEventSchema.parse(event)).toEqual(event);
+      expect(TimelineEventSchema.parse(event)).toEqual({ ...event, source: "user" });
     }
   });
 
   it("parses a valid event timeline", () => {
-    expect(EventTimelineSchema.parse(validTimeline)).toEqual(validTimeline);
+    expect(EventTimelineSchema.parse(validTimeline)).toEqual({
+      ...validTimeline,
+      events: validTimeline.events.map((event) => ({ ...event, source: "user" })),
+    });
   });
 
   it("rejects a mouse event with an invalid button", () => {

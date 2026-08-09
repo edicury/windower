@@ -60,35 +60,41 @@ All guardrails are enforced by the `packages/operator` runtime, not requested vi
 |---|---|---|
 | `maxSteps` | 40 | `--max-steps <n>` |
 | `timeoutMs` (wall-clock) | 300000 (5 min) | `--timeout <s>` |
-| Target-bounds clamp | every coordinate in every input tool call is clamped to the recorded target's `Rect` | `--unbounded` disables clamping |
+| Target-bounds clamp | every coordinate in every input tool call is checked against the recorded target's `Rect` before any RPC is issued; an out-of-bounds coordinate ends the run rather than being silently moved | `--unbounded` disables the check |
 | Kill switch | `windower operate abort <runId>` (CLI) / `abort_operator_run` (daemon RPC / MCP) | — |
 | Tool surface | fixed at the table above — no filesystem, process-spawn, or network tool is ever offered to the model, in any configuration | not overridable |
 
-Exceeding `maxSteps` or `timeoutMs`, or an out-of-bounds coordinate under a non-`--unbounded` run, ends the run with `state: "failed"` and a structured error (`INPUT_OUT_OF_BOUNDS` for the bounds case), the same error taxonomy used by the sidecar protocol.
+Exceeding `maxSteps`, or an out-of-bounds coordinate under a non-`--unbounded` run, ends the run with `state: "failed"` and a structured error (`INPUT_OUT_OF_BOUNDS` for the bounds case), the same error taxonomy used by the sidecar protocol. Exceeding `timeoutMs` ends it with `state: "timed_out"` — a distinct terminal state in `data-model.md`'s `OperatorRunState`, so a wall-clock stop is distinguishable from a genuine failure.
 
 ## Transcript format
 
 Written to `<recording>.operator.json`, next to the video file — matching the existing repo convention that manifest/timeline files are durable records living beside the video, not in a separate DB. Reachable via a new optional `OutputManifest.operatorRunPath` field pointing at this file when a recording was operator-driven.
 
+The transcript is exactly the `OperatorRun` / `OperatorStep` shape defined in `data-model.md` — that file is the single source of truth for these types and this contract does not redefine them, the same way it doesn't redefine `Rect` or `CaptureTarget`. Reproduced here for reference only:
+
 ```ts
+type OperatorRunState = "pending" | "running" | "succeeded" | "failed" | "aborted" | "timed_out";
+
 type OperatorRun = {
-  runId: string;
-  task: string;                    // the natural-language instruction
-  model: string;                   // "provider:model" as configured
+  id: string;                  // uuid
+  state: OperatorRunState;
+  task: string;                // the natural-language instruction
+  model: ModelConfig;          // parsed from the configured "provider:model" string
+  sessionId?: string;          // the RecordingSession this run drives, when recording wasn't disabled
   steps: OperatorStep[];
-  state: "running" | "succeeded" | "failed" | "aborted";
-  startedAt: string;                // ISO 8601
+  startedAt: string;           // ISO 8601
   endedAt?: string;
   error?: { code: string; message: string };
+  transcriptPath?: string;
 };
 
 type OperatorStep = {
   index: number;
-  observation: { screenshotRef: string; hash: string }; // ref to a stored frame, not inlined
-  reasoning?: string;               // model's stated rationale for this step, if the provider exposes it
-  toolCalls: Array<{ tool: string; args: Record<string, unknown> }>; // secrets already redacted to {{name}}
-  tMs: number;                      // ms since run start
+  observationRef: string;      // ref to a stored frame, never inlined base64
+  toolCalls: Array<{ name: string; args: unknown; result?: unknown }>; // secrets already redacted to {{name}}
+  reasoning?: string;          // model's stated rationale for this step, if the provider exposes it
+  tMs: number;                 // ms since run start
 };
 ```
 
-`observation.screenshotRef` points at a frame captured via `captureFrame`, stored alongside the transcript rather than inlined as base64 — keeps `<recording>.operator.json` small and diffable. `toolCalls[].args` reflects exactly what the model saw and sent, i.e. secret placeholders (`{{name}}`), never resolved values — this is the same document the redaction filter (see "Secret refs" above) has already run over before it's written.
+`observationRef` points at a frame captured via `captureFrame`, stored alongside the transcript rather than inlined as base64 — keeps `<recording>.operator.json` small and diffable. Frames are content-addressed (`<sha256-prefix>.png` in a `<recording>.operator.frames/` sibling directory), so the ref carries the frame's hash as well as its location. `toolCalls[].args` reflects exactly what the model saw and sent, i.e. secret placeholders (`{{name}}`), never resolved values — this is the same document the redaction filter (see "Secret refs" above) has already run over before it's written.

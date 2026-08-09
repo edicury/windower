@@ -3,6 +3,13 @@ import { SidecarErrorCodeSchema } from "../protocol/jsonrpc.js";
 import { AudioSettingsSchema } from "../schemas/audio-settings.js";
 import { CaptureTargetSchema } from "../schemas/capture-target.js";
 import { OutputManifestSchema } from "../schemas/manifest.js";
+import {
+  ModelConfigSchema,
+  OperatorGuardrailsSchema,
+  OperatorRunSchema,
+  OperatorRunStateSchema,
+  SecretRefSchema,
+} from "../schemas/operator.js";
 import { PermissionReportSchema, PermissionStatusSchema } from "../schemas/permissions.js";
 import { RectSchema } from "../schemas/rect.js";
 import { RecordingSessionSchema, SessionStateSchema } from "../schemas/session.js";
@@ -25,6 +32,9 @@ export const DaemonErrorCodeSchema = z.enum([
   "INVALID_ARGS",
   "TARGET_ALREADY_RECORDING",
   "OUTPUT_DIR_NOT_WRITABLE",
+  // Phase 19 (operator): daemon-only, mirrors SESSION_NOT_FOUND for
+  // `get_operator_run`/`abort_operator_run` against an unknown runId.
+  "OPERATOR_RUN_NOT_FOUND",
 ]);
 export type DaemonErrorCode = z.infer<typeof DaemonErrorCodeSchema>;
 
@@ -130,6 +140,65 @@ export const ListSessionsResultSchema = z.object({
 });
 export type ListSessionsResult = z.infer<typeof ListSessionsResultSchema>;
 
+// ---- run_operator ----
+// contracts/mcp-tools.md §run_operator + contracts/cli.md `windower operate`.
+// Returns immediately with `{ runId }` — same non-blocking two-call shape as
+// `start_recording`; poll `get_operator_run` for progress.
+export const RunOperatorParamsSchema = z.object({
+  task: z.string().min(1),
+  model: ModelConfigSchema,
+  recording: z
+    .object({
+      video: VideoSettingsSchema.partial().optional(),
+      audio: AudioSettingsSchema.partial().optional(),
+      outputDir: z.string().optional(),
+      /** `--no-record`: run the operator without wrapping it in a recording. */
+      disabled: z.boolean().optional(),
+    })
+    .optional(),
+  secrets: z.array(SecretRefSchema).optional(),
+  guardrails: OperatorGuardrailsSchema.optional(),
+});
+export type RunOperatorParams = z.infer<typeof RunOperatorParamsSchema>;
+
+export const RunOperatorResultSchema = z.object({
+  runId: z.string(),
+});
+export type RunOperatorResult = z.infer<typeof RunOperatorResultSchema>;
+
+// ---- get_operator_run ----
+export const GetOperatorRunParamsSchema = z.object({
+  runId: z.string(),
+});
+export type GetOperatorRunParams = z.infer<typeof GetOperatorRunParamsSchema>;
+
+export const GetOperatorRunResultSchema = OperatorRunSchema;
+export type GetOperatorRunResult = z.infer<typeof GetOperatorRunResultSchema>;
+
+// ---- abort_operator_run ----
+export const AbortOperatorRunParamsSchema = z.object({
+  runId: z.string(),
+});
+export type AbortOperatorRunParams = z.infer<typeof AbortOperatorRunParamsSchema>;
+
+export const AbortOperatorRunResultSchema = z.object({
+  aborted: z.literal(true),
+});
+export type AbortOperatorRunResult = z.infer<typeof AbortOperatorRunResultSchema>;
+
+// ---- list_operator_runs ----
+// `windower operate list [--state <state>]` (contracts/cli.md) — mirrors
+// `list_sessions`. Daemon-side only; not exposed as an MCP tool.
+export const ListOperatorRunsParamsSchema = z.object({
+  state: OperatorRunStateSchema.optional(),
+});
+export type ListOperatorRunsParams = z.infer<typeof ListOperatorRunsParamsSchema>;
+
+export const ListOperatorRunsResultSchema = z.object({
+  runs: z.array(OperatorRunSchema),
+});
+export type ListOperatorRunsResult = z.infer<typeof ListOperatorRunsResultSchema>;
+
 // ---- shutdown ----
 // Added in Phase 7 (CLI) for `windower daemon stop`: contracts/cli.md calls
 // for explicit daemon lifecycle control, and there was no clean way to ask
@@ -156,6 +225,10 @@ export const DAEMON_METHODS = [
   "stop_recording",
   "cancel_recording",
   "list_sessions",
+  "run_operator",
+  "get_operator_run",
+  "abort_operator_run",
+  "list_operator_runs",
   "shutdown",
 ] as const;
 export type DaemonMethod = (typeof DAEMON_METHODS)[number];
@@ -173,6 +246,10 @@ export interface DaemonMethodMap {
   stop_recording: { params: StopRecordingParams; result: StopRecordingResult };
   cancel_recording: { params: CancelRecordingParams; result: CancelRecordingResult };
   list_sessions: { params: ListSessionsParams; result: ListSessionsResult };
+  run_operator: { params: RunOperatorParams; result: RunOperatorResult };
+  get_operator_run: { params: GetOperatorRunParams; result: GetOperatorRunResult };
+  abort_operator_run: { params: AbortOperatorRunParams; result: AbortOperatorRunResult };
+  list_operator_runs: { params: ListOperatorRunsParams; result: ListOperatorRunsResult };
   shutdown: { params: ShutdownParams; result: ShutdownResult };
 }
 
@@ -194,5 +271,15 @@ export const DAEMON_METHOD_SCHEMAS: {
   stop_recording: { params: StopRecordingParamsSchema, result: StopRecordingResultSchema },
   cancel_recording: { params: CancelRecordingParamsSchema, result: CancelRecordingResultSchema },
   list_sessions: { params: ListSessionsParamsSchema, result: ListSessionsResultSchema },
+  run_operator: { params: RunOperatorParamsSchema, result: RunOperatorResultSchema },
+  get_operator_run: { params: GetOperatorRunParamsSchema, result: GetOperatorRunResultSchema },
+  abort_operator_run: {
+    params: AbortOperatorRunParamsSchema,
+    result: AbortOperatorRunResultSchema,
+  },
+  list_operator_runs: {
+    params: ListOperatorRunsParamsSchema,
+    result: ListOperatorRunsResultSchema,
+  },
   shutdown: { params: ShutdownParamsSchema, result: ShutdownResultSchema },
 };

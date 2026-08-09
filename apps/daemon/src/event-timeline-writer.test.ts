@@ -6,10 +6,10 @@ import { describe, expect, it } from "vitest";
 import { EventTimelineWriter } from "./event-timeline-writer.js";
 
 const EVENTS: TimelineEvent[] = [
-  { t: 0, type: "cursor_move", x: 1, y: 2 },
-  { t: 10, type: "mouse_down", x: 1, y: 2, button: "left" },
-  { t: 20, type: "mouse_up", x: 1, y: 2, button: "left" },
-  { t: 30, type: "key_down", key: "a" },
+  { t: 0, type: "cursor_move", x: 1, y: 2, source: "user" },
+  { t: 10, type: "mouse_down", x: 1, y: 2, button: "left", source: "user" },
+  { t: 20, type: "mouse_up", x: 1, y: 2, button: "left", source: "user" },
+  { t: 30, type: "key_down", key: "a", source: "user" },
 ];
 
 describe("EventTimelineWriter", () => {

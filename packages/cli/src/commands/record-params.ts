@@ -86,7 +86,13 @@ function parseResolution(raw: string | undefined): { width: number; height: numb
   return { width: Number(match[1]), height: Number(match[2]) };
 }
 
-function buildVideo(opts: SharedRecordingOpts): Partial<VideoSettings> | undefined {
+/**
+ * Exported so `operate` (contracts/cli.md `windower operate`) can reuse the
+ * exact same video-flag parsing without going through
+ * `buildStartRecordingParams` — `run_operator` takes no target, so it needs
+ * the video/audio half of the shared flag block only.
+ */
+export function buildVideo(opts: SharedRecordingOpts): Partial<VideoSettings> | undefined {
   const fps = parseFps(opts.fps);
   const resolution = parseResolution(opts.resolution);
   const video: Partial<VideoSettings> = {};
@@ -109,7 +115,7 @@ function buildVideo(opts: SharedRecordingOpts): Partial<VideoSettings> | undefin
  * (contracts/cli.md's stated default for multi-source captures) and `false`
  * otherwise.
  */
-function buildAudio(opts: SharedRecordingOpts): AudioSettings | undefined {
+export function buildAudio(opts: SharedRecordingOpts): AudioSettings | undefined {
   const tracks: AudioTrackConfig[] = [];
   if (opts.audioSystem) tracks.push({ source: "system", enabled: true });
   if (opts.audioMic) {

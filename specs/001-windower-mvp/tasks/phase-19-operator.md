@@ -34,7 +34,7 @@
 
 ### Daemon
 
-- 🔵 New `OperatorRunManager` alongside `SessionManager`, persisted at `~/.windower/operator/<runId>.json` on every state transition (mirrors `apps/daemon/src/session-manager.ts`'s disk-persistence convention for `RecordingSession`).
+- 🔵 New `OperatorRunManager` alongside `SessionManager`, persisted at `~/.windower/operator-runs/<runId>.json` on every state transition (mirrors `apps/daemon/src/session-manager.ts`'s disk-persistence convention for `RecordingSession`).
 - 🔵 Crash recovery marks any in-flight run `failed` on daemon restart, mirroring `session-manager.ts`'s `recoverCrashedSessions()` behavior for `RecordingSession`.
 
 ### CLI / MCP / plugin skill

@@ -11,5 +11,8 @@ export * from "./config.js";
 export * from "./session-store.js";
 export * from "./session-manager.js";
 export * from "./passthrough.js";
+export * from "./secret-resolver.js";
+export * from "./operator-run-store.js";
+export * from "./operator-run-manager.js";
 export * from "./server.js";
 export * from "./main.js";

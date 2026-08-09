@@ -10,3 +10,4 @@ export * from "./schemas/index.js";
 export * from "./protocol/index.js";
 export * from "./process/index.js";
 export * from "./daemon/index.js";
+export * from "./operator/index.js";

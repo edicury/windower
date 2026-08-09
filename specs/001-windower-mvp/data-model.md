@@ -94,9 +94,9 @@ Phase 10 output — cursor/click capture only in MVP; consumed by Phase 15's pos
 
 ```ts
 type TimelineEvent =
-  | { t: number; type: "cursor_move"; x: number; y: number; source?: "human" | "operator" }         // t = ms since recording start
-  | { t: number; type: "mouse_down" | "mouse_up"; x: number; y: number; button: "left" | "right" | "other"; source?: "human" | "operator" }
-  | { t: number; type: "key_down" | "key_up"; key: string; source?: "human" | "operator" }          // best-effort, capability-gated (see research.md §2)
+  | { t: number; type: "cursor_move"; x: number; y: number; source?: "user" | "operator" }         // t = ms since recording start
+  | { t: number; type: "mouse_down" | "mouse_up"; x: number; y: number; button: "left" | "right" | "other"; source?: "user" | "operator" }
+  | { t: number; type: "key_down" | "key_up"; key: string; source?: "user" | "operator" }          // best-effort, capability-gated (see research.md §2)
 
 type EventTimeline = {
   sessionId: string;

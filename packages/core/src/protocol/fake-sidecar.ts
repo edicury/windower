@@ -4,8 +4,15 @@ import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { Duplex, PassThrough } from "node:stream";
 import type { CaptureTarget } from "../schemas/capture-target.js";
+import { TimelineEventSchema } from "../schemas/event-timeline.js";
 import type { TimelineEvent } from "../schemas/event-timeline.js";
+import {
+  type InputAction,
+  type InputActionKind,
+  inputActionCoordinates,
+} from "../schemas/input-action.js";
 import type { PermissionReport } from "../schemas/permissions.js";
+import type { Rect } from "../schemas/rect.js";
 import type { SidecarErrorCode } from "./errors.js";
 import { type JsonRpcId, JsonRpcLineSchema, classifyJsonRpcLine } from "./jsonrpc.js";
 import {
@@ -15,6 +22,7 @@ import {
   type SidecarMethod,
   type SidecarMethodMap,
   type SidecarNotificationMap,
+  requiredCapabilityForInputAction,
 } from "./methods.js";
 import { SidecarClient } from "./sidecar-client.js";
 
@@ -66,6 +74,18 @@ export interface FakeSidecarOptions {
   capabilities?: Capability[];
   targets?: CaptureTarget[];
   permissions?: Partial<PermissionReport>;
+  /**
+   * Phase 19: the fake "displays" `performInput` bounds-checks against. Any
+   * coordinate outside every rect here yields `INPUT_OUT_OF_BOUNDS`.
+   */
+  displayBounds?: Rect[];
+  /**
+   * Phase 19: action kinds this backend advertises but cannot synthesize —
+   * requesting one yields `INPUT_UNSUPPORTED`. (Distinct from dropping
+   * `input.mouse`/`input.keyboard` from `capabilities`, which yields
+   * `UNSUPPORTED_CAPABILITY`.)
+   */
+  unsupportedInputKinds?: InputActionKind[];
 }
 
 interface FakeSession {
@@ -88,7 +108,20 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   "eventTimeline.cursor",
   "eventTimeline.mouse",
   "eventTimeline.keyboard",
+  "input.mouse",
+  "input.keyboard",
+  "screenshot",
 ];
+
+const DEFAULT_DISPLAY_BOUNDS: Rect[] = [{ x: 0, y: 0, width: 1920, height: 1080 }];
+
+/**
+ * A real, minimal 1x1 PNG — `captureFrame` must return something that actually
+ * base64-decodes to a valid image so consumers (and the operator loop's
+ * vision pipeline) can be exercised end-to-end against the fake.
+ */
+const TINY_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
 export class FakeSidecar {
   private readonly stream: Duplex;
@@ -98,6 +131,10 @@ export class FakeSidecar {
   private readonly targets: CaptureTarget[];
   private readonly permissions: Partial<PermissionReport>;
   private readonly sessions = new Map<string, FakeSession>();
+  private readonly displayBounds: Rect[];
+  private readonly unsupportedInputKinds: Set<InputActionKind>;
+  private readonly performedInputs: InputAction[] = [];
+  private readonly capturedFrames: SidecarMethodMap["captureFrame"]["params"][] = [];
 
   constructor(stream: Duplex, options: FakeSidecarOptions = {}) {
     this.stream = stream;
@@ -112,6 +149,8 @@ export class FakeSidecar {
       daemonRunning: true,
       sidecarAvailable: true,
     };
+    this.displayBounds = options.displayBounds ?? DEFAULT_DISPLAY_BOUNDS;
+    this.unsupportedInputKinds = new Set(options.unsupportedInputKinds ?? []);
 
     const rl = createInterface({ input: stream, terminal: false });
     rl.on("line", (line) => this.handleLine(line));
@@ -119,7 +158,30 @@ export class FakeSidecar {
 
   /** Test hook: push an `event` notification as if it arrived during capture. */
   emitEvent(sessionId: string, event: TimelineEvent): void {
-    this.sendNotification("event", { sessionId, event });
+    // Parse so the `source` default ("user") is applied exactly as a real
+    // sidecar's serialized event would be on the daemon side.
+    this.sendNotification("event", { sessionId, event: TimelineEventSchema.parse(event) });
+  }
+
+  /**
+   * Test hook: every `InputAction` this sidecar has performed, in order.
+   * Actions from a call that threw are **not** recorded (the fake validates the
+   * whole batch before performing any of it, same as a real backend's single
+   * capability check per `performInput` call).
+   */
+  get performed(): readonly InputAction[] {
+    return this.performedInputs;
+  }
+
+  /** Test hook: every `captureFrame` request this sidecar has served, in order. */
+  get frameCaptures(): readonly SidecarMethodMap["captureFrame"]["params"][] {
+    return this.capturedFrames;
+  }
+
+  /** Test hook: drop recorded `performInput`/`captureFrame` history. */
+  clearRecordedCalls(): void {
+    this.performedInputs.length = 0;
+    this.capturedFrames.length = 0;
   }
 
   emitLog(payload: SidecarNotificationMap["log"]): void {
@@ -198,6 +260,10 @@ export class FakeSidecar {
         return this.stopCapture(params as SidecarMethodMap["stopCapture"]["params"]);
       case "cancelCapture":
         return this.cancelCapture(params as SidecarMethodMap["cancelCapture"]["params"]);
+      case "performInput":
+        return this.performInput(params as SidecarMethodMap["performInput"]["params"]);
+      case "captureFrame":
+        return this.captureFrame(params as SidecarMethodMap["captureFrame"]["params"]);
       default:
         throw new FakeSidecarError("UNSUPPORTED_CAPABILITY", `Unhandled method "${method}"`);
     }
@@ -318,6 +384,88 @@ export class FakeSidecar {
     }
     this.sessions.delete(params.sessionId);
     return { canceled: true };
+  }
+
+  /**
+   * `performInput` — validates the whole batch (permission → capability → kind
+   * support → bounds) *before* performing any of it, so a rejected call is
+   * atomic and leaves no partial input behind.
+   */
+  private performInput(
+    params: SidecarMethodMap["performInput"]["params"],
+  ): SidecarMethodMap["performInput"]["result"] {
+    // CGEventPost-equivalents are gated on Accessibility on macOS; other
+    // backends gate their own equivalent — the sidecar reports it through the
+    // same `accessibility` field, so this stays platform-agnostic here.
+    if (this.permissions.accessibility === "denied") {
+      throw new FakeSidecarError("PERMISSION_DENIED", "Accessibility permission not granted");
+    }
+    if (params.sessionId !== undefined && !this.sessions.has(params.sessionId)) {
+      throw new FakeSidecarError("SESSION_NOT_FOUND", `No session "${params.sessionId}"`);
+    }
+
+    for (const action of params.actions) {
+      const capability = requiredCapabilityForInputAction(action.kind);
+      if (capability && !this.hasCapability(capability)) {
+        throw new FakeSidecarError(
+          "UNSUPPORTED_CAPABILITY",
+          `Backend does not support ${capability}`,
+        );
+      }
+      if (this.unsupportedInputKinds.has(action.kind)) {
+        throw new FakeSidecarError(
+          "INPUT_UNSUPPORTED",
+          `Backend cannot synthesize input kind "${action.kind}"`,
+        );
+      }
+      for (const { x, y } of inputActionCoordinates(action)) {
+        if (!this.isWithinAnyDisplay(x, y)) {
+          throw new FakeSidecarError(
+            "INPUT_OUT_OF_BOUNDS",
+            `Coordinate (${x}, ${y}) is outside every known display`,
+          );
+        }
+      }
+    }
+
+    this.performedInputs.push(...params.actions);
+    return { performed: params.actions.length };
+  }
+
+  private isWithinAnyDisplay(x: number, y: number): boolean {
+    return this.displayBounds.some(
+      (b) => x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height,
+    );
+  }
+
+  /**
+   * `captureFrame` — returns a real (1x1) PNG so callers can base64-decode it.
+   * Reported `width`/`height` follow the target's bounds, downscaled to
+   * `maxWidth` when given, mirroring a real backend's contract; the pixel data
+   * itself is deliberately trivial.
+   */
+  private captureFrame(
+    params: SidecarMethodMap["captureFrame"]["params"],
+  ): SidecarMethodMap["captureFrame"]["result"] {
+    if (this.permissions.screenRecording === "denied") {
+      throw new FakeSidecarError("PERMISSION_DENIED", "Screen Recording permission not granted");
+    }
+    if (!this.hasCapability("screenshot")) {
+      throw new FakeSidecarError("UNSUPPORTED_CAPABILITY", "Backend does not support screenshot");
+    }
+
+    const { bounds } = params.target;
+    const scale = params.target.kind === "display" ? params.target.scaleFactor : 1;
+    let width = Math.max(1, Math.round(bounds.width));
+    let height = Math.max(1, Math.round(bounds.height));
+    if (params.maxWidth !== undefined && width > params.maxWidth) {
+      const ratio = params.maxWidth / width;
+      width = Math.max(1, Math.round(width * ratio));
+      height = Math.max(1, Math.round(height * ratio));
+    }
+
+    this.capturedFrames.push(params);
+    return { imageBase64: TINY_PNG_BASE64, width, height, scale };
   }
 
   private sendResult(id: JsonRpcId, method: SidecarMethod, result: unknown): void {

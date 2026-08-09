@@ -178,9 +178,9 @@ describe("SessionManager", () => {
     const { sessionId } = await manager.startRecording({ target: DISPLAY_TARGET });
 
     const events: TimelineEvent[] = [
-      { t: 0, type: "cursor_move", x: 1, y: 1 },
-      { t: 5, type: "mouse_down", x: 1, y: 1, button: "left" },
-      { t: 6, type: "key_down", key: "x" },
+      { t: 0, type: "cursor_move", x: 1, y: 1, source: "user" },
+      { t: 5, type: "mouse_down", x: 1, y: 1, button: "left", source: "user" },
+      { t: 6, type: "key_down", key: "x", source: "user" },
     ];
     const spawn = spawns.at(-1);
     for (const event of events) spawn?.sidecar.emitEvent(sessionId, event);

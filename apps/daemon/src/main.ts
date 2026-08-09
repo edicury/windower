@@ -1,5 +1,7 @@
 import { daemonSocketPath, spawnSidecar } from "@windower/core";
 import { loadDaemonConfig } from "./config.js";
+import { OperatorRunManager } from "./operator-run-manager.js";
+import { OperatorRunStore } from "./operator-run-store.js";
 import { PassthroughService } from "./passthrough.js";
 import { DaemonServer } from "./server.js";
 import { SessionManager } from "./session-manager.js";
@@ -8,6 +10,7 @@ import { SessionStore } from "./session-store.js";
 export interface RunningDaemon {
   server: DaemonServer;
   sessionManager: SessionManager;
+  operatorRunManager: OperatorRunManager;
   /** Closes the socket server and unlinks the socket file. Does not exit the process. */
   stop: () => Promise<void>;
 }
@@ -36,13 +39,26 @@ export async function runDaemon(options: RunDaemonOptions = {}): Promise<Running
 
   const passthrough = new PassthroughService(spawnSidecar);
 
+  // Phase 19: operator runs replay from disk and crash-recover on the same
+  // startup path as recording sessions — an in-flight run cannot survive the
+  // death of the process that owned its loop.
+  const operatorRunStore = new OperatorRunStore();
+  await operatorRunStore.load();
+  const operatorRunManager = new OperatorRunManager({
+    store: operatorRunStore,
+    sessionManager,
+    passthrough,
+    spawnSidecar,
+  });
+  await operatorRunManager.recoverCrashedRuns();
+
   // Idle timeout and an explicit `windower daemon stop` RPC both mean the
   // same thing to the process: close the socket, then exit.
   const terminate = (): void => {
     void server.stop().then(options.onIdleShutdown ?? (() => process.exit(0)));
   };
 
-  const server = new DaemonServer(sessionManager, passthrough, {
+  const server = new DaemonServer(sessionManager, passthrough, operatorRunManager, {
     socketPath: daemonSocketPath(),
     idleTimeoutMs: config.daemonIdleTimeoutMs,
     onIdleShutdown: terminate,
@@ -50,5 +66,5 @@ export async function runDaemon(options: RunDaemonOptions = {}): Promise<Running
   });
   await server.start();
 
-  return { server, sessionManager, stop: () => server.stop() };
+  return { server, sessionManager, operatorRunManager, stop: () => server.stop() };
 }

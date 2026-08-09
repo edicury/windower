@@ -8,7 +8,8 @@ import { DaemonError, type DaemonErrorCode } from "@windower/core";
  *   0 — success
  *   1 — generic/unknown failure (default for any code not called out below,
  *       e.g. TARGET_NOT_FOUND, RESIZE_UNSUPPORTED, CAPTURE_FAILED,
- *       UNSUPPORTED_CAPABILITY, SESSION_NOT_FOUND, INTERNAL_ERROR)
+ *       UNSUPPORTED_CAPABILITY, SESSION_NOT_FOUND, OPERATOR_RUN_NOT_FOUND,
+ *       INTERNAL_ERROR)
  *   2 — DAEMON_UNREACHABLE (contracts/cli.md: "helps scripts distinguish
  *       daemon down from bad input" — kept as its own code for exactly that)
  *   3 — INVALID_ARGS / validation failure (bad input, as opposed to daemon
@@ -19,6 +20,19 @@ import { DaemonError, type DaemonErrorCode } from "@windower/core";
  *       Accessibility, Microphone — isn't granted; kept distinct from the
  *       generic failure code so a script/agent can react by calling
  *       `windower permission request` instead of just failing)
+ *
+ * Phase 19 (`windower operate`) deliberately adds **no** new codes —
+ * contracts/cli.md: "No new exit codes are introduced for `operate`". The
+ * operator failure modes map onto the existing scheme:
+ *   - OPERATOR_RUN_NOT_FOUND → 1, exactly like SESSION_NOT_FOUND (an unknown
+ *     id is a lookup miss, not bad syntax; `operate list` recovers from it).
+ *   - guardrail-exceeded / failed run → 0 from `operate status`, because the
+ *     command *succeeded* in reporting the run; the failure lives in the
+ *     returned `OperatorRun.state` + `error` (same convention as `status` for
+ *     a failed RecordingSession). A run that can't even be started surfaces
+ *     its DaemonError and maps normally (e.g. INVALID_ARGS → 3).
+ *   - permission denied (Screen Recording / Accessibility for synthetic
+ *     input) → 5, the existing PERMISSION_DENIED code.
  */
 export const EXIT_SUCCESS = 0;
 export const EXIT_GENERIC_FAILURE = 1;

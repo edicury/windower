@@ -3,14 +3,28 @@ import { z } from "zod";
 /**
  * TimelineEvent / EventTimeline — <recording>.events.json. Phase 10 output;
  * cursor/click capture only in MVP. See data-model.md §EventTimeline.
+ *
+ * Phase 19 adds `source` — `"user"` for real human input, `"operator"` for
+ * input synthesized by an operator run (`performInput`). It carries a runtime
+ * default of `"user"` so `.events.json` files written before Phase 19 still
+ * parse unchanged; the exported TS types use `z.input` (i.e. `source?`) for the
+ * same back-compat reason — every event that has been through
+ * `TimelineEventSchema.parse` is guaranteed to carry a concrete `source`.
  */
+
+export const EventSourceSchema = z.enum(["user", "operator"]);
+export type EventSource = z.infer<typeof EventSourceSchema>;
+
+const sourceField = EventSourceSchema.default("user");
+
 export const CursorMoveEventSchema = z.object({
   t: z.number(),
   type: z.literal("cursor_move"),
   x: z.number(),
   y: z.number(),
+  source: sourceField,
 });
-export type CursorMoveEvent = z.infer<typeof CursorMoveEventSchema>;
+export type CursorMoveEvent = z.input<typeof CursorMoveEventSchema>;
 
 export const MouseButtonEventSchema = z.object({
   t: z.number(),
@@ -18,15 +32,17 @@ export const MouseButtonEventSchema = z.object({
   x: z.number(),
   y: z.number(),
   button: z.enum(["left", "right", "other"]),
+  source: sourceField,
 });
-export type MouseButtonEvent = z.infer<typeof MouseButtonEventSchema>;
+export type MouseButtonEvent = z.input<typeof MouseButtonEventSchema>;
 
 export const KeyEventSchema = z.object({
   t: z.number(),
   type: z.enum(["key_down", "key_up"]),
   key: z.string(),
+  source: sourceField,
 });
-export type KeyEvent = z.infer<typeof KeyEventSchema>;
+export type KeyEvent = z.input<typeof KeyEventSchema>;
 
 export const TimelineEventSchema = z.discriminatedUnion("type", [
   CursorMoveEventSchema,
@@ -35,11 +51,15 @@ export const TimelineEventSchema = z.discriminatedUnion("type", [
   KeyEventSchema.extend({ type: z.literal("key_down") }),
   KeyEventSchema.extend({ type: z.literal("key_up") }),
 ]);
-export type TimelineEvent = z.infer<typeof TimelineEventSchema>;
+/** As accepted on the wire / on disk — `source` optional, defaulted on parse. */
+export type TimelineEvent = z.input<typeof TimelineEventSchema>;
+/** As produced by `TimelineEventSchema.parse` — `source` always present. */
+export type ParsedTimelineEvent = z.output<typeof TimelineEventSchema>;
 
 export const EventTimelineSchema = z.object({
   sessionId: z.string(),
   events: z.array(TimelineEventSchema),
   capabilities: z.object({ keystrokes: z.boolean() }),
 });
-export type EventTimeline = z.infer<typeof EventTimelineSchema>;
+export type EventTimeline = z.input<typeof EventTimelineSchema>;
+export type ParsedEventTimeline = z.output<typeof EventTimelineSchema>;

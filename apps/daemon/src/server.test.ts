@@ -10,11 +10,16 @@ import {
   type PermissionReport,
 } from "@windower/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { OperatorRunManager } from "./operator-run-manager.js";
+import { OperatorRunStore } from "./operator-run-store.js";
 import { PassthroughService } from "./passthrough.js";
 import { DaemonServer } from "./server.js";
 import { SessionManager } from "./session-manager.js";
 import { SessionStore } from "./session-store.js";
-import { type SpawnedFakeSidecar, createFakeSidecarFactory } from "./test-helpers/fake-sidecar-factory.js";
+import {
+  type SpawnedFakeSidecar,
+  createFakeSidecarFactory,
+} from "./test-helpers/fake-sidecar-factory.js";
 
 const DISPLAY_TARGET: CaptureTarget = {
   kind: "display",
@@ -59,7 +64,16 @@ describe("DaemonServer", () => {
     fakeSpawns = spawns;
     manager = new SessionManager({ store, spawnSidecar });
     const passthrough = new PassthroughService(spawnSidecar);
-    server = new DaemonServer(manager, passthrough, {
+    const operatorRunManager = new OperatorRunManager({
+      store: new OperatorRunStore(),
+      sessionManager: manager,
+      passthrough,
+      spawnSidecar,
+      // Never reached by these tests, but keeps the dispatch path from lazily
+      // importing @windower/operator if one ever does.
+      loadRunOperator: async () => async () => ({ state: "succeeded", steps: [] }),
+    });
+    server = new DaemonServer(manager, passthrough, operatorRunManager, {
       socketPath,
       idleTimeoutMs,
       idleCheckIntervalMs,

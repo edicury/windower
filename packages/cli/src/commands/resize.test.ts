@@ -81,7 +81,11 @@ describe("registerResizeCommand (CLI propagation of DaemonError)", () => {
   it("surfaces RESIZE_UNSUPPORTED (window-control capability absent) with the generic failure exit code", async () => {
     mockedEnsureDaemonRunning.mockResolvedValue(
       fakeDaemonClient(
-        vi.fn().mockRejectedValue(new DaemonError("RESIZE_UNSUPPORTED", "Backend does not support window-control")),
+        vi
+          .fn()
+          .mockRejectedValue(
+            new DaemonError("RESIZE_UNSUPPORTED", "Backend does not support window-control"),
+          ),
       ),
     );
 
@@ -106,7 +110,11 @@ describe("registerResizeCommand (CLI propagation of DaemonError)", () => {
   it("surfaces UNSUPPORTED_CAPABILITY with the generic failure exit code", async () => {
     mockedEnsureDaemonRunning.mockResolvedValue(
       fakeDaemonClient(
-        vi.fn().mockRejectedValue(new DaemonError("UNSUPPORTED_CAPABILITY", "Sidecar does not advertise resizeWindow")),
+        vi
+          .fn()
+          .mockRejectedValue(
+            new DaemonError("UNSUPPORTED_CAPABILITY", "Sidecar does not advertise resizeWindow"),
+          ),
       ),
     );
 
@@ -131,7 +139,11 @@ describe("registerResizeCommand (CLI propagation of DaemonError)", () => {
   it("surfaces PERMISSION_DENIED (Accessibility not granted, window-control gated) with its own exit code", async () => {
     mockedEnsureDaemonRunning.mockResolvedValue(
       fakeDaemonClient(
-        vi.fn().mockRejectedValue(new DaemonError("PERMISSION_DENIED", "Accessibility permission not granted")),
+        vi
+          .fn()
+          .mockRejectedValue(
+            new DaemonError("PERMISSION_DENIED", "Accessibility permission not granted"),
+          ),
       ),
     );
 

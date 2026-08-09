@@ -53,7 +53,7 @@
 | Tests | **Vitest** (TS unit/integration), **XCTest** (Swift sidecar), Playwright-free e2e via a **fixture Electron/SwiftUI app** with deterministic geometry | See Phase 13 |
 | Linting/formatting | **Biome** (TS), **swift-format** (Swift) | |
 | Packaging | **npm package** wrapping a codesigned/notarized sidecar binary, resolved via `postinstall` or first-run download | See Phase 14 |
-| Observability | Structured JSON logs to `~/.windower/logs/`, no telemetry/network calls in MVP | Local-first tool; nothing phones home |
+| Observability | Structured JSON logs to `~/.windower/logs/`, no telemetry/network calls in MVP (one scoped exception: `packages/operator`'s LLM endpoint, spec §7) | Local-first tool; nothing phones home |
 
 ## 3. Monorepo layout
 
@@ -101,7 +101,7 @@ windower/
 ## 6. Permissions & security model
 
 - macOS requires three TCC grants: **Screen Recording** (capture), **Accessibility** (window move/resize), **Microphone** (optional, mic capture only). Windower requests each lazily, only when a feature needing it is first used, and `windower doctor` / `check_permissions` reports current grant state without triggering a prompt.
-- No network calls from the daemon or sidecar in MVP — everything is local file I/O. This keeps the security review scope small: the main risks are (a) an agent recording something sensitive on screen, mitigated by the agent/user choosing the target explicitly, and (b) output files landing in a predictable, permission-appropriate folder (`~/Movies/Windower` default, user-configurable, never auto-uploaded).
+- No network calls from the daemon or sidecar in MVP — everything is local file I/O. (Phase 19's operator adds one scoped exception: `packages/operator` calls the user-configured LLM endpoint while a run is active, and only then — see `spec.md` §7. The daemon/sidecar request paths themselves stay local-only, so a caller that never invokes `run_operator` sees no change.) This keeps the security review scope small: the main risks are (a) an agent recording something sensitive on screen, mitigated by the agent/user choosing the target explicitly, and (b) output files landing in a predictable, permission-appropriate folder (`~/Movies/Windower` default, user-configurable, never auto-uploaded).
 - The unix socket for daemon RPC is created with `0600` permissions, user-only.
 
 ## 7. Interfaces overview
