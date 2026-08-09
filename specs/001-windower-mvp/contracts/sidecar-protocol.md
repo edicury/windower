@@ -34,7 +34,7 @@ The daemon MUST check a capability is present before calling any method that dep
 | Method | Params | Result | Required capability |
 |---|---|---|---|
 | `describe` | `{}` | `{ platform, version, capabilities[] }` | always available |
-| `enumerateTargets` | `{ kinds?: ("display"\|"window"\|"app")[] }` | `{ targets: CaptureTarget[] }` | `enumerate.*` |
+| `enumerateTargets` | `{ kinds?: ("display"\|"window")[] }` | `{ targets: CaptureTarget[] }` | `enumerate.*` |
 | `getPermissions` | `{}` | `PermissionReport` (backend-relevant subset) | always available |
 | `requestPermission` | `{ kind: "screenRecording"\|"accessibility"\|"microphone" }` | `{ status: PermissionStatus }` | always available |
 | `resizeWindow` | `{ targetId: string, bounds: Rect }` | `{ actualBounds: Rect, result: "success"\|"partial"\|"unsupported" }` | `window-control` |

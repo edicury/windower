@@ -15,3 +15,9 @@
 - Unit tests: `sidecar-client.ts` round-trips every method against the fake echo sidecar, including error-taxonomy propagation and streamed `event` notifications.
 - `contracts/sidecar-protocol.md` is up to date with the actual shipped types (no drift between spec and code).
 - Explicit sign-off note in this file once done: "protocol frozen — Phase 2 may begin."
+
+---
+
+**protocol frozen — Phase 2 may begin.** (2026-08-09)
+
+Implemented in `packages/core/src/schemas/` (data-model.md Zod types) and `packages/core/src/protocol/` (JSON-RPC envelope, method table, error taxonomy, `SidecarClient`, in-memory `FakeSidecar`). 45/45 tests passing, zero `any`. One contract fix made during implementation: `enumerateTargets`'s `kinds` filter listed `"app"` as a valid kind, but `CaptureTarget.kind` (data-model.md) only has `display`/`window`/`region` — corrected `contracts/sidecar-protocol.md` to `("display"|"window")[]` (region has no independent ID per data-model.md, never independently enumerated) and updated the implementation to match. No other drift between contract and code.

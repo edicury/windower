@@ -1,8 +1,8 @@
 # Spec Status
 
-Current phase: **1 — Sidecar Protocol & Capability Model** (not started)
-Active phase file: `tasks/phase-1-sidecar-protocol.md`
-Previous: Phase 0 (Foundation) — complete, see below.
+Current phase: **2 — macOS Sidecar: Enumeration & Permissions** (not started)
+Active phase file: `tasks/phase-2-macos-enumeration-permissions.md`
+Previous: Phase 1 (Sidecar Protocol & Capability Model) — complete, protocol frozen, see below.
 
 Blocked: none
 
@@ -12,9 +12,16 @@ Planned (v1.1): Phase 15 (Post-Processing: trim, auto-zoom, ripples, gif/webm)
 
 Planned (post-MVP): Phase 16 (Windows backend), Phase 17 (Linux backend)
 
-Completed: Phase 0 (Foundation)
+Completed: Phase 0 (Foundation), Phase 1 (Sidecar Protocol & Capability Model)
 
 ## Recently completed
+
+- **Phase 1 — Sidecar Protocol & Capability Model** (2026-08-09): protocol frozen.
+  - `packages/core/src/schemas/` — Zod schemas + inferred types for every data-model.md type (Rect, CaptureTarget, VideoSettings, AudioTrackConfig/AudioSettings, SessionState/RecordingSession, OutputManifest, TimelineEvent/EventTimeline, PermissionStatus/PermissionReport), 31 unit tests.
+  - `packages/core/src/protocol/` — JSON-RPC 2.0 envelope schemas, full method table (`describe`, `enumerateTargets`, `getPermissions`, `requestPermission`, `resizeWindow`, `startCapture`, `stopCapture`, `cancelCapture`), error taxonomy (`SidecarError`/`SidecarErrorCode`), `SidecarClient` (transport-agnostic over any `Duplex`, newline-delimited JSON), notification API (`event`/`log`/`captureEnded`).
+  - `packages/core/src/protocol/fake-sidecar.ts` — in-memory TS echo sidecar for testing the client without macOS/real capture; 14 round-trip tests including error-taxonomy propagation and streamed `event` notifications during an active capture.
+  - Contract fix: `contracts/sidecar-protocol.md`'s `enumerateTargets.kinds` listed `"app"` as a filterable kind, but `CaptureTarget.kind` only has `display`/`window`/`region`. Corrected to `("display"|"window")[]` (region has no independent ID, never independently enumerated per data-model.md) and updated the implementation to match — no other drift found.
+  - Verified: `pnpm --filter @windower/core build/typecheck/test` all pass, 45/45 tests, zero `any`.
 
 - **Phase 0 — Foundation** (2026-08-09): monorepo scaffolding stood up, no functional capability yet.
   - pnpm workspace (`apps/*`, `packages/*`, `plugins/*`, `native/*`) + root `package.json` + `turbo.json`.

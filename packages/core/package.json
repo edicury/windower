@@ -15,7 +15,11 @@
     "typecheck": "tsc --build --emitDeclarationOnly false --noEmit",
     "clean": "tsc --build --clean"
   },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
   "devDependencies": {
+    "@types/node": "^22.10.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

@@ -1,0 +1,34 @@
+import { z } from "zod";
+import { CaptureTargetSchema } from "./capture-target.js";
+import { VideoSettingsSchema } from "./video-settings.js";
+import { AudioSettingsSchema } from "./audio-settings.js";
+
+/**
+ * SessionState / RecordingSession — the daemon's live/persisted session
+ * record. Persisted at ~/.windower/sessions/<id>.json on every transition.
+ * See data-model.md §RecordingSession.
+ */
+export const SessionStateSchema = z.enum([
+  "pending",
+  "recording",
+  "stopping",
+  "finalized",
+  "canceled",
+  "failed",
+]);
+export type SessionState = z.infer<typeof SessionStateSchema>;
+
+export const RecordingSessionSchema = z.object({
+  id: z.string(),
+  state: SessionStateSchema,
+  target: CaptureTargetSchema,
+  video: VideoSettingsSchema,
+  audio: AudioSettingsSchema,
+  startedAt: z.string(),
+  stoppedAt: z.string().optional(),
+  error: z.object({ code: z.string(), message: z.string() }).optional(),
+  outputPath: z.string().optional(),
+  manifestPath: z.string().optional(),
+  eventTimelinePath: z.string().optional(),
+});
+export type RecordingSession = z.infer<typeof RecordingSessionSchema>;
