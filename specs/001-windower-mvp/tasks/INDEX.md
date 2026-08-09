@@ -9,7 +9,7 @@
 | 2 | macOS Sidecar: Enumeration & Permissions ✅ | `phase-2-macos-enumeration-permissions.md` |
 | 3 | Window Control ✅ | `phase-3-window-control.md` |
 | 4 | Video Capture ✅ | `phase-4-video-capture.md` |
-| 5 | Audio | `phase-5-audio.md` |
+| 5 | Audio ✅ | `phase-5-audio.md` |
 | 6 | Daemon & Session Lifecycle | `phase-6-daemon-session-lifecycle.md` |
 | 7 | CLI | `phase-7-cli.md` |
 | 8 | MCP Server | `phase-8-mcp-server.md` |

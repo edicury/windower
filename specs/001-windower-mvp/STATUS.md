@@ -1,8 +1,8 @@
 # Spec Status
 
-Current phase: **5 — Audio** (not started)
-Active phase file: `tasks/phase-5-audio.md`
-Previous: Phase 4 (Video Capture) — complete, see below.
+Current phase: **6 — Daemon & Session Lifecycle** (not started)
+Active phase file: `tasks/phase-6-daemon-session-lifecycle.md`
+Previous: Phase 5 (Audio) — complete, see below.
 
 Blocked: none
 
@@ -12,9 +12,19 @@ Planned (v1.1): Phase 15 (Post-Processing: trim, auto-zoom, ripples, gif/webm)
 
 Planned (post-MVP): Phase 16 (Windows backend), Phase 17 (Linux backend)
 
-Completed: Phase 0 (Foundation), Phase 1 (Sidecar Protocol & Capability Model), Phase 2 (macOS Enumeration & Permissions), Phase 3 (Window Control), Phase 4 (Video Capture)
+Completed: Phase 0 (Foundation), Phase 1 (Sidecar Protocol & Capability Model), Phase 2 (macOS Enumeration & Permissions), Phase 3 (Window Control), Phase 4 (Video Capture), Phase 5 (Audio)
 
 ## Recently completed
+
+- **Phase 5 — Audio** (2026-08-09): system-audio and microphone capture wired into Phase 4's video pipeline.
+  - Built via 2 parallel subagents (`AudioCaptureConfig.swift` — pure `AudioSettingsInput`/`AudioTrackPlan` decode+config math, `AudioDeviceService` device enumeration/resolution; `VideoAssetWriter.swift` extended with `addAudioInput(outputSettings:)` returning an `AudioWriterInputHandle`, so system/mic tracks share the video input's `AVAssetWriter` and session-start time; `MicrophoneCaptureSource.swift` — `AVCaptureSession` wrapper) followed by this integration pass (`CaptureService.swift`).
+  - `CaptureSessionManager.startCapture`: computes `AudioTrackPlan` from `StartCaptureParams.audio` (now typed `AudioSettingsInput?`, replacing the Phase 4 opaque `JSONValue?` placeholder); sets `SCStreamConfiguration.capturesAudio` and attaches a second `SCStreamOutput` (`CaptureSystemAudioOutput`, type `.audio`) for system audio; resolves/builds `MicrophoneCaptureSource` for mic requests, started only after `SCStream.startCapture` succeeds; `AudioTrackPlan.bothMixed` routes both system-audio and mic sample handlers into ONE shared `AudioWriterInputHandle` — an interleaving approximation of real mixing (not PCM-level summing), documented as a known simplification rather than hidden.
+  - Graceful degradation: mic requested + `PermissionsService.microphoneStatus() == .denied` throws `PERMISSION_DENIED` before any capture resource is created (`AudioPermissionGate.shouldFailFast`, extracted as a pure function so it's unit-testable without a real mic/TCC grant); a stale/removed `deviceId` throws `TARGET_NOT_FOUND`, also fail-fast.
+  - `stopCapture`/`cancelCapture`/`handleStreamStoppedUnexpectedly` now stop any running `MicrophoneCaptureSource` alongside the `SCStream`; `VideoAssetWriter.finish()` already covered `markAsFinished()` for all audio inputs, verified unchanged.
+  - `main.swift`: `audio.system`/`audio.microphone` now advertised (deliberately not `audio.system.perApp` — `AudioTrackConfig` has no field to invoke it).
+  - Deviation: `Package.swift`'s platform floor bumped from macOS 12.3 to 13.0 — `SCStreamConfiguration.capturesAudio` requires 13.0+; documented inline in `Package.swift`.
+  - 100/100 Swift tests passing (39 new across `CaptureServiceTests`, `IntegrationTests`, plus the two parallel tasks' own new test files `AudioCaptureConfigTests.swift`/`MicrophoneCaptureSourceTests.swift`/`AudioAssetWriterTests.swift`), up from the pre-Phase-5 baseline of 61. `pnpm build` + `pnpm turbo run test`: 12/12 tasks passing, TS side untouched.
+  - Not verified in this sandbox (no Screen Recording/Microphone TCC grant, no GUI — same gap as Phase 2-4): the clap-test fixture's frame-accurate sync verification, `ffprobe`-confirmed track count/layout on a real output file, live mic device enumeration against real hardware, and `AudioTrackPlan.bothMixed`'s actual audible-mix quality. Deferred to Phase 13's local e2e process. `getPermissions`/a dedicated RPC surfacing `listAudioDevices` was deliberately not added yet — `AudioDeviceService.listMicrophoneDevices()` exists and is unit-tested, but its only named consumer (Phase 7's `--mic-device` CLI flag) doesn't exist yet, so wiring a listing endpoint now would be speculative.
 
 - **Phase 4 — Video Capture** (2026-08-09): `startCapture`/`stopCapture`/`cancelCapture` implemented, video-only (audio deferred to Phase 5).
   - Built via 3 subagents: two independent/parallel (`CaptureConfig.swift` — pure quality/geometry math; `VideoAssetWriter.swift` — `AVAssetWriter` wrapper, no SCK dependency) followed by one integration pass (`CaptureService.swift` — `CaptureSessionManager` wiring `SCStream` frame delivery into the writer, `SCContentFilter`/`SCStreamConfiguration` resolution for display/window/region targets, `NSLock`-protected session dict for concurrent-session safety, `captureEnded` notification on stream failure).

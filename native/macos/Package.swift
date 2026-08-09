@@ -4,7 +4,9 @@ import PackageDescription
 let package = Package(
     name: "windower-sidecar-macos",
     platforms: [
-        .macOS("12.3")
+        // Bumped from 12.3 to 13.0 in Phase 5 (Audio): SCStreamConfiguration.capturesAudio
+        // (system-audio capture via ScreenCaptureKit) requires macOS 13.0+.
+        .macOS("13.0")
     ],
     targets: [
         // All protocol/envelope/enumeration/permissions logic lives in a

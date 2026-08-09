@@ -10,10 +10,16 @@ import WindowerSidecarCore
 
 let sidecarVersion = "0.1.0"
 
-/// Capabilities this backend actually implements at this phase. audio.*
-/// (Phase 5) and eventTimeline.* (Phase 10) are deliberately NOT advertised
-/// yet — the daemon gates on `describe().capabilities` before calling
-/// anything, per CLAUDE.md "protocol before platform".
+/// Capabilities this backend actually implements at this phase. audio.system
+/// and audio.microphone are implemented as of Phase 5 (system audio via
+/// `SCStreamConfiguration.capturesAudio` + a second `.audio` stream output;
+/// microphone via `AVCaptureSession`) — see `CaptureSessionManager.startCapture`.
+/// `audio.system.perApp` is NOT advertised: `AudioTrackConfig`
+/// (data-model.md) has no field to request per-app audio, so there is
+/// nothing for the daemon to invoke were it advertised. eventTimeline.*
+/// (Phase 10) is deliberately NOT advertised yet — the daemon gates on
+/// `describe().capabilities` before calling anything, per CLAUDE.md
+/// "protocol before platform".
 let supportedCapabilities: [String] = [
     "enumerate.displays",
     "enumerate.windows",
@@ -22,6 +28,8 @@ let supportedCapabilities: [String] = [
     "capture.display",
     "capture.window",
     "capture.region",
+    "audio.system",
+    "audio.microphone",
 ]
 
 func logStderr(_ message: String) {

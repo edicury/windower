@@ -82,9 +82,30 @@ final class CaptureServiceTests: XCTestCase {
         XCTAssertTrue(params.video.showCursor)
         XCTAssertEqual(params.video.resolution?.width, 1920)
         XCTAssertEqual(params.video.resolution?.height, 1080)
-        // Audio is decoded opaquely this phase (video-only), but a
-        // well-formed AudioSettings payload must never fail to decode.
-        XCTAssertNotNil(params.audio)
+        let audio = try XCTUnwrap(params.audio)
+        XCTAssertTrue(audio.separateTracks)
+        XCTAssertEqual(audio.tracks.count, 3)
+        XCTAssertEqual(audio.tracks[0].source, "system")
+        XCTAssertEqual(audio.tracks[0].enabled, true)
+        XCTAssertEqual(audio.tracks[1].source, "microphone")
+        XCTAssertEqual(audio.tracks[1].deviceId, "dev-1")
+        XCTAssertEqual(audio.tracks[2].source, "narration")
+        XCTAssertEqual(audio.tracks[2].filePath, "/tmp/n.wav")
+        XCTAssertEqual(audio.tracks[2].offsetMs, 250)
+    }
+
+    func testDecodesStartCaptureParamsWithNoAudioField() throws {
+        // `StartCaptureParams.audio` decodes defensively — a request that
+        // omits `audio` entirely must still decode (treated downstream as
+        // `AudioTrackPlan.none`), matching this codebase's existing
+        // defensiveness elsewhere (`decodeParams`'s empty-object fallback).
+        let params = try decode(
+            StartCaptureParams.self,
+            """
+            {"sessionId":"s","target":{"kind":"display","id":"1"},
+             "video":{"fps":30,"codec":"h264","container":"mp4","quality":"medium","showCursor":false}}
+            """)
+        XCTAssertNil(params.audio)
     }
 
     func testDecodesStartCaptureParamsWithoutResolution() throws {
@@ -203,5 +224,93 @@ final class CaptureServiceTests: XCTestCase {
         manager.onNotification?("captureEnded", .object(["sessionId": .string("s")]))
         XCTAssertEqual(received?.0, "captureEnded")
         XCTAssertEqual(received?.1, .object(["sessionId": .string("s")]))
+    }
+
+    // MARK: - Phase 5: audio plan / permission gate
+    //
+    // A real SCStream + mic capture end-to-end through `startCapture` needs
+    // Screen Recording and Microphone TCC grants plus a live GUI session,
+    // which CI cannot provide (CLAUDE.md "TCC permissions gate CI") — same
+    // limitation this file's header doc comment already calls out for
+    // Phase 4. The denied-mic-permission "fail fast" behavior is instead
+    // unit tested at the pure-function boundary (`AudioPermissionGate`) that
+    // `startCapture` calls into, and the `AudioTrackPlan` derivation is
+    // exercised directly against decoded wire params.
+
+    func testAudioPermissionGateFailsFastWhenMicRequestedAndDenied() {
+        XCTAssertTrue(
+            AudioPermissionGate.shouldFailFast(microphoneRequested: true, microphoneStatus: .denied))
+    }
+
+    func testAudioPermissionGateDoesNotFailWhenMicRequestedAndGranted() {
+        XCTAssertFalse(
+            AudioPermissionGate.shouldFailFast(microphoneRequested: true, microphoneStatus: .granted))
+    }
+
+    func testAudioPermissionGateDoesNotFailWhenMicNotRequestedEvenIfDenied() {
+        XCTAssertFalse(
+            AudioPermissionGate.shouldFailFast(
+                microphoneRequested: false, microphoneStatus: .denied))
+    }
+
+    func testAudioPermissionGateDoesNotFailWhenMicRequestedAndNotDetermined() {
+        // Not-determined is not "denied" — `AVCaptureDevice.requestAccess`
+        // would prompt; the fail-fast gate only fires on a firm denial.
+        XCTAssertFalse(
+            AudioPermissionGate.shouldFailFast(
+                microphoneRequested: true, microphoneStatus: .notDetermined))
+    }
+
+    func testTrackPlanRequiresSystemAudioForSystemAndBothCases() throws {
+        let systemOnly = try decode(
+            AudioSettingsInput.self,
+            #"{"tracks":[{"source":"system","enabled":true}],"separateTracks":true}"#)
+        XCTAssertTrue(AudioCaptureConfigService.trackPlan(for: systemOnly).requiresSystemAudio)
+
+        let micOnly = try decode(
+            AudioSettingsInput.self,
+            #"{"tracks":[{"source":"microphone","enabled":true}],"separateTracks":true}"#)
+        XCTAssertFalse(AudioCaptureConfigService.trackPlan(for: micOnly).requiresSystemAudio)
+    }
+
+    func testTrackPlanMicrophoneDeviceIdReflectsRequestedDevice() throws {
+        let settings = try decode(
+            AudioSettingsInput.self,
+            #"{"tracks":[{"source":"microphone","enabled":true,"deviceId":"dev-9"}],"separateTracks":true}"#)
+        let plan = AudioCaptureConfigService.trackPlan(for: settings)
+        XCTAssertEqual(plan.microphoneDeviceId, .some("dev-9"))
+    }
+
+    func testTrackPlanBothMixedSetsMixesSystemAndMicrophone() throws {
+        let settings = try decode(
+            AudioSettingsInput.self,
+            """
+            {"tracks":[{"source":"system","enabled":true},{"source":"microphone","enabled":true}],"separateTracks":false}
+            """)
+        let plan = AudioCaptureConfigService.trackPlan(for: settings)
+        XCTAssertTrue(plan.mixesSystemAndMicrophone)
+        XCTAssertTrue(plan.requiresSystemAudio)
+        XCTAssertNotNil(plan.microphoneDeviceId)
+    }
+
+    func testTrackPlanBothSeparateDoesNotMix() throws {
+        let settings = try decode(
+            AudioSettingsInput.self,
+            """
+            {"tracks":[{"source":"system","enabled":true},{"source":"microphone","enabled":true}],"separateTracks":true}
+            """)
+        let plan = AudioCaptureConfigService.trackPlan(for: settings)
+        XCTAssertFalse(plan.mixesSystemAndMicrophone)
+        XCTAssertTrue(plan.requiresSystemAudio)
+        XCTAssertNotNil(plan.microphoneDeviceId)
+    }
+
+    func testTrackPlanNoneNeitherRequiresSystemNorMicrophone() throws {
+        let settings = try decode(
+            AudioSettingsInput.self, #"{"tracks":[],"separateTracks":false}"#)
+        let plan = AudioCaptureConfigService.trackPlan(for: settings)
+        XCTAssertFalse(plan.requiresSystemAudio)
+        XCTAssertNil(plan.microphoneDeviceId)
+        XCTAssertFalse(plan.mixesSystemAndMicrophone)
     }
 }

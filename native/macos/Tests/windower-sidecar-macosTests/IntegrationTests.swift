@@ -63,8 +63,10 @@ final class IntegrationTests: XCTestCase {
         XCTAssertTrue(capabilities.contains("capture.display"))
         XCTAssertTrue(capabilities.contains("capture.window"))
         XCTAssertTrue(capabilities.contains("capture.region"))
+        // Implemented as of Phase 5.
+        XCTAssertTrue(capabilities.contains("audio.system"))
+        XCTAssertTrue(capabilities.contains("audio.microphone"))
         // Not yet implemented at this phase — must not be advertised.
-        XCTAssertFalse(capabilities.contains("audio.system"))
         XCTAssertFalse(capabilities.contains("eventTimeline.cursor"))
     }
 

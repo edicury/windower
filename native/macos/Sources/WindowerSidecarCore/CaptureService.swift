@@ -76,13 +76,14 @@ public struct StartCaptureParams: Decodable {
     public let sessionId: String
     public let target: CaptureTargetInput
     public let video: VideoSettingsInput
-    /// `AudioSettings` is decoded permissively as an opaque JSON value: this
-    /// phase is video-only (Phase 5 implements audio), and `audio.*` is not
-    /// advertised in `describe().capabilities`, so producing a video-only
-    /// file when audio tracks are requested is the expected protocol
-    /// behavior here, not a bug. Keeping it opaque guarantees a well-formed
-    /// `AudioSettings` payload from the daemon can never fail to decode.
-    public let audio: JSONValue?
+    /// Mirrors `AudioSettings` (data-model.md). Optional despite the
+    /// protocol's `startCapture` params schema requiring `audio` — decoded
+    /// defensively (matching this codebase's existing defensiveness
+    /// elsewhere, e.g. `decodeParams`'s empty-object fallback for absent
+    /// params) so a well-formed request that omits it still decodes. A
+    /// `nil` value is treated downstream as `AudioTrackPlan.none`
+    /// (no audio tracks requested, video-only output).
+    public let audio: AudioSettingsInput?
 }
 
 public struct StartCaptureResult: Codable, Equatable {
@@ -222,6 +223,37 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput {
     }
 }
 
+/// Receives system-audio `CMSampleBuffer`s from `SCStream` (type `.audio`)
+/// and routes them to the session's system-audio `AudioWriterInputHandle`.
+/// Analogous to `CaptureStreamOutput` but for the audio output type — kept
+/// as a separate `SCStreamOutput` conformer rather than teaching
+/// `CaptureStreamOutput` to branch on `type` because the two feed different
+/// writer inputs and have no shared state (video session-start bookkeeping
+/// doesn't apply to audio).
+///
+/// For `AudioTrackPlan.bothMixed`, this output and `MicrophoneCaptureSource`'s
+/// sample handler are both wired to append to the SAME handle (see
+/// `startCapture`) — that is the whole "mix," see the doc comment on
+/// `AudioTrackPlan.bothMixed` and on the `.bothMixed` branch below for why
+/// this is an approximation, not real PCM-level mixing.
+final class CaptureSystemAudioOutput: NSObject, SCStreamOutput {
+    private let handle: AudioWriterInputHandle
+
+    init(handle: AudioWriterInputHandle) {
+        self.handle = handle
+    }
+
+    func stream(
+        _ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
+        of type: SCStreamOutputType
+    ) {
+        guard type == .audio else { return }
+        guard CMSampleBufferIsValid(sampleBuffer) else { return }
+        guard CMSampleBufferDataIsReady(sampleBuffer) else { return }
+        _ = handle.append(sampleBuffer: sampleBuffer)
+    }
+}
+
 /// Surfaces SCStream-initiated stops (target window closed, display
 /// disconnected, stream error) so the sidecar can emit `captureEnded`
 /// instead of leaving the daemon's session hung in `recording`.
@@ -253,12 +285,22 @@ final class CaptureSessionContext {
     let resolvedWidth: Int
     let resolvedHeight: Int
     let startedAt: Date
+    /// Strong reference for the session's lifetime — `SCStream` does not
+    /// retain its stream outputs (same caveat as `CaptureStreamOutput`).
+    /// `nil` when `AudioTrackPlan` didn't request system audio.
+    let systemAudioOutput: CaptureSystemAudioOutput?
+    /// Strong reference for the session's lifetime — per
+    /// `MicrophoneCaptureSource`'s doc comment, letting it deallocate
+    /// silently stops sample delivery. `nil` when `AudioTrackPlan` didn't
+    /// request microphone audio.
+    let microphoneSource: MicrophoneCaptureSource?
 
     init(
         sessionId: String, stream: SCStream, writer: VideoAssetWriter,
         output: CaptureStreamOutput, delegate: CaptureStreamDelegate,
         sampleQueue: DispatchQueue, outputURL: URL, resolvedWidth: Int, resolvedHeight: Int,
-        startedAt: Date
+        startedAt: Date, systemAudioOutput: CaptureSystemAudioOutput? = nil,
+        microphoneSource: MicrophoneCaptureSource? = nil
     ) {
         self.sessionId = sessionId
         self.stream = stream
@@ -270,6 +312,57 @@ final class CaptureSessionContext {
         self.resolvedWidth = resolvedWidth
         self.resolvedHeight = resolvedHeight
         self.startedAt = startedAt
+        self.systemAudioOutput = systemAudioOutput
+        self.microphoneSource = microphoneSource
+    }
+}
+
+// MARK: - Audio plan helpers
+
+extension AudioTrackPlan {
+    /// Whether this plan requires `SCStreamConfiguration.capturesAudio` and
+    /// a second `.audio`-type `SCStreamOutput`.
+    var requiresSystemAudio: Bool {
+        switch self {
+        case .systemOnly, .bothSeparate, .bothMixed:
+            return true
+        case .none, .microphoneOnly:
+            return false
+        }
+    }
+
+    /// `nil` when microphone audio isn't requested at all; `.some(deviceId)`
+    /// (where `deviceId` may itself be `nil`, meaning "default device") when
+    /// it is. Mirrors the `requested`/`deviceId` split
+    /// `AudioCaptureConfigService.microphoneRequest` uses for the same
+    /// "requested vs. not requested" ambiguity.
+    var microphoneDeviceId: String?? {
+        switch self {
+        case .none, .systemOnly:
+            return nil
+        case .microphoneOnly(let deviceId), .bothSeparate(let deviceId), .bothMixed(let deviceId):
+            return .some(deviceId)
+        }
+    }
+
+    /// Whether system audio and microphone audio (when both requested)
+    /// should share ONE `AVAssetWriterInput` (`bothMixed`) rather than two.
+    var mixesSystemAndMicrophone: Bool {
+        if case .bothMixed = self { return true }
+        return false
+    }
+}
+
+/// Pure, headlessly-testable gate for Phase 5's "graceful degradation"
+/// requirement: mic requested + permission denied must fail the whole
+/// `startCapture` call with `PERMISSION_DENIED` rather than silently
+/// recording without audio. Extracted as a standalone pure function (rather
+/// than inlined in `startCapture`) specifically so it can be unit tested
+/// without a real `SCStream`/mic — see `CaptureServiceTests`'s "TCC-gated
+/// boundary" precedent in its header doc comment.
+enum AudioPermissionGate {
+    static func shouldFailFast(microphoneRequested: Bool, microphoneStatus: PermissionStatus) -> Bool {
+        microphoneRequested && microphoneStatus == .denied
     }
 }
 
@@ -374,6 +467,31 @@ public final class CaptureSessionManager {
             nativeHeight: nativeHeight
         )
 
+        // Audio plan (Phase 5). Computed before any capture resource is
+        // created so a denied-mic-permission fail-fast leaves no partial
+        // session running. A nil/absent `audio` param decodes to "no tracks
+        // requested" per `StartCaptureParams.audio`'s doc comment.
+        let plan = AudioCaptureConfigService.trackPlan(
+            for: params.audio ?? AudioSettingsInput(tracks: [], separateTracks: false))
+
+        if let requestedMicDeviceId = plan.microphoneDeviceId {
+            let micStatus = PermissionsService.microphoneStatus()
+            if AudioPermissionGate.shouldFailFast(
+                microphoneRequested: true, microphoneStatus: micStatus)
+            {
+                throw SidecarRpcError.serverError(
+                    "Microphone permission not granted", code: .permissionDenied)
+            }
+            // Resolved early (before any writer/stream resource is created)
+            // so a stale/removed `deviceId` also fails fast rather than
+            // leaving a partial session running.
+            guard AudioDeviceService.resolveDevice(deviceId: requestedMicDeviceId) != nil else {
+                throw SidecarRpcError.serverError(
+                    "No microphone device matching id \(requestedMicDeviceId ?? "<default>")",
+                    code: .targetNotFound)
+            }
+        }
+
         let configuration = SCStreamConfiguration()
         // SCStreamConfiguration.width/height are the output frame buffer's
         // dimensions in **pixels** — deliberately the same numbers handed to
@@ -391,6 +509,9 @@ public final class CaptureSessionManager {
             configuration.destinationRect = CGRect(
                 x: 0, y: 0, width: resolved.width, height: resolved.height)
         }
+        // System audio (Phase 5): capturesAudio requires the macOS 13.0
+        // platform floor set in Package.swift.
+        configuration.capturesAudio = plan.requiresSystemAudio
 
         let bitrate = CaptureConfigService.bitrate(
             forQuality: video.quality, width: resolved.width, height: resolved.height)
@@ -412,6 +533,41 @@ public final class CaptureSessionManager {
                 "Failed to prepare video writer: \(error)", code: .captureFailed)
         }
 
+        // Audio writer inputs (Phase 5). Added to the SAME AVAssetWriter the
+        // video input uses, so every track shares one session-start time
+        // (`VideoAssetWriter.addAudioInput`'s timestamp-alignment
+        // guarantee). `bothMixed` deliberately creates only ONE input and
+        // routes both the system-audio SCStreamOutput and the
+        // MicrophoneCaptureSource sample handler to it — an approximation
+        // of real audio mixing (interleaving two independent sources into
+        // one AAC track, not summing PCM levels), which is what "mixed into
+        // the system-audio track" (phase-5-audio.md) is taken to mean here.
+        // Real level-mixing (AVAudioEngine / manual PCM summing) is a
+        // documented gap, not implemented in this phase.
+        var systemAudioHandle: AudioWriterInputHandle?
+        var microphoneAudioHandle: AudioWriterInputHandle?
+        do {
+            if plan.mixesSystemAndMicrophone {
+                let sharedHandle = try writer.addAudioInput(
+                    outputSettings: AudioCaptureConfigService.aacOutputSettings())
+                systemAudioHandle = sharedHandle
+                microphoneAudioHandle = sharedHandle
+            } else {
+                if plan.requiresSystemAudio {
+                    systemAudioHandle = try writer.addAudioInput(
+                        outputSettings: AudioCaptureConfigService.aacOutputSettings())
+                }
+                if plan.microphoneDeviceId != nil {
+                    microphoneAudioHandle = try writer.addAudioInput(
+                        outputSettings: AudioCaptureConfigService.aacOutputSettings())
+                }
+            }
+        } catch {
+            writer.cancel()
+            throw SidecarRpcError.serverError(
+                "Failed to prepare audio writer input: \(error)", code: .captureFailed)
+        }
+
         let output = CaptureStreamOutput(writer: writer)
         let delegate = CaptureStreamDelegate(sessionId: params.sessionId, manager: self)
         let stream = SCStream(filter: filter, configuration: configuration, delegate: delegate)
@@ -424,6 +580,46 @@ public final class CaptureSessionManager {
             writer.cancel()
             throw SidecarRpcError.serverError(
                 "Failed to attach stream output: \(error)", code: .captureFailed)
+        }
+
+        var systemAudioOutput: CaptureSystemAudioOutput?
+        if let systemAudioHandle = systemAudioHandle {
+            let audioOutput = CaptureSystemAudioOutput(handle: systemAudioHandle)
+            do {
+                try stream.addStreamOutput(
+                    audioOutput, type: .audio, sampleHandlerQueue: sampleQueue)
+            } catch {
+                writer.cancel()
+                throw SidecarRpcError.serverError(
+                    "Failed to attach audio stream output: \(error)", code: .captureFailed)
+            }
+            systemAudioOutput = audioOutput
+        }
+
+        // Microphone source (Phase 5). Device availability and permission
+        // were already validated fail-fast above, before any resource here
+        // was created — this just builds the `AVCaptureSession` wiring;
+        // `.start()` happens after `stream.startCapture` succeeds, mirroring
+        // the ordering below.
+        var microphoneSource: MicrophoneCaptureSource?
+        if let requestedMicDeviceId = plan.microphoneDeviceId, let micHandle = microphoneAudioHandle
+        {
+            guard let device = AudioDeviceService.resolveDevice(deviceId: requestedMicDeviceId)
+            else {
+                writer.cancel()
+                throw SidecarRpcError.serverError(
+                    "No microphone device matching id \(requestedMicDeviceId ?? "<default>")",
+                    code: .targetNotFound)
+            }
+            do {
+                microphoneSource = try MicrophoneCaptureSource(device: device) { sampleBuffer in
+                    _ = micHandle.append(sampleBuffer: sampleBuffer)
+                }
+            } catch {
+                writer.cancel()
+                throw SidecarRpcError.serverError(
+                    "Failed to set up microphone capture: \(error)", code: .captureFailed)
+            }
         }
 
         if let error = awaitCompletion({ done in stream.startCapture(completionHandler: done) }) {
@@ -440,10 +636,13 @@ public final class CaptureSessionManager {
                 "startCapture failed: \(error)", code: .captureFailed)
         }
 
+        microphoneSource?.start()
+
         let context = CaptureSessionContext(
             sessionId: params.sessionId, stream: stream, writer: writer, output: output,
             delegate: delegate, sampleQueue: sampleQueue, outputURL: outputURL,
-            resolvedWidth: resolved.width, resolvedHeight: resolved.height, startedAt: Date())
+            resolvedWidth: resolved.width, resolvedHeight: resolved.height, startedAt: Date(),
+            systemAudioOutput: systemAudioOutput, microphoneSource: microphoneSource)
 
         lock.lock()
         sessions[params.sessionId] = context
@@ -459,6 +658,11 @@ public final class CaptureSessionManager {
             throw SidecarRpcError.serverError(
                 "Unknown sessionId: \(params.sessionId)", code: .sessionNotFound)
         }
+
+        // Stop mic hardware capture alongside the SCStream so it doesn't
+        // keep running (and consuming the TCC-granted mic) after the
+        // session ends.
+        context.microphoneSource?.stop()
 
         // Best-effort: even if the stream errors on stop, the frames already
         // handed to the writer are still worth finalizing.
@@ -504,6 +708,7 @@ public final class CaptureSessionManager {
             throw SidecarRpcError.serverError(
                 "Unknown sessionId: \(params.sessionId)", code: .sessionNotFound)
         }
+        context.microphoneSource?.stop()
         // Errors ignored deliberately — we're discarding the output anyway.
         _ = awaitCompletion { done in context.stream.stopCapture(completionHandler: done) }
         context.writer.cancel()
@@ -518,6 +723,7 @@ public final class CaptureSessionManager {
     /// `recording`.
     func handleStreamStoppedUnexpectedly(sessionId: String, error: Error) {
         guard let context = removeSession(sessionId) else { return }
+        context.microphoneSource?.stop()
         context.writer.cancel()
         emitCaptureEnded(sessionId: sessionId, reason: captureEndedReason(for: error))
     }
