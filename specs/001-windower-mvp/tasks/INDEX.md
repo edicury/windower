@@ -4,9 +4,9 @@
 
 | Phase | Title | File |
 |---|---|---|
-| 0 | Foundation | `phase-0-foundation.md` |
-| 1 | Sidecar Protocol & Capability Model | `phase-1-sidecar-protocol.md` |
-| 2 | macOS Sidecar: Enumeration & Permissions | `phase-2-macos-enumeration-permissions.md` |
+| 0 | Foundation ✅ | `phase-0-foundation.md` |
+| 1 | Sidecar Protocol & Capability Model ✅ | `phase-1-sidecar-protocol.md` |
+| 2 | macOS Sidecar: Enumeration & Permissions ✅ | `phase-2-macos-enumeration-permissions.md` |
 | 3 | Window Control | `phase-3-window-control.md` |
 | 4 | Video Capture | `phase-4-video-capture.md` |
 | 5 | Audio | `phase-5-audio.md` |

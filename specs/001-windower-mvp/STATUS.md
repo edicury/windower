@@ -1,8 +1,8 @@
 # Spec Status
 
-Current phase: **2 — macOS Sidecar: Enumeration & Permissions** (not started)
-Active phase file: `tasks/phase-2-macos-enumeration-permissions.md`
-Previous: Phase 1 (Sidecar Protocol & Capability Model) — complete, protocol frozen, see below.
+Current phase: **3 — Window Control** (not started)
+Active phase file: `tasks/phase-3-window-control.md`
+Previous: Phase 2 (macOS Enumeration & Permissions) — complete, see below.
 
 Blocked: none
 
@@ -12,9 +12,15 @@ Planned (v1.1): Phase 15 (Post-Processing: trim, auto-zoom, ripples, gif/webm)
 
 Planned (post-MVP): Phase 16 (Windows backend), Phase 17 (Linux backend)
 
-Completed: Phase 0 (Foundation), Phase 1 (Sidecar Protocol & Capability Model)
+Completed: Phase 0 (Foundation), Phase 1 (Sidecar Protocol & Capability Model), Phase 2 (macOS Enumeration & Permissions)
 
 ## Recently completed
+
+- **Phase 2 — macOS Sidecar: Enumeration & Permissions** (2026-08-09): first real macOS implementation.
+  - `native/macos/`: real newline-delimited JSON-RPC 2.0 stdio loop, split into `WindowerSidecarCore` library + thin executable target (required for XCTest `@testable` linking). `describe` advertises exactly `enumerate.displays`/`enumerate.windows`/`enumerate.apps`. `enumerateTargets` via `SCShareableContent`, points→pixels conversion via `backingScaleFactor` happens entirely inside the sidecar. `getPermissions`/`requestPermission` wired to real `CGPreflightScreenCaptureAccess`/`AXIsProcessTrusted`/`AVCaptureDevice` APIs. Error taxonomy correctly applied (`UNSUPPORTED_CAPABILITY` for unknown methods, `PERMISSION_DENIED` for TCC denials). 11/11 XCTest passing.
+  - `packages/core/src/process/`: `resolveSidecarBinaryPath()` + `SidecarProcess`/`spawnSidecar()` — real `child_process.spawn` wired into `SidecarClient`, env-var override for future Phase 14 packaged-binary resolution, clean SIGTERM→SIGKILL teardown, in-flight request rejection on crash/kill. 55/55 `@windower/core` tests passing (10 new, including one integration test against the real compiled Swift binary).
+  - Full `pnpm build` + `turbo run test` verified clean across TS + Swift together.
+  - Not verified in this sandbox (no interactive GUI/TCC access, matches CLAUDE.md's CI note that permission grants are e2e-gated/local-only): actual OS permission-prompt dialogs appearing, `enumerateTargets` output against a real granted-permissions screen. API usage is correct per Apple's docs; flagged rather than claimed.
 
 - **Phase 1 — Sidecar Protocol & Capability Model** (2026-08-09): protocol frozen.
   - `packages/core/src/schemas/` — Zod schemas + inferred types for every data-model.md type (Rect, CaptureTarget, VideoSettings, AudioTrackConfig/AudioSettings, SessionState/RecordingSession, OutputManifest, TimelineEvent/EventTimeline, PermissionStatus/PermissionReport), 31 unit tests.
