@@ -15,6 +15,7 @@ import {
   type VideoSettings,
   VideoSettingsSchema,
 } from "@windower/core";
+import { EventTimelineWriter } from "./event-timeline-writer.js";
 import type { SessionStore } from "./session-store.js";
 
 /** Placeholder until Phase 14 wires a real package-version read (manifest.json's `windowerVersion` field). */
@@ -72,6 +73,11 @@ function manifestPathFor(outputPath: string): string {
   return join(dirname(outputPath), `${basename(outputPath, ext)}.manifest.json`);
 }
 
+function eventsPathFor(outputPath: string): string {
+  const ext = extname(outputPath);
+  return join(dirname(outputPath), `${basename(outputPath, ext)}.events.json`);
+}
+
 function toDaemonError(err: unknown): DaemonError {
   if (err instanceof DaemonError) return err;
   if (err instanceof SidecarError) return new DaemonError(err.code, err.message);
@@ -89,6 +95,8 @@ export class SessionManager {
   private readonly spawnSidecar: SidecarFactory;
   private readonly activeSidecars = new Map<string, SidecarHandle>();
   private readonly activeTargetKeys = new Map<string, string>();
+  private readonly eventWriters = new Map<string, EventTimelineWriter>();
+  private readonly eventCapabilities = new Map<string, { keystrokes: boolean }>();
 
   constructor(options: SessionManagerOptions) {
     this.store = options.store;
@@ -153,6 +161,9 @@ export class SessionManager {
       },
     });
 
+    const writer = new EventTimelineWriter(sessionId);
+    this.eventWriters.set(sessionId, writer);
+
     try {
       const describeResult = await handle.client.describe();
       const requiredCapability =
@@ -167,10 +178,18 @@ export class SessionManager {
           `Sidecar does not advertise "${requiredCapability}"`,
         );
       }
+      const eventCapabilities = {
+        keystrokes: describeResult.capabilities.includes("eventTimeline.keyboard"),
+      };
+      this.eventCapabilities.set(sessionId, eventCapabilities);
+      handle.client.on("event", (payload) => {
+        void writer.append(payload.event);
+      });
       await handle.client.startCapture({ sessionId, target, video, audio });
     } catch (err) {
       this.activeTargetKeys.delete(key);
       await handle.terminate().catch(() => {});
+      await this.discardEventWriter(sessionId);
       const daemonErr = toDaemonError(err);
       session = {
         ...session,
@@ -227,6 +246,22 @@ export class SessionManager {
       .then((s) => s.size)
       .catch(() => 0);
 
+    const writer = this.eventWriters.get(session.id);
+    const capabilities = this.eventCapabilities.get(session.id) ?? { keystrokes: false };
+    let eventTimelinePath: string | undefined;
+    if (writer) {
+      const candidatePath = eventsPathFor(outputPath);
+      try {
+        await writer.finalize(candidatePath, capabilities);
+        eventTimelinePath = candidatePath;
+      } catch {
+        // A bad/corrupt events file shouldn't fail an otherwise-successful
+        // recording — log and continue without an eventTimelinePath.
+      }
+      this.eventWriters.delete(session.id);
+      this.eventCapabilities.delete(session.id);
+    }
+
     const manifest: OutputManifest = {
       windowerVersion: WINDOWER_VERSION,
       sessionId: session.id,
@@ -249,6 +284,7 @@ export class SessionManager {
         codec: session.video.codec,
         container: session.video.container,
       },
+      ...(eventTimelinePath ? { eventTimelinePath } : {}),
     };
     await mkdir(dirname(manifestPath), { recursive: true });
     await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
@@ -259,9 +295,15 @@ export class SessionManager {
       stoppedAt: nowIso(),
       outputPath,
       manifestPath,
+      ...(eventTimelinePath ? { eventTimelinePath } : {}),
     });
 
-    return { outputPath, manifestPath, manifest };
+    return {
+      outputPath,
+      manifestPath,
+      manifest,
+      ...(eventTimelinePath ? { eventTimelinePath } : {}),
+    };
   }
 
   async cancelRecording(
@@ -285,6 +327,7 @@ export class SessionManager {
       await handle.terminate().catch(() => {});
     }
     this.cleanupActive(session.id, session.target);
+    await this.discardEventWriter(session.id);
 
     await this.store.save({ ...session, state: "canceled", stoppedAt: nowIso() });
     return { canceled: true };
@@ -311,6 +354,7 @@ export class SessionManager {
     const handle = this.activeSidecars.get(sessionId);
     this.cleanupActive(sessionId, session.target);
     await handle?.terminate().catch(() => {});
+    await this.discardEventWriter(sessionId);
     await this.failSession(
       sessionId,
       new DaemonError("CAPTURE_FAILED", `Sidecar-initiated stop: ${reason}`),
@@ -324,6 +368,7 @@ export class SessionManager {
     const session = this.store.get(sessionId);
     if (!session || session.state !== "recording") return; // expected exit from our own terminate()
     this.cleanupActive(sessionId, session.target);
+    await this.discardEventWriter(sessionId);
     await this.failSession(
       sessionId,
       new DaemonError(
@@ -347,6 +392,13 @@ export class SessionManager {
   private cleanupActive(sessionId: string, target: CaptureTarget): void {
     this.activeSidecars.delete(sessionId);
     this.activeTargetKeys.delete(targetKey(target));
+  }
+
+  private async discardEventWriter(sessionId: string): Promise<void> {
+    const writer = this.eventWriters.get(sessionId);
+    this.eventWriters.delete(sessionId);
+    this.eventCapabilities.delete(sessionId);
+    if (writer) await writer.discard().catch(() => {});
   }
 
   private requireSession(sessionId: string): RecordingSession {

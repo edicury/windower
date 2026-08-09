@@ -1,7 +1,13 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type CaptureTarget, DaemonError, WINDOWER_HOME_ENV } from "@windower/core";
+import {
+  type CaptureTarget,
+  DaemonError,
+  EventTimelineSchema,
+  type TimelineEvent,
+  WINDOWER_HOME_ENV,
+} from "@windower/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SessionManager } from "./session-manager.js";
 import { SessionStore } from "./session-store.js";
@@ -158,5 +164,78 @@ describe("SessionManager", () => {
   it("getSession throws SESSION_NOT_FOUND for an unknown id", () => {
     const { manager } = makeManager();
     expect(() => manager.getSession({ sessionId: "nope" })).toThrow(DaemonError);
+  });
+
+  it("captures streamed events and finalizes an eventTimelinePath on stop", async () => {
+    const { manager, spawns } = makeManager();
+    const { sessionId } = await manager.startRecording({ target: DISPLAY_TARGET });
+
+    const events: TimelineEvent[] = [
+      { t: 0, type: "cursor_move", x: 1, y: 1 },
+      { t: 5, type: "mouse_down", x: 1, y: 1, button: "left" },
+      { t: 6, type: "key_down", key: "x" },
+    ];
+    const spawn = spawns.at(-1);
+    for (const event of events) spawn?.sidecar.emitEvent(sessionId, event);
+    await new Promise((resolve) => setTimeout(resolve, 10)); // let notifications land
+
+    const result = await manager.stopRecording({ sessionId });
+    expect(result.eventTimelinePath).toBeTruthy();
+    expect(result.manifest.eventTimelinePath).toBe(result.eventTimelinePath);
+
+    const session = manager.getSession({ sessionId });
+    expect(session.eventTimelinePath).toBe(result.eventTimelinePath);
+
+    const onDisk = JSON.parse(
+      await (await import("node:fs/promises")).readFile(result.eventTimelinePath as string, "utf8"),
+    );
+    const timeline = EventTimelineSchema.parse(onDisk);
+    expect(timeline.sessionId).toBe(sessionId);
+    expect(timeline.events).toEqual(events);
+    expect(timeline.capabilities.keystrokes).toBe(true);
+  });
+
+  it("leaves no .events.json behind when a recording is canceled", async () => {
+    const { manager, spawns } = makeManager();
+    const { sessionId } = await manager.startRecording({ target: DISPLAY_TARGET });
+
+    const spawn = spawns.at(-1);
+    spawn?.sidecar.emitEvent(sessionId, { t: 0, type: "cursor_move", x: 1, y: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    await manager.cancelRecording({ sessionId });
+
+    // No final `.events.json` is ever computed for a canceled session (no
+    // outputPath exists), and the writer's temp NDJSON file must be gone too.
+    const tempPath = join(tmpdir(), `windower-${sessionId}.events.jsonl`);
+    await expect(stat(tempPath)).rejects.toThrow();
+  });
+
+  it("capabilities.keystrokes is false when eventTimeline.keyboard is not advertised", async () => {
+    const store = new SessionStore();
+    const { spawnSidecar, spawns } = createFakeSidecarFactory({
+      targets: [DISPLAY_TARGET],
+      capabilities: [
+        "capture.display",
+        "capture.window",
+        "capture.region",
+        "eventTimeline.cursor",
+        "eventTimeline.mouse",
+      ],
+    });
+    const manager = new SessionManager({ store, spawnSidecar });
+
+    const { sessionId } = await manager.startRecording({ target: DISPLAY_TARGET });
+    const spawn = spawns.at(-1);
+    spawn?.sidecar.emitEvent(sessionId, { t: 0, type: "cursor_move", x: 1, y: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    const result = await manager.stopRecording({ sessionId });
+    const raw = await (await import("node:fs/promises")).readFile(
+      result.eventTimelinePath as string,
+      "utf8",
+    );
+    const timeline = EventTimelineSchema.parse(JSON.parse(raw));
+    expect(timeline.capabilities.keystrokes).toBe(false);
   });
 });

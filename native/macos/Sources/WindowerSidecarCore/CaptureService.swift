@@ -294,13 +294,19 @@ final class CaptureSessionContext {
     /// silently stops sample delivery. `nil` when `AudioTrackPlan` didn't
     /// request microphone audio.
     let microphoneSource: MicrophoneCaptureSource?
+    /// Strong reference for the session's lifetime (Phase 10) — event-tap
+    /// capture runs on its own dedicated thread/run loop for as long as this
+    /// is retained; `nil` when tap creation failed entirely (non-fatal, see
+    /// `startCapture`'s doc comment on this field).
+    let eventTapSource: EventTapSource?
 
     init(
         sessionId: String, stream: SCStream, writer: VideoAssetWriter,
         output: CaptureStreamOutput, delegate: CaptureStreamDelegate,
         sampleQueue: DispatchQueue, outputURL: URL, resolvedWidth: Int, resolvedHeight: Int,
         startedAt: Date, systemAudioOutput: CaptureSystemAudioOutput? = nil,
-        microphoneSource: MicrophoneCaptureSource? = nil
+        microphoneSource: MicrophoneCaptureSource? = nil,
+        eventTapSource: EventTapSource? = nil
     ) {
         self.sessionId = sessionId
         self.stream = stream
@@ -314,6 +320,7 @@ final class CaptureSessionContext {
         self.startedAt = startedAt
         self.systemAudioOutput = systemAudioOutput
         self.microphoneSource = microphoneSource
+        self.eventTapSource = eventTapSource
     }
 }
 
@@ -638,11 +645,28 @@ public final class CaptureSessionManager {
 
         microphoneSource?.start()
 
+        let startedAt = Date()
+
+        // Event-tap capture (Phase 10). Additive-only: a `CGEventTap`
+        // creation failure (e.g. Accessibility not actually granted despite
+        // the Phase 2/3 baseline check, or a transient failure) must never
+        // fail `startCapture` — video capture is core, event capture is not.
+        // `EventTapSource.start()` handles its own internal failures (mouse
+        // vs. keyboard taps independently, see its doc comment) and never
+        // throws.
+        let eventTapSource = EventTapSource(
+            sessionId: params.sessionId, startedAt: startedAt,
+            emit: { [weak self] method, encoded in
+                self?.onNotification?(method, encoded)
+            })
+        eventTapSource.start()
+
         let context = CaptureSessionContext(
             sessionId: params.sessionId, stream: stream, writer: writer, output: output,
             delegate: delegate, sampleQueue: sampleQueue, outputURL: outputURL,
-            resolvedWidth: resolved.width, resolvedHeight: resolved.height, startedAt: Date(),
-            systemAudioOutput: systemAudioOutput, microphoneSource: microphoneSource)
+            resolvedWidth: resolved.width, resolvedHeight: resolved.height, startedAt: startedAt,
+            systemAudioOutput: systemAudioOutput, microphoneSource: microphoneSource,
+            eventTapSource: eventTapSource)
 
         lock.lock()
         sessions[params.sessionId] = context
@@ -663,6 +687,7 @@ public final class CaptureSessionManager {
         // keep running (and consuming the TCC-granted mic) after the
         // session ends.
         context.microphoneSource?.stop()
+        context.eventTapSource?.stop()
 
         // Best-effort: even if the stream errors on stop, the frames already
         // handed to the writer are still worth finalizing.
@@ -709,6 +734,7 @@ public final class CaptureSessionManager {
                 "Unknown sessionId: \(params.sessionId)", code: .sessionNotFound)
         }
         context.microphoneSource?.stop()
+        context.eventTapSource?.stop()
         // Errors ignored deliberately — we're discarding the output anyway.
         _ = awaitCompletion { done in context.stream.stopCapture(completionHandler: done) }
         context.writer.cancel()
@@ -724,6 +750,7 @@ public final class CaptureSessionManager {
     func handleStreamStoppedUnexpectedly(sessionId: String, error: Error) {
         guard let context = removeSession(sessionId) else { return }
         context.microphoneSource?.stop()
+        context.eventTapSource?.stop()
         context.writer.cancel()
         emitCaptureEnded(sessionId: sessionId, reason: captureEndedReason(for: error))
     }

@@ -16,10 +16,25 @@ let sidecarVersion = "0.1.0"
 /// microphone via `AVCaptureSession`) — see `CaptureSessionManager.startCapture`.
 /// `audio.system.perApp` is NOT advertised: `AudioTrackConfig`
 /// (data-model.md) has no field to request per-app audio, so there is
-/// nothing for the daemon to invoke were it advertised. eventTimeline.*
-/// (Phase 10) is deliberately NOT advertised yet — the daemon gates on
-/// `describe().capabilities` before calling anything, per CLAUDE.md
-/// "protocol before platform".
+/// nothing for the daemon to invoke were it advertised.
+///
+/// `eventTimeline.cursor`/`eventTimeline.mouse`/`eventTimeline.keyboard`
+/// (Phase 10) ARE advertised statically, matching
+/// `contracts/sidecar-protocol.md`'s own `describe` example and
+/// `packages/core/src/protocol/methods.ts`'s `CapabilitySchema` — `describe`
+/// is a one-shot handshake at sidecar spawn, before any session exists, so
+/// there is no protocol-level mechanism to report "keyboard capture worked
+/// THIS session" through it. `eventTimeline.keyboard` here is therefore
+/// optimistic ("this backend attempts keyboard capture"), the same
+/// granularity every other capability in this list already has. The
+/// genuinely per-session fact — whether a `CGEventTap` for key events could
+/// actually be created this time (some secure-input contexts block it) — is
+/// surfaced instead via a `log` notification
+/// (`EventTapSource.installKeyTap`'s failure path) when it happens, so the
+/// daemon/user at least has a signal even though the static capability list
+/// can't be corrected retroactively. `eventTimeline.cursor`/`.mouse` have no
+/// equivalent failure mode once Accessibility is granted (Phase 2/3
+/// baseline), so they're unconditionally true.
 let supportedCapabilities: [String] = [
     "enumerate.displays",
     "enumerate.windows",
@@ -30,6 +45,9 @@ let supportedCapabilities: [String] = [
     "capture.region",
     "audio.system",
     "audio.microphone",
+    "eventTimeline.cursor",
+    "eventTimeline.mouse",
+    "eventTimeline.keyboard",
 ]
 
 func logStderr(_ message: String) {

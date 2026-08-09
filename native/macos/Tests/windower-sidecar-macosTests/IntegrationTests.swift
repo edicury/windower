@@ -66,8 +66,13 @@ final class IntegrationTests: XCTestCase {
         // Implemented as of Phase 5.
         XCTAssertTrue(capabilities.contains("audio.system"))
         XCTAssertTrue(capabilities.contains("audio.microphone"))
-        // Not yet implemented at this phase — must not be advertised.
-        XCTAssertFalse(capabilities.contains("eventTimeline.cursor"))
+        // Implemented as of Phase 10.
+        XCTAssertTrue(capabilities.contains("eventTimeline.cursor"))
+        XCTAssertTrue(capabilities.contains("eventTimeline.mouse"))
+        // Advertised optimistically (best-effort, per-session truthfulness
+        // reported via a `log` notification instead) — see main.swift's doc
+        // comment on `supportedCapabilities`.
+        XCTAssertTrue(capabilities.contains("eventTimeline.keyboard"))
     }
 
     func testUnknownMethodReturnsUnsupportedCapabilityTaxonomyCode() throws {
