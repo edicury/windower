@@ -100,6 +100,13 @@ public enum EnumerationService {
         guard let app = window.owningApplication else { return nil }
         let title = window.title ?? ""
         if title.isEmpty { return nil }
+        // Per-Space/per-display desktop and window-server layer entries
+        // (e.g. duplicate "Desktop" windows, one per virtual display
+        // arrangement) surface with a title but no real owning app identity.
+        // Real application windows always have both; skip anything missing
+        // either rather than showing noise agents/users would have to
+        // filter out themselves (see bugs.spec.md #1).
+        if app.applicationName.isEmpty || app.bundleIdentifier.isEmpty { return nil }
 
         let scaleFactor = backingScaleFactor(forPoint: window.frame.origin)
         let pointsFrame = window.frame

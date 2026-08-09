@@ -1,8 +1,8 @@
 # Spec Status
 
-Current phase: **8 — MCP Server** (not started)
-Active phase file: `tasks/phase-8-mcp-server.md`
-Previous: Phase 7 (CLI) — complete, see below.
+Current phase: **9 — Claude Code Plugin + Skill** (not started)
+Active phase file: `tasks/phase-9-claude-code-plugin-skill.md`
+Previous: Phase 8 (MCP Server) — complete, see below.
 
 Blocked: none
 
@@ -12,9 +12,19 @@ Planned (v1.1): Phase 15 (Post-Processing: trim, auto-zoom, ripples, gif/webm)
 
 Planned (post-MVP): Phase 16 (Windows backend), Phase 17 (Linux backend)
 
-Completed: Phase 0 (Foundation), Phase 1 (Sidecar Protocol & Capability Model), Phase 2 (macOS Enumeration & Permissions), Phase 3 (Window Control), Phase 4 (Video Capture), Phase 5 (Audio), Phase 6 (Daemon & Session Lifecycle), Phase 7 (CLI)
+Completed: Phase 0 (Foundation), Phase 1 (Sidecar Protocol & Capability Model), Phase 2 (macOS Enumeration & Permissions), Phase 3 (Window Control), Phase 4 (Video Capture), Phase 5 (Audio), Phase 6 (Daemon & Session Lifecycle), Phase 7 (CLI), Phase 8 (MCP Server)
 
 ## Recently completed
+
+- **Phase 8 — MCP Server** (2026-08-09): `packages/mcp-server` implemented — all 9 `contracts/mcp-tools.md` tools over stdio, thin wrappers over the Phase 6 `DaemonClient`.
+  - Built via 2 subagents: foundation (scaffold + read-only tools) then a parallel-safe follow-on (session-lifecycle tools in a disjoint file), integrating through a `tools/index.ts` barrel.
+  - `packages/mcp-server/src/`: `server.ts` (`createServer()`, `@modelcontextprotocol/sdk` `McpServer`, name `windower`), `index.ts` (`#!/usr/bin/env node` entrypoint, `StdioServerTransport`), `daemon-client.ts` (`getDaemonClient()` — memoized per-process `DaemonClient` via `ensureDaemonRunning()`, **not** disposed per call like the CLI's `withDaemon`, since an MCP server is long-lived; `toMcpError(err)` maps `DaemonError`/`ZodError`/generic errors to the SDK's `{content, isError: true}` shape), `tools/read.ts` (`list_targets`, `check_permissions`, `request_permission`, `resize_window`), `tools/session.ts` (`start_recording`, `get_session`, `stop_recording`, `cancel_recording`, `list_sessions`), `tools/index.ts` barrel.
+  - Every tool's input/output schema is the exact `@windower/core` Zod schema (`ListTargetsParamsSchema`, `StartRecordingResultSchema`, etc.) passed straight to `server.registerTool(name, {title, description, inputSchema, outputSchema}, handler)` — zero hand-written parallel schemas, matching the phase file's single-source-of-truth requirement.
+  - `start_recording`'s description explicitly states it returns immediately with `{sessionId}`, does not block on the recording finishing, and that the caller should act on-screen then call `stop_recording` — the two-call pattern is spelled out for a model that never sees `SKILL.md` (per CLAUDE.md's "most important semantic" note and the contract's closing note). `request_permission`'s description flags it as user-interactive/may trigger an OS dialog. `resize_window`'s description explains the `success`/`partial`/`unsupported` result values.
+  - Package deviations (flagged): `bin` name is `windower-mcp-server` (not `windower` — the CLI already owns that), still resolves correctly via `npx @windower/mcp-server` since it's the package's sole bin entry. `@modelcontextprotocol/sdk@^1.30.0` + `zod@^4.4.3` added (zod version matched to what `@windower/core` already uses).
+  - 13 new mcp-server vitest tests: `daemon-client.test.ts` (`toMcpError` cases) + `tools/read.test.ts`/`tools/session.test.ts` (real round-trips via the SDK's `InMemoryTransport`+`Client` against a hand-rolled fake `DaemonClient`, including a `start_recording` prompt-resolution check (<1s) proving the non-blocking semantic, and a failure-path test asserting `isError: true` surfaces a thrown `DaemonError`).
+  - Full verification clean: `pnpm build` (6/6), `turbo run test` (12/12, includes the 100 Swift XCTest cases untouched), `turbo run typecheck` (5/5), `biome check` clean on all touched files.
+  - **Exit criteria fully verified live**, closing the one gap noted mid-phase: registered `windower-mcp-server` with a real Claude Code session (`claude mcp add windower node packages/mcp-server/dist/index.js`) and drove the full record-a-demo loop through MCP with no CLI involvement — `check_permissions` (all granted, daemon+sidecar reachable) → `list_targets` (real display enumerated) → `start_recording` (returned `{sessionId}` immediately, confirming the non-blocking two-call semantic live, not just in a mocked test) → `get_session` (`state: "recording"`) → `stop_recording` (finalized a real 5.86MB h264/mp4 + manifest) → opened the output file and confirmed it plays. SSE transport intentionally not added — phase file marks it optional, not required for MVP.
 
 - **Phase 7 — CLI** (2026-08-09): `packages/cli` complete — every `contracts/cli.md` command implemented (`targets`, `doctor`, `permission request`, `resize`, `start`, `status`, `stop`, `cancel`, `record`, `config get|set`, `daemon status|stop`, `list`), built via a foundation subagent (framework choice + shared helpers + `targets`/`doctor`/`daemon status|stop`) followed by 3 parallel subagents (`permission`+`resize`; `start`/`status`/`stop`/`cancel`/`record`; `config get|set`+`list`), each editing disjoint command files and additively patching the shared `index.ts`/`stubs.ts` hotspots.
   - **CLI framework: `commander`** (not `citty`) — its built-in `--no-<flag>` negation matches `contracts/cli.md`'s `--no-cursor` exactly with zero glue code, its subcommand API (`program.command("daemon").command("status")`) reads cleanly for the `daemon status|stop`/`config get|set`/`permission request <kind>` nesting the contract needs, and it's the most battle-tested option for per-command `--help` generation across ~13 commands.

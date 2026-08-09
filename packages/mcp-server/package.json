@@ -6,16 +6,22 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "windower-mcp-server": "./dist/index.js"
+  },
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && chmod +x dist/index.js",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --build --emitDeclarationOnly false --noEmit",
     "clean": "tsc --build --clean"
   },
   "dependencies": {
-    "@windower/core": "workspace:*"
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@windower/core": "workspace:*",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/node": "^22.10.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }
