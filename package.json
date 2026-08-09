@@ -13,7 +13,9 @@
     "test": "turbo run test",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
-    "format": "biome format --write ."
+    "format": "biome format --write .",
+    "test:e2e": "turbo run test:e2e",
+    "test:soak": "turbo run test:soak"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

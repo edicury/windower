@@ -235,6 +235,11 @@ export class FakeSidecar {
   private resizeWindow(
     params: SidecarMethodMap["resizeWindow"]["params"],
   ): SidecarMethodMap["resizeWindow"]["result"] {
+    // window-control is gated on Accessibility (AX) permission on macOS —
+    // see CLAUDE.md's units/permissions notes and contracts/sidecar-protocol.md.
+    if (this.permissions.accessibility === "denied") {
+      throw new FakeSidecarError("PERMISSION_DENIED", "Accessibility permission not granted");
+    }
     if (!this.hasCapability("window-control")) {
       throw new FakeSidecarError("RESIZE_UNSUPPORTED", "Backend does not support window-control");
     }
@@ -248,6 +253,10 @@ export class FakeSidecar {
   private startCapture(
     params: SidecarMethodMap["startCapture"]["params"],
   ): SidecarMethodMap["startCapture"]["result"] {
+    // Screen Recording permission gates any capture at all.
+    if (this.permissions.screenRecording === "denied") {
+      throw new FakeSidecarError("PERMISSION_DENIED", "Screen Recording permission not granted");
+    }
     const requiredCapability =
       params.target.kind === "display"
         ? "capture.display"
@@ -259,6 +268,15 @@ export class FakeSidecar {
         "UNSUPPORTED_CAPABILITY",
         `Backend does not support ${requiredCapability}`,
       );
+    }
+    // Microphone permission only matters if this capture actually requests
+    // a microphone track — matches phase-5-audio.md's `AudioPermissionGate`
+    // fail-fast-before-any-capture-resource behavior.
+    const wantsMicrophone = params.audio.tracks.some(
+      (track) => track.source === "microphone" && track.enabled,
+    );
+    if (wantsMicrophone && this.permissions.microphone === "denied") {
+      throw new FakeSidecarError("PERMISSION_DENIED", "Microphone permission not granted");
     }
     this.sessions.set(params.sessionId, {
       sessionId: params.sessionId,

@@ -6,24 +6,32 @@ import { DaemonError, type DaemonErrorCode } from "@windower/core";
  * `exitCodeForError` (see `output.ts`'s `printError`).
  *
  *   0 — success
- *   1 — generic/unknown failure (default for any code not called out below)
+ *   1 — generic/unknown failure (default for any code not called out below,
+ *       e.g. TARGET_NOT_FOUND, RESIZE_UNSUPPORTED, CAPTURE_FAILED,
+ *       UNSUPPORTED_CAPABILITY, SESSION_NOT_FOUND, INTERNAL_ERROR)
  *   2 — DAEMON_UNREACHABLE (contracts/cli.md: "helps scripts distinguish
  *       daemon down from bad input" — kept as its own code for exactly that)
  *   3 — INVALID_ARGS / validation failure (bad input, as opposed to daemon
  *       down or a capture-side failure)
  *   4 — OUTPUT_DIR_NOT_WRITABLE (bad `outputDir` config, caught at `start`
  *       preflight rather than after a recording completes)
+ *   5 — PERMISSION_DENIED (a required OS permission — Screen Recording,
+ *       Accessibility, Microphone — isn't granted; kept distinct from the
+ *       generic failure code so a script/agent can react by calling
+ *       `windower permission request` instead of just failing)
  */
 export const EXIT_SUCCESS = 0;
 export const EXIT_GENERIC_FAILURE = 1;
 export const EXIT_DAEMON_UNREACHABLE = 2;
 export const EXIT_INVALID_ARGS = 3;
 export const EXIT_OUTPUT_DIR_NOT_WRITABLE = 4;
+export const EXIT_PERMISSION_DENIED = 5;
 
 const DAEMON_ERROR_EXIT_CODES: Partial<Record<DaemonErrorCode, number>> = {
   DAEMON_UNREACHABLE: EXIT_DAEMON_UNREACHABLE,
   INVALID_ARGS: EXIT_INVALID_ARGS,
   OUTPUT_DIR_NOT_WRITABLE: EXIT_OUTPUT_DIR_NOT_WRITABLE,
+  PERMISSION_DENIED: EXIT_PERMISSION_DENIED,
 };
 
 /** Maps any thrown error to a process exit code. Unknown/non-`DaemonError` errors get `EXIT_GENERIC_FAILURE`. */

@@ -3,3 +3,8 @@ packages:
   - "packages/*"
   - "plugins/*"
   - "native/*"
+  # Phase 13 e2e/soak suite — a real workspace package (so it can depend on
+  # @windower/core and get pnpm-linked/turbo-ordered normally), but its
+  # scripts are named "test:e2e"/"test:soak" (not "test"), so `pnpm turbo
+  # run test` (what CI runs) does not pick it up. See e2e/README.md.
+  - "e2e"

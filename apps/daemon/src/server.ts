@@ -8,6 +8,7 @@ import {
   DaemonJsonRpcLineSchema,
   type DaemonMethod,
   type DaemonMethodMap,
+  SidecarError,
   classifyDaemonJsonRpcLine,
 } from "@windower/core";
 import { ZodError } from "zod";
@@ -34,6 +35,15 @@ export interface DaemonServerOptions {
 
 function toDaemonError(err: unknown): DaemonError {
   if (err instanceof DaemonError) return err;
+  // `PassthroughService` (list_targets/check_permissions/request_permission/
+  // resize_window) calls the sidecar directly and doesn't wrap errors itself
+  // — unlike `SessionManager`, which converts `SidecarError` to `DaemonError`
+  // internally before it ever reaches here. Without this branch a
+  // passthrough-path `SidecarError` (e.g. RESIZE_UNSUPPORTED,
+  // UNSUPPORTED_CAPABILITY, PERMISSION_DENIED) would fall through to
+  // INTERNAL_ERROR below, losing the real taxonomy code before it reaches
+  // the CLI/MCP layer.
+  if (err instanceof SidecarError) return new DaemonError(err.code, err.message);
   if (err instanceof ZodError) return new DaemonError("INVALID_ARGS", err.message);
   return new DaemonError("INTERNAL_ERROR", err instanceof Error ? err.message : String(err));
 }

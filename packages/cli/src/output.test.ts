@@ -1,7 +1,7 @@
 import type { Writable } from "node:stream";
 import { DaemonError } from "@windower/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { EXIT_DAEMON_UNREACHABLE, EXIT_GENERIC_FAILURE } from "./exit-codes.js";
+import { EXIT_DAEMON_UNREACHABLE, EXIT_GENERIC_FAILURE, EXIT_PERMISSION_DENIED } from "./exit-codes.js";
 import { printError, printResult } from "./output.js";
 
 /**
@@ -58,6 +58,26 @@ describe("printError", () => {
       `${JSON.stringify({ error: { code: "DAEMON_UNREACHABLE", message: "no daemon" } }, null, 2)}\n`,
     ]);
     expect(code).toBe(EXIT_DAEMON_UNREACHABLE);
+  });
+
+  it("prints PERMISSION_DENIED with its own exit code", () => {
+    const code = printError(
+      true,
+      new DaemonError("PERMISSION_DENIED", "Screen Recording permission not granted"),
+    );
+    expect(stderrWrite.calls).toEqual([
+      `${JSON.stringify(
+        {
+          error: {
+            code: "PERMISSION_DENIED",
+            message: "Screen Recording permission not granted",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    ]);
+    expect(code).toBe(EXIT_PERMISSION_DENIED);
   });
 
   it("prints a plain text error line in human mode", () => {

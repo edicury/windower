@@ -2,6 +2,7 @@ import {
   type CaptureTarget,
   type FakeSidecar,
   type FakeSidecarOptions,
+  type PermissionReport,
   type SidecarClient,
   type SpawnSidecarOptions,
   createFakeSidecarPair,
@@ -26,6 +27,7 @@ export interface SpawnedFakeSidecar {
 export function createFakeSidecarFactory(options: {
   targets?: CaptureTarget[];
   capabilities?: FakeSidecarOptions["capabilities"];
+  permissions?: Partial<PermissionReport>;
 }): { spawnSidecar: SidecarFactory; spawns: SpawnedFakeSidecar[] } {
   const spawns: SpawnedFakeSidecar[] = [];
 
@@ -33,6 +35,7 @@ export function createFakeSidecarFactory(options: {
     const { client, sidecar, dispose } = createFakeSidecarPair({
       targets: options.targets,
       capabilities: options.capabilities,
+      permissions: options.permissions,
     });
     spawns.push({ client, sidecar, onExit: spawnOptions.onExit });
     return {

@@ -193,4 +193,62 @@ describe("registerSessionTools error path", () => {
     const content = result.content as Array<{ type: string; text: string }>;
     expect(content[0]?.text).toContain("SESSION_NOT_FOUND");
   });
+
+  it("maps PERMISSION_DENIED (Screen Recording not granted) from start_recording to an MCP tool error result", async () => {
+    const fake = fakeDaemonClient({
+      startRecording: async () => {
+        throw new DaemonError("PERMISSION_DENIED", "Screen Recording permission not granted");
+      },
+    });
+    const client = await connectServer(fake);
+
+    const result = await client.callTool({
+      name: "start_recording",
+      arguments: { target: { targetId: "1" } },
+    });
+
+    expect(result.isError).toBe(true);
+    const content = result.content as Array<{ type: string; text: string }>;
+    expect(content[0]?.text).toContain("PERMISSION_DENIED");
+  });
+
+  it("maps PERMISSION_DENIED (microphone not granted) from start_recording to an MCP tool error result", async () => {
+    const fake = fakeDaemonClient({
+      startRecording: async () => {
+        throw new DaemonError("PERMISSION_DENIED", "Microphone permission not granted");
+      },
+    });
+    const client = await connectServer(fake);
+
+    const result = await client.callTool({
+      name: "start_recording",
+      arguments: {
+        target: { targetId: "1" },
+        audio: { tracks: [{ source: "microphone", enabled: true }], separateTracks: false },
+      },
+    });
+
+    expect(result.isError).toBe(true);
+    const content = result.content as Array<{ type: string; text: string }>;
+    expect(content[0]?.text).toContain("PERMISSION_DENIED");
+  });
+
+  it("surfaces CAPTURE_FAILED in get_session's structured output (session data, not a thrown error)", async () => {
+    const failedSession: RecordingSession = {
+      ...validSession,
+      state: "failed",
+      stoppedAt: "2026-08-09T00:00:05.000Z",
+      error: { code: "CAPTURE_FAILED", message: "Sidecar-initiated stop: target-closed" },
+    };
+    const fake = fakeDaemonClient({
+      getSession: async () => failedSession,
+    });
+    const client = await connectServer(fake);
+
+    const result = await client.callTool({ name: "get_session", arguments: { sessionId } });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.structuredContent).toEqual(failedSession);
+    expect((result.structuredContent as RecordingSession).error?.code).toBe("CAPTURE_FAILED");
+  });
 });

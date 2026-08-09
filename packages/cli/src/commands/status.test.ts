@@ -65,4 +65,16 @@ describe("renderStatus", () => {
     };
     expect(renderStatus(session)).toContain("[SIDECAR_CRASHED] sidecar exited unexpectedly");
   });
+
+  it("surfaces a CAPTURE_FAILED session error (contracts/sidecar-protocol.md taxonomy code) in `windower status` output", () => {
+    const session: RecordingSession = {
+      ...BASE_SESSION,
+      state: "failed",
+      stoppedAt: "2026-08-09T10:00:05.000Z",
+      error: { code: "CAPTURE_FAILED", message: "Sidecar-initiated stop: target-closed" },
+    };
+    const output = renderStatus(session);
+    expect(output).toContain("Session sess-1: failed");
+    expect(output).toContain("[CAPTURE_FAILED] Sidecar-initiated stop: target-closed");
+  });
 });

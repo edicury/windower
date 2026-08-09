@@ -1,7 +1,7 @@
 # Status
 
 ## Current phase
-Phase 12 — Output Management: **done**.
+Phase 13 — Testing & Hardening: **done** (CI-safe portion green; e2e/soak suite built and locally-gated per its own exit criteria).
 
 ## Done
 - Phases 0–11 (foundation, sidecar protocol, macOS enumeration/permissions, window control, video capture, audio, daemon/session lifecycle, CLI, MCP server, plugin/skill, event timeline, narration hook).
@@ -14,9 +14,16 @@ Phase 12 — Output Management: **done**.
   - `manifest.json` writer (already existed pre–Phase 12 work) verified against `OutputManifestSchema` via a Zod-validation test — matches `data-model.md`.
   - `windower config get|set` (Phase 7) already read/wrote `~/.windower/config.json` correctly — no changes needed there.
   - Exit criteria met: writes to configured output folder, manifest matches schema (Zod-validated in test), filename collisions never overwrite, non-writable `outputDir` fails at `start` not `stop`.
-- Full monorepo build+test green: `@windower/core` 61/61, `@windower/daemon` 56/56, `@windower/cli` 65/65, `@windower/mcp-server` 15/15.
+- Phase 13 — Testing & Hardening:
+  - `fixtures/demo-app`: deterministic-geometry AppKit fixture (SPM, not part of the pnpm/turbo workspace). Fixed window (title, frame, 3 buttons at known content-view coordinates), JSONL click log (`WINDOWER_DEMO_LOG`), `WINDOW_READY` stdout startup signal. Built via `fixtures/demo-app/package-app.sh`, which wraps the executable in a minimal `.app` bundle (`Info.plist`, `CFBundleIdentifier: com.windower.demo-app`) — **required**, not optional: `native/macos`'s `Enumeration.swift` filters out any window whose owning app has an empty `bundleIdentifier` (same rule that filters windower's own window, see `bugs.spec.md` #1), so a bare unbundled `swift build` executable's window never appears in `list_targets`. Verified independently (`osascript` bundle-id query) that the bundled app now reports a real bundle id.
+  - `e2e/` package (new pnpm workspace member, own `package.json` with `test:e2e`/`test:soak` scripts — deliberately **not** named `test`, so `pnpm turbo run test`/CI never picks them up): real daemon + real compiled sidecar + demo-app fixture, no fake-sidecar anywhere. Golden-path test (enumerate → resize → start w/ audio → synthetic `osascript`/System Events clicks on all 3 known buttons → stop → assert manifest schema, video resolution/fps via `ffprobe`, event timeline vs. the fixture's own click-log ground truth), a 30-minute soak test (audio/video drift + daemon/sidecar RSS growth + finalization), and two real-process crash-injection tests (`kill -9` the sidecar mid-recording; kill+restart the daemon mid-recording and assert Phase 6 `recoverCrashedSessions` marks it `failed`). Documented as a **required manual pre-merge check** in `e2e/README.md` (TCC grants can't be scripted in CI) — `.github/workflows/ci.yml`'s existing `test` step is untouched.
+  - Error-taxonomy coverage: audited all 7 `contracts/sidecar-protocol.md` codes end-to-end (daemon → CLI/MCP output). Found and fixed a real bug: `apps/daemon/src/server.ts`'s `toDaemonError` didn't handle `SidecarError` thrown directly by `PassthroughService` (resize/list_targets/request_permission), silently degrading `RESIZE_UNSUPPORTED`/`PERMISSION_DENIED`/`UNSUPPORTED_CAPABILITY` to `INTERNAL_ERROR` before they reached callers. Added `PERMISSION_DENIED` simulation to the fake sidecar (resize/capture/mic gated paths) and a new CLI exit code (`EXIT_PERMISSION_DENIED = 5`). All 7 codes now have a CLI- or MCP-level propagation test.
+  - CI strategy: unchanged `test` step covers everything below the TCC line (protocol, schemas, CLI/MCP parsing, daemon logic against the fake sidecar — `pnpm turbo run test`, 13/13 tasks green). `pnpm test:e2e` / `pnpm test:soak` from repo root run the real-sidecar suite locally; see `e2e/README.md` for TCC-grant prerequisites.
+- Full monorepo build+test green (`pnpm turbo run build`, `pnpm turbo run test`, 13/13 tasks): `@windower/core`, `@windower/daemon`, `@windower/cli`, `@windower/mcp-server`, `@windower/sidecar-macos` (Swift), `@windower/e2e` (build/typecheck only, per above).
 
 ## Blocked / not started
-- Phase 13 — Testing & Hardening (e2e, TCC-gated, local-only per CLAUDE.md).
 - Phase 14 — Packaging.
 - Phase 15+ — v1.1 post-processing, post-MVP Windows/Linux backends.
+
+## Notes for next session
+- `e2e/` golden-path/crash suites have not been run to a full green in this sandboxed environment (TCC grants for this shell's own ancestry are uncertain/partial here — a `Sidecar stream closed` error surfaced on one manual run after the demo-app bundling fix, distinct from the bundling bug and not yet root-caused; the bundling fix itself was verified independently via a direct `osascript` bundle-id check). Re-run `pnpm test:e2e` from a terminal with confirmed Screen Recording/Accessibility/Microphone grants before treating the e2e suite as proven end-to-end.

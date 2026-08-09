@@ -36,5 +36,12 @@ jobs:
       - name: Build (TS workspace + swift build)
         run: pnpm turbo run build
 
+      # Intentionally not running the Phase 13 e2e/soak suite (`e2e/`) here:
+      # it needs real Screen Recording/Accessibility/Microphone TCC grants
+      # that a GitHub Actions macOS runner cannot satisfy non-interactively.
+      # `turbo run test` above does not pick it up (its scripts are named
+      # `test:e2e`/`test:soak`, not `test`) — it's a required manual
+      # pre-merge check run locally via `pnpm test:e2e`/`pnpm test:soak`.
+      # See e2e/README.md.
       - name: Test (Vitest + swift test)
         run: pnpm turbo run test
