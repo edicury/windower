@@ -93,6 +93,11 @@ export class DaemonClient {
     return this.call("list_sessions", params);
   }
 
+  /** Asks a running daemon to close its socket and exit. See methods.ts's `shutdown` note. */
+  shutdown(): Promise<DaemonMethodMap["shutdown"]["result"]> {
+    return this.call("shutdown", {});
+  }
+
   /** Closes the underlying transport and rejects any in-flight calls. */
   dispose(): void {
     if (this.disposed) return;

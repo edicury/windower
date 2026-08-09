@@ -1,0 +1,27 @@
+import { z } from "zod";
+import { AudioSettingsSchema } from "./audio-settings.js";
+import { VideoSettingsSchema } from "./video-settings.js";
+
+/**
+ * WindowerConfig — the shape of `~/.windower/config.json`
+ * (contracts/cli.md `windower config get|set`: output folder, filename
+ * template, daemon idle-timeout, default video/audio settings).
+ *
+ * Every field is optional: the file may not exist yet, and a partial or
+ * empty config.json is valid — callers (see `daemon/config-file.ts`)
+ * synthesize defaults for missing fields rather than erroring. This module
+ * stays dependency-free like the rest of `schemas/` (no import of
+ * `daemon/paths.js`), so defaults are documented in comments only:
+ *   - outputDir: `defaultOutputDir()` (`daemon/paths.ts`, `~/Movies/Windower`)
+ *   - filenameTemplate: see `daemon/config-file.ts`'s `DEFAULT_FILENAME_TEMPLATE`
+ *   - daemonIdleTimeoutMs: see `daemon/config-file.ts`'s `DEFAULT_DAEMON_IDLE_TIMEOUT_MS`
+ *     (mirrors apps/daemon's own `DEFAULT_IDLE_TIMEOUT_MS`, 30 minutes)
+ */
+export const WindowerConfigSchema = z.object({
+  outputDir: z.string().optional(),
+  filenameTemplate: z.string().optional(),
+  daemonIdleTimeoutMs: z.number().positive().optional(),
+  defaultVideo: VideoSettingsSchema.partial().optional(),
+  defaultAudio: AudioSettingsSchema.partial().optional(),
+});
+export type WindowerConfig = z.infer<typeof WindowerConfigSchema>;

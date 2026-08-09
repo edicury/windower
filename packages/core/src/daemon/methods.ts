@@ -129,6 +129,20 @@ export const ListSessionsResultSchema = z.object({
 });
 export type ListSessionsResult = z.infer<typeof ListSessionsResultSchema>;
 
+// ---- shutdown ----
+// Added in Phase 7 (CLI) for `windower daemon stop`: contracts/cli.md calls
+// for explicit daemon lifecycle control, and there was no clean way to ask
+// a running daemon to exit over the wire (SIGTERM works but is not
+// reachable from a plain RPC client). Mirrors contracts/mcp-tools.md-style
+// method shape; see that file for the prominent note on this addition.
+export const ShutdownParamsSchema = z.object({});
+export type ShutdownParams = z.infer<typeof ShutdownParamsSchema>;
+
+export const ShutdownResultSchema = z.object({
+  shuttingDown: z.literal(true),
+});
+export type ShutdownResult = z.infer<typeof ShutdownResultSchema>;
+
 // ---- Method table ----
 
 export const DAEMON_METHODS = [
@@ -141,6 +155,7 @@ export const DAEMON_METHODS = [
   "stop_recording",
   "cancel_recording",
   "list_sessions",
+  "shutdown",
 ] as const;
 export type DaemonMethod = (typeof DAEMON_METHODS)[number];
 
@@ -157,6 +172,7 @@ export interface DaemonMethodMap {
   stop_recording: { params: StopRecordingParams; result: StopRecordingResult };
   cancel_recording: { params: CancelRecordingParams; result: CancelRecordingResult };
   list_sessions: { params: ListSessionsParams; result: ListSessionsResult };
+  shutdown: { params: ShutdownParams; result: ShutdownResult };
 }
 
 export const DAEMON_METHOD_SCHEMAS: {
@@ -177,4 +193,5 @@ export const DAEMON_METHOD_SCHEMAS: {
   stop_recording: { params: StopRecordingParamsSchema, result: StopRecordingResultSchema },
   cancel_recording: { params: CancelRecordingParamsSchema, result: CancelRecordingResultSchema },
   list_sessions: { params: ListSessionsParamsSchema, result: ListSessionsResultSchema },
+  shutdown: { params: ShutdownParamsSchema, result: ShutdownResultSchema },
 };

@@ -21,6 +21,15 @@ export interface DaemonServerOptions {
   onIdleShutdown: () => void;
   /** How often to check idle state. Default 10s; overridable so tests don't wait real minutes. */
   idleCheckIntervalMs?: number;
+  /**
+   * Called when a client invokes the `shutdown` RPC method, after the
+   * success response has already been written to that client's socket.
+   * Defaults to `stop()` alone (closes the socket, unlinks the file) if not
+   * given — callers that also want the process to exit (the real `bin.ts`
+   * entrypoint) should pass a callback that does so, mirroring
+   * `onIdleShutdown`.
+   */
+  onShutdownRequest?: () => void;
 }
 
 function toDaemonError(err: unknown): DaemonError {
@@ -196,6 +205,17 @@ export class DaemonServer {
         return schemas.result.parse(
           this.sessionManager.listSessions(params as DaemonMethodMap["list_sessions"]["params"]),
         );
+      case "shutdown": {
+        const result = schemas.result.parse({ shuttingDown: true });
+        // Defer until after `handleLine` has written this response to the
+        // requesting client's socket — tearing the server down synchronously
+        // here would race the write.
+        queueMicrotask(() => {
+          const onShutdownRequest = this.options.onShutdownRequest ?? (() => void this.stop());
+          onShutdownRequest();
+        });
+        return result;
+      }
       default:
         throw new DaemonError("INVALID_ARGS", `Unhandled method "${method}"`);
     }

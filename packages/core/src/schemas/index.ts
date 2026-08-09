@@ -6,3 +6,4 @@ export * from "./session.js";
 export * from "./manifest.js";
 export * from "./event-timeline.js";
 export * from "./permissions.js";
+export * from "./config.js";

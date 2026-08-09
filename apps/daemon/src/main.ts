@@ -36,12 +36,17 @@ export async function runDaemon(options: RunDaemonOptions = {}): Promise<Running
 
   const passthrough = new PassthroughService(spawnSidecar);
 
+  // Idle timeout and an explicit `windower daemon stop` RPC both mean the
+  // same thing to the process: close the socket, then exit.
+  const terminate = (): void => {
+    void server.stop().then(options.onIdleShutdown ?? (() => process.exit(0)));
+  };
+
   const server = new DaemonServer(sessionManager, passthrough, {
     socketPath: daemonSocketPath(),
     idleTimeoutMs: config.daemonIdleTimeoutMs,
-    onIdleShutdown: () => {
-      void server.stop().then(options.onIdleShutdown ?? (() => process.exit(0)));
-    },
+    onIdleShutdown: terminate,
+    onShutdownRequest: terminate,
   });
   await server.start();
 

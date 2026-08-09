@@ -11,7 +11,7 @@
 | 4 | Video Capture ✅ | `phase-4-video-capture.md` |
 | 5 | Audio ✅ | `phase-5-audio.md` |
 | 6 | Daemon & Session Lifecycle | `phase-6-daemon-session-lifecycle.md` |
-| 7 | CLI | `phase-7-cli.md` |
+| 7 | CLI ✅ | `phase-7-cli.md` |
 | 8 | MCP Server | `phase-8-mcp-server.md` |
 | 9 | Claude Code Plugin + Skill | `phase-9-claude-code-plugin-skill.md` |
 | 10 | Event Timeline | `phase-10-event-timeline.md` |

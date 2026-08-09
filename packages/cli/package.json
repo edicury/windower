@@ -10,15 +10,17 @@
     "windower": "./dist/index.js"
   },
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && chmod +x dist/index.js",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --build --emitDeclarationOnly false --noEmit",
     "clean": "tsc --build --clean"
   },
   "dependencies": {
-    "@windower/core": "workspace:*"
+    "@windower/core": "workspace:*",
+    "commander": "^12.1.0"
   },
   "devDependencies": {
+    "@types/node": "^22.10.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

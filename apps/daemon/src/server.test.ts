@@ -98,6 +98,16 @@ describe("DaemonServer", () => {
     await expect(connect(socketPath)).rejects.toBeDefined();
   });
 
+  it("shutdown RPC responds then closes the socket", async () => {
+    await start();
+    const client = new DaemonClient(createConnection(socketPath));
+    await expect(client.shutdown()).resolves.toEqual({ shuttingDown: true });
+    client.dispose();
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await expect(connect(socketPath)).rejects.toBeDefined();
+  });
+
   function connect(path: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const socket = createConnection(path);
