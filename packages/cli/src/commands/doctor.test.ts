@@ -19,14 +19,27 @@ describe("renderReport", () => {
     expect(lines[1]).toContain("Screen Recording: granted");
     expect(lines[2]).toContain("[ ]");
     expect(lines[2]).toContain("Accessibility: denied");
-    expect(lines[3]).toContain("[ ]");
-    expect(lines[4]).toContain("[x] Daemon running");
-    expect(lines[5]).toContain("[x] Sidecar available (v0.1.0)");
+    expect(output).toContain("[x] Daemon running");
+    expect(output).toContain("[x] Sidecar available (v0.1.0)");
+  });
+
+  it("suggests `windower permission request <kind>` for each ungranted permission", () => {
+    const output = renderReport(REPORT);
+    expect(output).toContain("windower permission request accessibility");
+    expect(output).toContain("windower permission request microphone");
+    expect(output).not.toContain("windower permission request screenRecording");
   });
 
   it("omits the version suffix when sidecarVersion is absent", () => {
     const output = renderReport({ ...REPORT, sidecarVersion: undefined });
     expect(output).toContain("Sidecar available");
     expect(output).not.toContain("(v");
+    expect(output).not.toContain("version mismatch");
+  });
+
+  it("flags a sidecar version mismatch clearly", () => {
+    const output = renderReport({ ...REPORT, sidecarVersion: "0.9.9" });
+    expect(output).toContain("version mismatch");
+    expect(output).toContain("0.9.9");
   });
 });

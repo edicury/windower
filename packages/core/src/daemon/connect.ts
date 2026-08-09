@@ -3,7 +3,10 @@ import { existsSync, unlinkSync } from "node:fs";
 import { createConnection } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import { findRepoRoot } from "../process/sidecar-path.js";
+
+const require = createRequire(import.meta.url);
 import { DaemonClient } from "./client.js";
 import { DaemonError } from "./errors.js";
 import { daemonSocketPath } from "./paths.js";
@@ -17,16 +20,29 @@ function thisModuleDir(): string {
 
 /**
  * Resolves the path to the daemon's node entrypoint (`node <path>` spawns
- * it). Same resolution order as `resolveSidecarBinaryPath`: an explicit env
- * override first (also Phase 14's packaging extension point), then the dev
- * build output relative to the monorepo root.
+ * it). Same resolution order as `resolveSidecarBinaryPath`:
+ * 1. `WINDOWER_DAEMON_BIN_PATH` env override.
+ * 2. The dev build output relative to the monorepo root (working inside the
+ *    monorepo checkout).
+ * 3. (Phase 14) The published `@windower/daemon` npm package, resolved via
+ *    `require.resolve` — used when installed as a real npm package (e.g.
+ *    `npm install -g @windower/cli`) where there is no monorepo checkout to
+ *    walk up to.
  */
 export function resolveDaemonEntryPath(): string {
   const override = process.env[DAEMON_BIN_PATH_ENV];
   if (override && override.trim().length > 0) return override;
 
-  const repoRoot = findRepoRoot(thisModuleDir());
-  return join(repoRoot, "apps/daemon/dist/bin.js");
+  try {
+    const repoRoot = findRepoRoot(thisModuleDir());
+    const resolved = join(repoRoot, "apps/daemon/dist/bin.js");
+    if (existsSync(resolved)) return resolved;
+  } catch {
+    // Not running inside a monorepo checkout — fall through to the
+    // published package below.
+  }
+
+  return require.resolve("@windower/daemon/dist/bin.js");
 }
 
 /** Connects to an already-running daemon; rejects with `DAEMON_UNREACHABLE` if none is listening. */

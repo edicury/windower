@@ -40,6 +40,21 @@ Returns immediately — does not wait for the recording to finish. This is the k
 **Input:** `{ state?: SessionState }`
 **Output:** `{ sessions: RecordingSession[] }`
 
+## `run_operator`
+**Input:** `{ task: string, model: ModelConfig, recording?: { video?: Partial<VideoSettings>, audio?: Partial<AudioSettings>, outputDir?: string, disabled?: boolean }, secrets?: SecretRef[], guardrails?: { maxSteps?: number, timeoutSeconds?: number, unbounded?: boolean } }`
+**Output:** `{ runId: string }`
+Returns immediately — does not wait for the run to finish. Same non-blocking two-call shape as `start_recording`: call this, the operator perceives/acts/records on its own, then poll `get_operator_run` or wait for completion.
+
+## `get_operator_run`
+**Input:** `{ runId: string }`
+**Output:** `OperatorRun` (includes `steps[]`)
+
+## `abort_operator_run`
+**Input:** `{ runId: string }`
+**Output:** `{ aborted: true }`
+
+**Why a nested agent is justified here** (rather than expecting the calling harness to drive input itself): the MCP harness invoking these tools may have **no native mouse/keyboard/screenshot tool at all** — `run_operator` gives it one, mediated entirely through the sidecar's `performInput`/`captureFrame`. And the operator's underlying model is **chosen by the user** (`ModelConfig`, provider-swappable via the Vercel AI SDK), independent of and often different from whatever model is powering the calling/orchestrating agent — e.g. Claude Code driving `run_operator`, which in turn drives its own separately-configured model against the task. Nesting an agent inside a tool call is normally a smell; here it's the point.
+
 ## `shutdown` — daemon-only, not an MCP tool
 
 **Added in Phase 7 (CLI)** to back `windower daemon stop` (contracts/cli.md). This is a **daemon RPC method** (`packages/core/src/daemon/methods.ts`, dispatched in `apps/daemon/src/server.ts`), not exposed through the MCP server — agents have no legitimate reason to shut the daemon down mid-session, so it is intentionally absent from `packages/mcp-server`'s tool list.

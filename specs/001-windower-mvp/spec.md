@@ -40,6 +40,10 @@ Windower ships the same way chrome-skills does: as an installable **plugin + ski
 - All of the above is reachable via three interfaces: a **CLI**, an **MCP server**, and a **Claude Code plugin + skill** that teaches the workflow. All three sit on the same underlying daemon/session contract.
 - Permission state (Screen Recording, Accessibility, Microphone TCC grants) is inspectable (`doctor`/`check_permissions`) so an agent can detect and explain a blocked recording instead of failing silently.
 
+### 2.1.1 Goals (v1.2 — Operator, Phase 19)
+
+- **One-line instruction execution.** An agent (or a human) can hand Windower a single natural-language task; Windower **perceives the screen** (periodic screenshots via the sidecar's `captureFrame`), **synthesizes mouse/keyboard input** (`performInput`) to drive the UI, and **records** the whole run — all in a loop driven by an LLM the user chooses via a provider-swappable SDK (Vercel AI SDK), independent of whatever model is calling Windower in the first place.
+
 ### 2.2 Non-goals (MVP)
 
 Explicitly out of scope for v1, called out because the architecture must not preclude them later:
@@ -52,6 +56,9 @@ Explicitly out of scope for v1, called out because the architecture must not pre
 - **Multi-monitor simultaneous capture** (recording 2+ displays into one output). Single target per session in MVP; multiple concurrent *sessions* on different targets are allowed (see Phase 6).
 - **Live streaming / low-latency preview.** Recording is file-based, not a real-time stream to a viewer.
 - **Non-Claude agent harnesses as first-class citizens.** The MCP server and CLI are harness-agnostic by construction, but the "plugin + skill" packaging targets Claude Code specifically in MVP.
+- **Operator does not ship a browser engine or DOM-level automation.** It drives input at the pixel/AX level via the sidecar, the same way a human would — it is not a Playwright/Puppeteer replacement and has no notion of a DOM.
+- **Operator does not persist credentials.** Secrets are passed as `SecretRef`s (OS keychain or env var references), resolved only at call time inside `packages/operator` — never written to disk, never included in a transcript or log.
+- **Windows/Linux operator implementation is out of scope for Phase 19.** The protocol (`performInput`/`captureFrame`) must be expressible on those platforms (see `research.md` §2), but only the macOS sidecar implements it in this phase.
 
 ### 2.3 Future-facing design constraints
 
@@ -61,6 +68,7 @@ Not built in MVP, but the architecture must not preclude them:
 - **Real-time overlay rendering** (click ripples, zoom) could eventually move from post-process to live compositing during capture. The event-timeline data model must support both consumption modes.
 - **Pluggable narration sources.** MVP accepts a pre-rendered audio file; a future TTS-provider abstraction could generate it inline. The narration-mux mechanism must not assume a specific audio source.
 - **Multi-track / multi-target composition** (e.g., picture-in-picture of a window over a full display) is not built, but the manifest's target/track model should not have to be redesigned to add it.
+- **Input synthesis must be expressible on Windows and Linux without a protocol change.** `performInput` is designed against Windows `SendInput` and Linux XTEST/`uinput` from the start (Phase 19), even though only the macOS sidecar implements it — see `research.md` §2 for the honest Wayland gap.
 
 ## 3. Personas
 
@@ -69,6 +77,8 @@ Not built in MVP, but the architecture must not preclude them:
 | **AI Agent (primary)** | An LLM-driven agent (Claude Code, Claude Desktop, custom MCP client) operating a computer to complete a task | Enumerate targets, size a window, record a demo of its own actions, narrate, stop, hand off the file |
 | **Agent Author / Developer** | Person building an agent or skill that uses Windower | Install the plugin, read `SKILL.md`, call CLI/MCP in scripts or CI |
 | **Human Operator (secondary)** | Person running the CLI directly for a quick manual recording | `windower record --window Safari --out ~/demo.mp4` |
+
+Note (Phase 19): the operator's underlying LLM is a **distinct actor** from the calling/orchestrating agent — e.g. Claude Code driving Windower's `run_operator` MCP tool, which in turn drives its own separately-configured model (possibly a different provider entirely) against the task. Windower does not assume or require the two models are the same.
 
 ## 4. User stories
 
@@ -107,6 +117,14 @@ Not built in MVP, but the architecture must not preclude them:
 - **US-16.** As an agent running in Claude Code, installing the Windower plugin gives me a `SKILL.md` that teaches the full record-a-demo workflow (frame → size → start → act → stop → report) without me having to discover the CLI flags myself.
 - **US-17.** As a human operator, I can run the CLI directly for a one-off recording without touching MCP or Claude Code at all.
 
+### 4.7 Operator (Phase 19)
+
+- **US-18.** As an agent or human, I can give Windower a single natural-language task (e.g. "Open waroom.co, log in as {{user}}/{{password}}, create an incident") and have it perceive the screen, drive input, and complete the task end-to-end, with a recording produced alongside it.
+- **US-19.** As an agent or human, credentials I supply as secret refs (keychain/env) are resolved only at input-synthesis time and never reach the model's context or any log/transcript.
+- **US-20.** As an agent or human, I can abort an in-progress operator run mid-flight via the CLI (`windower operate abort <runId>`) or the daemon RPC, and any active recording is stopped/finalized rather than left hanging.
+- **US-21.** As an agent, the operator's model/provider is chosen independently of my own calling model — I can drive `run_operator` from any harness/model and have it use a differently-configured model underneath.
+- **US-22.** As an agent, operator-generated input events are distinguishable from human-generated ones in the event timeline (`TimelineEvent.source: "human" | "operator"`), so a post-processor or a reasoning agent can tell which clicks/keys were synthetic.
+
 ## 5. Acceptance checklist (MVP exit criteria)
 
 Traces to phase exit criteria in `tasks/`. All must be green for MVP to ship.
@@ -125,7 +143,24 @@ Traces to phase exit criteria in `tasks/`. All must be green for MVP to ship.
 - [ ] Every recording writes to the configured output folder with a `manifest.json` matching the documented schema. (Phase 12)
 - [ ] Fixture-app e2e suite is green in CI (or documented as locally-gated if CI cannot hold TCC permissions); soak test: 30-minute recording completes without drift or crash. (Phase 13)
 - [ ] Sidecar binary is codesigned + notarized; `npm install`/plugin install works from a clean machine through first successful recording. (Phase 14)
+- [ ] `windower operate "<task>"` (or `run_operator`) drives a real one-line task end-to-end (the waroom.co example) and produces a valid recording alongside it. (Phase 19)
+- [ ] Credentials passed via `--secret`/`SecretRef` never appear in the model's context, the operator transcript, or any log output. (Phase 19)
+- [ ] An in-progress operator run can be aborted via `windower operate abort <runId>` or `abort_operator_run`, and any active recording is cleanly stopped/finalized, not left hanging. (Phase 19)
+- [ ] The operator's model/provider can be configured independently of the calling agent's own model (verified with at least two distinct providers). (Phase 19)
+- [ ] Operator-generated `TimelineEvent`s carry `source: "operator"` and are distinguishable from human-generated events in the same event timeline. (Phase 19)
 
 ## 6. Design references
 
 None yet — Windower is CLI/MCP/skill-first with no GUI in MVP. Revisit if a companion human-facing app is ever built.
+
+## 7. Network policy — the Phase 19 exception
+
+`CLAUDE.md` states "no network calls anywhere in MVP" as a design property of Windower, not an oversight: the daemon and sidecar are local-only, with no telemetry, no update-checker, no cloud call of any kind. The operator (Phase 19) necessarily breaks this by construction — it calls an LLM API to reason about the screen and decide what to do next. This is documented here as a **scoped, deliberate exception**, not a quiet erosion of the rule:
+
+- Network egress exists **only** inside `packages/operator`.
+- It talks **only** to the user-configured model endpoint (`ModelConfig.baseUrl` or the provider's default), nothing else.
+- It happens **only** while an operator run is active — never at daemon/sidecar/CLI/MCP startup, never idly in the background.
+- It is **never** used in the daemon's, sidecar's, CLI's, or MCP server's own request paths — those remain exactly as local-only as before Phase 19. A caller that never invokes `run_operator`/`windower operate` sees zero behavior change.
+- It is **never** used for telemetry, analytics, or update-checks, in Phase 19 or otherwise.
+
+Choosing `openai-compatible` as the provider and pointing `--base-url`/`ModelConfig.baseUrl` at a local server (Ollama, LM Studio, etc.) keeps an operator run fully offline for users who want that guarantee — the exception is scoped to "an LLM API call happens," not "that call must leave the machine."

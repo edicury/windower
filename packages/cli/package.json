@@ -1,13 +1,16 @@
 {
   "name": "@windower/cli",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.1",
   "license": "UNLICENSED",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
     "windower": "./dist/index.js"
+  },
+  "files": ["dist", "README.md"],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc --build && chmod +x dist/index.js",
@@ -17,7 +20,12 @@
   },
   "dependencies": {
     "@windower/core": "workspace:*",
+    "@windower/daemon": "workspace:*",
     "commander": "^12.1.0"
+  },
+  "optionalDependencies": {
+    "@windower/sidecar-macos-arm64": "workspace:*",
+    "@windower/sidecar-macos-x64": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

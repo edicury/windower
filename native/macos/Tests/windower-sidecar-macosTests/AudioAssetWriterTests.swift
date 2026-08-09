@@ -155,9 +155,9 @@ final class AudioAssetWriterTests: XCTestCase {
         ]
     }
 
-    private func runFinish(_ writer: VideoAssetWriter) -> Result<Void, Error> {
+    private func runFinish(_ writer: VideoAssetWriter) -> Result<Double?, Error> {
         let expectation = expectation(description: "finishWriting completes")
-        var finishResult: Result<Void, Error>?
+        var finishResult: Result<Double?, Error>?
         writer.finish { result in
             finishResult = result
             expectation.fulfill()

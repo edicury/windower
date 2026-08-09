@@ -6,6 +6,7 @@
   "description": "Swift Package wrapper so turbo can drive swift build/swift test for the macOS sidecar.",
   "scripts": {
     "build": "swift build",
-    "test": "swift test"
+    "test": "swift test",
+    "codesign": "if [ -z \"$DEVELOPER_ID_APPLICATION\" ]; then echo 'skip: DEVELOPER_ID_APPLICATION not set, skipping codesign/notarize (see CODESIGNING.md)'; else ./scripts/codesign-notarize.sh .build/release/windower-sidecar-macos; fi"
   }
 }

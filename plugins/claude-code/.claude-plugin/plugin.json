@@ -7,9 +7,10 @@
   },
   "mcpServers": {
     "windower": {
-      "command": "node",
+      "command": "npx",
       "args": [
-        "${CLAUDE_PLUGIN_ROOT}/../../packages/mcp-server/dist/index.js"
+        "-y",
+        "@windower/mcp-server"
       ]
     }
   }

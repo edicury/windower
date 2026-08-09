@@ -22,7 +22,8 @@ On spawn, the daemon sends `describe` before anything else:
 //       "enumerate.displays", "enumerate.windows", "enumerate.apps",
 //       "window-control", "capture.display", "capture.window", "capture.region",
 //       "audio.system", "audio.system.perApp", "audio.microphone",
-//       "cursor.visible", "eventTimeline.cursor", "eventTimeline.mouse", "eventTimeline.keyboard"
+//       "cursor.visible", "eventTimeline.cursor", "eventTimeline.mouse", "eventTimeline.keyboard",
+//       "input.mouse", "input.keyboard", "screenshot"
 //     ]
 //   }}
 ```
@@ -41,8 +42,17 @@ The daemon MUST check a capability is present before calling any method that dep
 | `startCapture` | `{ sessionId, target: CaptureTarget, video: VideoSettings, audio: AudioSettings }` | `{ started: true }` (then streams `event` and `frameStats` notifications) | `capture.*` matching `target.kind` |
 | `stopCapture` | `{ sessionId }` | `{ outputFilePath, actualDurationMs, actualResolution }` | — |
 | `cancelCapture` | `{ sessionId }` | `{ canceled: true }` | — |
+| `performInput` | `{ sessionId?, actions: InputAction[] }` | `{ performed: number }` | `input.mouse` / `input.keyboard` (per action `kind`) |
+| `captureFrame` | `{ target: CaptureTarget, format: "png"\|"jpeg", maxWidth?: number, quality?: number }` | `{ imageBase64, width, height, scale }` | `screenshot` |
 
 `CaptureTarget`, `VideoSettings`, `AudioSettings`, `Rect`, `PermissionStatus`/`PermissionReport` are exactly the shapes in `data-model.md` — this contract does not redefine them.
+
+`performInput` takes an **array** of actions deliberately, not a single action per call — a click-then-type sequence (focus a field, then type into it) is one atomic round trip and one capability check, not N round trips each re-validating `input.mouse`/`input.keyboard`. `InputAction` is a discriminated union on `kind`: `mouse_move`, `mouse_down`, `mouse_up`, `mouse_click`, `mouse_drag`, `scroll`, `type_text`, `key_press`, `wait` — see `data-model.md` for the exact per-kind fields. Coordinates in every mouse-related action are **pixels, global top-left-origin Quartz space** — the same coordinate space `TimelineEvent` already uses, so a coordinate read from an event timeline or a `captureFrame` result can be fed straight into `performInput` with no conversion.
+
+### Platform notes: input synthesis
+
+- `CGEventPost` (the macOS mechanism behind `performInput`) requires the same Accessibility TCC grant the sidecar already requests and reports via `getPermissions`/`requestPermission` (`Permissions.swift`'s `accessibilityStatus()`) — there is no new permission kind to add and no `PermissionReport` schema change.
+- macOS secure event input blocks event **taps** from reading keystrokes, not `CGEventPost` from **writing** them — typing into a password field or other secure-input context works normally but is invisible to the event timeline. This is the same `keystrokes: false`-style degradation already documented for Phase 10's `eventTimeline.keyboard` capability; the operator (Phase 19) must treat this as an expected capability gap, not a failure.
 
 ## Notifications (sidecar → daemon, no response expected)
 
@@ -63,6 +73,8 @@ All JSON-RPC errors use a `data.code` from this fixed set so callers can branch 
 | `UNSUPPORTED_CAPABILITY` | Caller invoked a method/option this backend doesn't advertise in `describe` |
 | `SESSION_NOT_FOUND` | `sessionId` unknown to this sidecar process |
 | `INTERNAL_ERROR` | Unexpected failure; `message` has detail, treat as a bug report |
+| `INPUT_UNSUPPORTED` | Caller requested an `InputAction.kind` this backend cannot synthesize |
+| `INPUT_OUT_OF_BOUNDS` | A mouse coordinate in `performInput` falls outside any known display's bounds |
 
 ## Cross-platform validation
 

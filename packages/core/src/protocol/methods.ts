@@ -45,6 +45,15 @@ export const DescribeResultSchema = z.object({
 });
 export type DescribeResult = z.infer<typeof DescribeResultSchema>;
 
+/**
+ * The sidecar `version` (from `describe`'s result) the daemon/CLI are tested
+ * against — must track `sidecarVersion` in
+ * `native/macos/Sources/windower-sidecar-macos/main.swift`. Used for a
+ * simple exact-match compatibility check (Phase 14 "version compatibility");
+ * bump both together when the sidecar's build version changes.
+ */
+export const EXPECTED_SIDECAR_VERSION = "0.1.0";
+
 // ---- enumerateTargets ----
 export const EnumerateTargetsParamsSchema = z.object({
   kinds: z.array(z.enum(["display", "window"])).optional(),

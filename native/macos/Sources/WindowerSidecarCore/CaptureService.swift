@@ -15,6 +15,15 @@ import ScreenCaptureKit
 // the params/result shapes already frozen in
 // packages/core/src/protocol/methods.ts.
 
+/// Same free-form stderr-only logging convention as
+/// `EventTapCapture.swift`'s file-private `logStderr` (contracts/
+/// sidecar-protocol.md §Transport: "stderr is free-form human-readable
+/// logs only, never protocol data") — not shared across files because it's
+/// a two-line function, not because the convention differs.
+private func logStderr(_ message: String) {
+    FileHandle.standardError.write((message + "\n").data(using: .utf8)!)
+}
+
 // MARK: - Wire shapes (mirror packages/core/src/protocol/methods.ts)
 
 /// Decodable view of `CaptureTargetSchema`'s discriminated union. The
@@ -432,10 +441,43 @@ public final class CaptureSessionManager {
                 throw SidecarRpcError.serverError(
                     "No window matching id \(params.target.id ?? "<nil>")", code: .targetNotFound)
             }
-            filter = SCContentFilter(desktopIndependentWindow: window)
+            // NOTE: deliberately NOT `SCContentFilter(desktopIndependentWindow:)`.
+            // This is a headless stdio process with no NSApplication/run loop, so
+            // it never establishes a WindowServer/CGS connection the way a normal
+            // GUI app does — `desktopIndependentWindow` touches a CGS-session-
+            // requiring API and aborts the whole process with
+            // `Assertion failed: (did_initialize), function CGS_REQUIRE_INIT`
+            // (bugs.spec.md #4). `SCContentFilter(display:including:)` is the
+            // same initializer the "display"/"region" branches above already
+            // use safely, so instead: resolve the display the window is on and
+            // build a display-based filter restricted to just this window, then
+            // crop to the window's bounds via sourceRect/destinationRect (same
+            // pattern as the "region" branch below). Trade-off: unlike
+            // desktopIndependentWindow, this won't keep capturing if the window
+            // moves to another Space mid-recording — acceptable given the
+            // crash; don't revert to desktopIndependentWindow without fixing the
+            // underlying CGS-init problem first.
+            let windowDisplay = try resolveWindowDisplay(window, in: content)
+            filter = SCContentFilter(display: windowDisplay, including: [window])
             let scaleFactor = EnumerationService.backingScaleFactor(forPoint: window.frame.origin)
             nativeWidth = window.frame.width * scaleFactor
             nativeHeight = window.frame.height * scaleFactor
+            let windowDisplayScaleFactor = EnumerationService.backingScaleFactor(
+                forDisplayID: windowDisplay.displayID)
+            let windowDisplayBounds = displayPixelBounds(windowDisplay)
+            sourceRect = CaptureConfigService.regionSourceRect(
+                regionPixelBounds: (
+                    x: window.frame.origin.x * windowDisplayScaleFactor,
+                    y: window.frame.origin.y * windowDisplayScaleFactor,
+                    width: window.frame.width * windowDisplayScaleFactor,
+                    height: window.frame.height * windowDisplayScaleFactor
+                ),
+                displayPixelBounds: (
+                    x: windowDisplayBounds.x, y: windowDisplayBounds.y,
+                    width: windowDisplayBounds.width, height: windowDisplayBounds.height
+                ),
+                scaleFactor: windowDisplayScaleFactor
+            )
 
         case "region":
             // SCK has no arbitrary-rect capture target (research.md §2) —
@@ -534,7 +576,7 @@ public final class CaptureSessionManager {
         do {
             writer = try VideoAssetWriter(
                 outputURL: outputURL, width: resolved.width, height: resolved.height,
-                codec: video.codec, container: video.container, bitrate: bitrate)
+                codec: video.codec, container: video.container, bitrate: bitrate, fps: video.fps)
         } catch {
             throw SidecarRpcError.serverError(
                 "Failed to prepare video writer: \(error)", code: .captureFailed)
@@ -693,7 +735,13 @@ public final class CaptureSessionManager {
         // handed to the writer are still worth finalizing.
         _ = awaitCompletion { done in context.stream.stopCapture(completionHandler: done) }
 
-        let durationMs = Date().timeIntervalSince(context.startedAt) * 1000
+        // Wall-clock elapsed time. Kept as a diagnostic/fallback value only —
+        // see bug #5: this overstates the real video length whenever frames
+        // are dropped/delayed during capture (e.g. an occluded/backgrounded
+        // window not delivering frames), since it has nothing to do with the
+        // actual encoded content. Never report this directly as
+        // `actualDurationMs` when the real asset duration is available.
+        let wallClockDurationMs = Date().timeIntervalSince(context.startedAt) * 1000
 
         guard context.output.hasStartedSession else {
             // AVAssetWriter was never started (no frames ever arrived), so
@@ -706,9 +754,15 @@ public final class CaptureSessionManager {
         // MUST be awaited — reading the file before finishWriting completes
         // yields a corrupt/truncated video (phase-4 exit criteria).
         var finishError: Error?
+        var realDurationMs: Double?
         let semaphore = DispatchSemaphore(value: 0)
         context.writer.finish { result in
-            if case .failure(let error) = result { finishError = error }
+            switch result {
+            case .success(let duration):
+                realDurationMs = duration
+            case .failure(let error):
+                finishError = error
+            }
             semaphore.signal()
         }
         semaphore.wait()
@@ -716,6 +770,24 @@ public final class CaptureSessionManager {
         if let finishError = finishError {
             throw SidecarRpcError.serverError(
                 "Failed to finalize recording: \(finishError)", code: .captureFailed)
+        }
+
+        // Prefer the real, asset-derived duration (bug #5); fall back to
+        // wall-clock only if the finished file's duration couldn't be read
+        // (best-effort accuracy improvement, not a hard requirement).
+        let durationMs = realDurationMs ?? wallClockDurationMs
+
+        // Bug #6 diagnostics: surface any writer-side backpressure drops or
+        // PTS gaps ("stalls") now that the session is finalized — see
+        // `VideoAssetWriter.diagnosticsSummary()`. Diagnostic-only: does not
+        // change `StopCaptureResult`/the manifest, just makes the drops
+        // observable via the existing `log` notification + stderr, so this
+        // is visible to the daemon/MCP caller (if listening) and to anyone
+        // reading the sidecar's own stderr even without one.
+        if let summary = context.writer.diagnosticsSummary() {
+            emitLog(
+                sessionId: params.sessionId, level: "warn",
+                message: "capture diagnostics for session \(params.sessionId): \(summary)")
         }
 
         return StopCaptureResult(
@@ -773,6 +845,19 @@ public final class CaptureSessionManager {
         handler("captureEnded", encoded)
     }
 
+    /// Bug #6: emits a `log` notification (existing mechanism, same shape
+    /// `EventTapCapture.swift` already uses for e.g. keyboard-capture-
+    /// unavailable warnings — no wire-schema change) AND writes to stderr
+    /// directly, so the diagnostics are visible even without a daemon
+    /// currently listening for notifications on this session.
+    private func emitLog(sessionId: String, level: String, message: String) {
+        logStderr("windower-sidecar-macos: \(message)")
+        guard let handler = onNotification else { return }
+        let params = LogNotificationParams(sessionId: sessionId, level: level, message: message)
+        guard let encoded = try? JSONCodec.encode(params) else { return }
+        handler("log", encoded)
+    }
+
     // MARK: Helpers
 
     /// Test/introspection hook — number of sessions currently in flight.
@@ -796,6 +881,32 @@ public final class CaptureSessionManager {
                 "No display matching id \(id ?? "<nil>")", code: .targetNotFound)
         }
         return display
+    }
+
+    /// Resolves which `SCDisplay` a window is on, for the "window" branch of
+    /// `startCapture` (see the crash-avoidance comment there). Matches by
+    /// point-containment of the window's origin first (the same approach
+    /// `EnumerationService.backingScaleFactor(forPoint:)`/`mapWindow` already
+    /// use for the points→pixels scale-factor lookup), falls back to frame
+    /// intersection for a window straddling two displays, then falls back to
+    /// the first enumerated display (roughly "primary") rather than crashing
+    /// — a window on a since-disconnected display is an edge case, not a
+    /// reason to abort the process.
+    private func resolveWindowDisplay(_ window: SCWindow, in content: SCShareableContent) throws
+        -> SCDisplay
+    {
+        if let exact = content.displays.first(where: { $0.frame.contains(window.frame.origin) }) {
+            return exact
+        }
+        if let overlapping = content.displays.first(where: { $0.frame.intersects(window.frame) })
+        {
+            return overlapping
+        }
+        if let primary = content.displays.first {
+            return primary
+        }
+        throw SidecarRpcError.serverError(
+            "No display found for window \(window.windowID)", code: .targetNotFound)
     }
 
     /// Same pixel conversion `EnumerationService.mapDisplay` performs — an

@@ -26,6 +26,12 @@
 |---|---|---|
 | 15 | Post-Processing (trim, auto-zoom, ripples, gif/webm) | `phase-15-post-processing.md` |
 
+## v1.2
+
+| Phase | Title | File |
+|---|---|---|
+| 19 | Operator (guided agent: perceive, input, record) | `phase-19-operator.md` |
+
 ## Post-MVP
 
 | Phase | Title | File |
@@ -33,4 +39,14 @@
 | 16 | Windows Backend | `phase-16-windows-backend.md` |
 | 17 | Linux Backend | `phase-17-linux-backend.md` |
 
+## Ancillary (unordered, non-blocking)
+
+| Phase | Title | File |
+|---|---|---|
+| 18 | Marketing Media (dogfood recordings for windower-site) ✅ | `phase-18-marketing-media.md` |
+
+Phase 18 has no dependency on 15/16/17 and no phase depends on it — it's dogfooding work to fill a real media gap on `windower-site` while Phase 14 is blocked on Apple Developer ID provisioning. Complete (2026-08-09) — see STATUS.md. Surfaced two real capture bugs along the way (bugs.spec.md #4-6), worth picking up before/alongside Phase 14.
+
 Ordering is mostly sequential (0 → 14) since each phase's sidecar/daemon surface builds on the last, but 7/8/9 (interfaces) can be parallelized once 6 (daemon) lands, and 10/11/12 can be parallelized once 4/5 (capture) land.
+
+Phase 19 depends on **Phase 10** (event timeline — needed for the `TimelineEvent.source` tag) and **Phase 12** (output management — needed for path conventions its `OperatorRun`/manifest fields reuse), but is otherwise independent of 15/16/17 and can be built in parallel with them. If Phase 19 lands before Phase 15 (Post-Processing), Phase 15 should consume Phase 19's `source` tag directly — e.g. zooming specifically on operator-driven clicks, distinct from human ones — rather than treating all clicks uniformly.

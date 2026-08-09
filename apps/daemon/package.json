@@ -1,13 +1,16 @@
 {
   "name": "@windower/daemon",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.0",
   "license": "UNLICENSED",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
     "windower-daemon": "./dist/bin.js"
+  },
+  "files": ["dist", "README.md"],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc --build",

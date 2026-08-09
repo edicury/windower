@@ -8,6 +8,8 @@ Every phase/task from `specs/001-windower-mvp/tasks/` is executed by a subagent 
 
 Work phase-by-phase in the order in `tasks/INDEX.md`. Before starting a phase, read its file in `tasks/phase-N-*.md` for the exact task list and exit criteria. Update `STATUS.md` at the end of each work session — current phase, what's done, what's blocked.
 
+New features or user-facing changes here must be reflected in `~/Documents/Development/windower-site` (the marketing/docs site) as well — check it for anything that needs updating (feature list, docs, screenshots, install instructions) before considering a phase done.
+
 ## The one rule that matters most: protocol before platform
 
 `contracts/sidecar-protocol.md` (frozen in Phase 1) is the contract between OS-agnostic TS and the native sidecar. **Never let macOS-specific reasoning leak above the stdio line.** Concretely:

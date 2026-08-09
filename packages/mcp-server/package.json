@@ -1,13 +1,16 @@
 {
   "name": "@windower/mcp-server",
-  "version": "0.0.0",
-  "private": true,
+  "version": "0.1.1",
   "license": "UNLICENSED",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
     "windower-mcp-server": "./dist/index.js"
+  },
+  "files": ["dist", "README.md"],
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "build": "tsc --build && chmod +x dist/index.js",
@@ -18,6 +21,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@windower/core": "workspace:*",
+    "@windower/daemon": "workspace:*",
     "zod": "^4.4.3"
   },
   "devDependencies": {

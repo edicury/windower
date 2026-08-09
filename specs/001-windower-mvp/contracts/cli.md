@@ -51,3 +51,23 @@ Explicit daemon lifecycle control, mostly for debugging — the daemon auto-star
 
 ## `windower list [--state recording|finalized|...] [--json]`
 Lists known sessions (from `~/.windower/sessions/`), most recent first — lets an agent recover context after a restart ("what was I recording?").
+
+## `windower operate "<task>" [recording flags] [--model p:m] [--base-url u] [--secret name=source:ref]... [--max-steps n] [--timeout s] [--unbounded] [--no-record] [--json]`
+Starts a guided operator run: an LLM-driven loop that perceives the screen (`captureFrame`), synthesizes mouse/keyboard input (`performInput`), and drives `<task>` to completion. Returns immediately with `{ runId }` — same non-blocking two-call shape as `start`/`stop`. `[recording flags]` reuse the exact shared video/audio flag block documented under `windower start` above (`--fps`, `--codec`, `--resolution`, `--audio-mic`, `--out`, etc.) — not redefined here. Recording is auto-started alongside the run unless `--no-record` is passed. `--model p:m` selects a provider:model pair (e.g. `openai:gpt-4o`, `anthropic:claude-sonnet-5`, `openai-compatible:llama3` for a local server via `--base-url`); the operator's model is independent of and unrelated to whatever agent/model is calling the CLI. `--secret name=source:ref` (repeatable) resolves a named secret (e.g. `password=keychain:waroom`) at call time and substitutes it into typed input — the raw value is never written to the CLI's own argv logging or the operator's transcript. `--max-steps`/`--timeout` bound the run; `--unbounded` explicitly opts out of both (use with care).
+
+Example:
+```
+windower operate "Open waroom.co, log in as {{user}}/{{password}}, create an incident" \
+  --secret password=keychain:waroom --resolution 1920x1080 --out ~/Desktop
+```
+
+## `windower operate status <runId>`
+Returns the current `OperatorRun` — state, steps so far, elapsed time.
+
+## `windower operate abort <runId>`
+Aborts an in-progress operator run mid-flight; any active recording is stopped/finalized rather than discarded.
+
+## `windower operate list [--state <state>]`
+Lists known operator runs, most recent first — same recovery-after-restart affordance as `windower list` for sessions.
+
+No new exit codes are introduced for `operate` — it reuses the existing `0`/`1`/`2`/`3` scheme documented above.

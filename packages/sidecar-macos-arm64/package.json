@@ -1,0 +1,12 @@
+{
+  "name": "@windower/sidecar-macos-arm64",
+  "version": "0.1.0",
+  "description": "Prebuilt windower-sidecar-macos binary (arm64) — optionalDependency of @windower/cli, resolved via npm's os/cpu fields.",
+  "license": "UNLICENSED",
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "files": ["bin"],
+  "publishConfig": {
+    "access": "public"
+  }
+}

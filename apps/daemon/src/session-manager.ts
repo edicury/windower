@@ -7,6 +7,7 @@ import {
   type CaptureTarget,
   DaemonError,
   type DaemonMethodMap,
+  EXPECTED_SIDECAR_VERSION,
   type OutputManifest,
   type RecordingSession,
   type SidecarClient,
@@ -211,6 +212,13 @@ export class SessionManager {
 
     try {
       const describeResult = await handle.client.describe();
+      if (describeResult.version !== EXPECTED_SIDECAR_VERSION) {
+        console.warn(
+          `[SessionManager] sidecar version mismatch: expected "${EXPECTED_SIDECAR_VERSION}", ` +
+            `got "${describeResult.version}" — protocol errors may follow if the sidecar predates ` +
+            "or postdates capabilities this daemon expects. Reinstall/rebuild the sidecar to match.",
+        );
+      }
       const requiredCapability =
         target.kind === "display"
           ? "capture.display"
