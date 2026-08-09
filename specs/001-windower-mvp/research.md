@@ -1,0 +1,43 @@
+# Research Notes
+
+## 1. Capture API choice per platform
+
+| Platform | Chosen API | Why | Alternatives rejected |
+|---|---|---|---|
+| macOS | **ScreenCaptureKit** (12.3+) | Per-window and per-display capture, hardware-accelerated encode path via `SCStream` → `AVAssetWriter`, native system-audio tap (`SCStreamConfiguration.capturesAudio`), actively maintained by Apple, required for App Store-adjacent distribution norms | `CGWindowListCreateImage` (deprecated, no audio, polling-based, slow); AVFoundation `AVCaptureScreenInput` (display-only, no per-window); ffmpeg `avfoundation` (display/device only, no per-window, no clean window audio) |
+| Windows (post-MVP) | **Windows.Graphics.Capture** (WGC), Win10 1903+ | Per-window and per-monitor capture via `GraphicsCaptureItem`, GPU-backed frame pool, is the modern supported API (DXGI Desktop Duplication is display-only and has no window mode) | DXGI Desktop Duplication (display-only); GDI BitBlt (slow, no HW accel, unreliable with GPU-composited windows) |
+| Linux (post-MVP) | **PipeWire + xdg-desktop-portal** (`org.freedesktop.portal.ScreenCast`) | The only path that works across both X11 and Wayland compositors without compositor-specific code; portal handles user consent | Direct X11 (`XGetImage`/Xcomposite) — X11-only, doesn't work under Wayland which is now the default on most distros |
+
+## 2. Per-method cross-platform feasibility (validates the sidecar protocol against non-macOS backends before any macOS code is written)
+
+| Protocol method | macOS (SCK) | Windows (WGC) | Linux (PipeWire/portal) |
+|---|---|---|---|
+| `enumerateTargets` (displays) | Full — `SCShareableContent.displays` | Full — `Direct3D11CaptureFramePool` per monitor via WinRT `DisplayInfo` | Full for displays; portal returns a stream, not always OS-level window/display metadata upfront |
+| `enumerateTargets` (windows) | Full — `SCShareableContent.windows`, stable `windowID` | Full — `GraphicsCaptureItem` from `HWND` via `GetWindowsCreateGraphicsCaptureItemForWindow` | **Gap.** Wayland compositors generally don't expose arbitrary window lists without a compositor-specific protocol (`wlr-foreign-toplevel-management` on wlroots compositors only, nothing standard on GNOME/KDE). Portal's `ScreenCast` interface itself is display/window-picker-via-OS-dialog, not a programmatic list. → protocol capability flag `enumerate.windows: false` on this backend at launch; user picks target via the portal's native picker instead. |
+| `resizeWindow` | Full — `AXUIElementSetAttributeValue` on `kAXPositionAttribute`/`kAXSizeAttribute` | Full — `SetWindowPos` via Win32, or UI Automation for modern apps | **Gap.** No standard cross-desktop-environment window-control protocol exists for Wayland (X11 has `_NET_MOVERESIZE_WINDOW` via EWMH, works under XWayland/X11 sessions only). → capability flag `window-control: false` under native Wayland; degrade to "capture at native size" per spec.md's future `--fit scale` mode (not built in MVP, but the capability flag already models the fallback path). |
+| `startCapture` (window) | Full | Full | Full once portal grants a window/region via its picker |
+| `startCapture` (display) | Full | Full | Full |
+| `startCapture` (region) | Crop performed in the sidecar from a display capture (SCK has no native arbitrary-rect target) | Same — crop from monitor capture | Same — crop from portal stream |
+| Audio: system | Full — `SCStreamConfiguration.capturesAudio` (per-app audio tap available on 13+) | **Partial.** Per-app/per-window audio loopback only from Windows 11 (`AudioCaptureContext`); pre-Win11 is full-desktop loopback only via WASAPI. → capability flag `audio.system.perApp: false` pre-Win11. | Full via PipeWire's audio graph, but requires the app to also be a PipeWire audio client — different subsystem from ScreenCast; noted as separate integration work for Phase 17, not a protocol gap. |
+| Audio: mic | Full — `AVCaptureDevice` | Full — WASAPI capture device | Full — PipeWire |
+| Cursor in stream | Full — `showsCursor` | Full — `IsCursorCaptureEnabled` | Full — portal option |
+| Click/keystroke event timeline | Full — global event tap (`CGEventTap`, needs Accessibility) | Full — low-level hooks (`SetWindowsHookEx`) | **Gap under Wayland** — no standard global input-event API for security reasons; some compositors expose `libei`/`xdg-desktop-portal` input-capture portals (emerging, not universal). → capability flag `eventTimeline: false`-by-default on Linux at launch, upgraded per-compositor later. |
+
+**Conclusion:** the protocol's capability-negotiation design (§ `contracts/sidecar-protocol.md`) is validated — every gap above is representable as a capability flag the daemon checks, not a method signature change. This is what lets Phase 16/17 land without touching `packages/core`, `packages/cli`, `packages/mcp-server`, or the daemon.
+
+## 3. Window resize via Accessibility API — caveats (macOS, Phase 3)
+
+- Not all windows honor `kAXSizeAttribute` writes — some apps clamp to a minimum/maximum size, some (e.g. certain Electron apps with custom chrome) ignore AX resize entirely and require native resize-handle simulation. Mitigation: always **read back** the actual frame after a resize attempt and report the real dimensions in the response rather than assuming the request succeeded (`RESIZE_PARTIAL` result state, not just success/fail).
+- Retina/scale-factor math: AX coordinates are in points, not pixels; ScreenCaptureKit stream configuration is in pixels. The sidecar must query `NSScreen.backingScaleFactor` for the target's screen and convert consistently, otherwise a "1280x720" request silently becomes 2560x1440 pixels on a Retina display or vice versa. Decision: **all public API dimensions (CLI/MCP) are in pixels**; the sidecar converts to points internally for AX calls.
+- Multi-display coordinate spaces: macOS uses a global coordinate space with the primary display's origin at (0,0) and Y increasing downward from the menu bar; secondary displays can have negative coordinates. Window positioning math must use `NSScreen.frame`, not assume single-display coordinates.
+- Some windows (dialogs, non-resizable utility windows) have `kAXResizable` false — the sidecar checks this before attempting resize and returns `RESIZE_UNSUPPORTED` immediately rather than attempting and silently no-op'ing.
+
+## 4. Codec / container decision
+
+- **H.264 default**: universally playable, hardware encode on every Mac in the support window, smaller file at MVP-typical bitrates for screen content (mostly static UI + text).
+- **HEVC opt-in**: better quality/size ratio for longer recordings, but less universally compatible for a file an agent might hand to a human on an older system — opt-in via `--codec hevc`, not default.
+- **mp4 default container**: universal compatibility. **mov** offered as an alternate for users who want an Apple-native intermediate (e.g., before importing to Final Cut). No ProRes / intermediate-codec support in MVP — out of scope, revisit if a professional-editing use case shows up.
+
+## 5. CLI framework
+
+Deferred to Phase 7 implementation — both `citty` (lightweight, good for a single small binary, used by UnJS tooling) and `commander` (battle-tested, larger ecosystem) satisfy requirements. Decision recorded in Phase 7's task file once trialed against the `--json` output requirement.
