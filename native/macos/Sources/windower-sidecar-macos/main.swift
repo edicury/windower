@@ -10,24 +10,35 @@ import WindowerSidecarCore
 
 let sidecarVersion = "0.1.0"
 
-/// Capabilities this backend actually implements at this phase. capture.*
-/// (Phase 4/5), audio.* (Phase 5), and eventTimeline.* (Phase 10) are
-/// deliberately NOT advertised yet — the daemon gates on
-/// `describe().capabilities` before calling anything, per CLAUDE.md
-/// "protocol before platform".
+/// Capabilities this backend actually implements at this phase. audio.*
+/// (Phase 5) and eventTimeline.* (Phase 10) are deliberately NOT advertised
+/// yet — the daemon gates on `describe().capabilities` before calling
+/// anything, per CLAUDE.md "protocol before platform".
 let supportedCapabilities: [String] = [
     "enumerate.displays",
     "enumerate.windows",
     "enumerate.apps",
     "window-control",
+    "capture.display",
+    "capture.window",
+    "capture.region",
 ]
 
 func logStderr(_ message: String) {
     FileHandle.standardError.write((message + "\n").data(using: .utf8)!)
 }
 
+/// stdout is written from two places: this file's synchronous dispatch loop
+/// and SCStream's background delegate queues (via the `captureEnded`
+/// notification hook). Interleaved partial writes would corrupt the
+/// newline-delimited framing, so every write is serialized.
+let stdoutLock = NSLock()
+
 func writeLine(_ s: String) {
-    FileHandle.standardOutput.write((s + "\n").data(using: .utf8)!)
+    let data = (s + "\n").data(using: .utf8)!
+    stdoutLock.lock()
+    FileHandle.standardOutput.write(data)
+    stdoutLock.unlock()
 }
 
 /// Classifies a parsed JSON-RPC line the same way `classifyJsonRpcLine` does
@@ -117,9 +128,20 @@ func handleRequest(id: JSONValue, method: String, params: JSONValue?) {
                 targetId: decodedParams.targetId, bounds: decodedParams.bounds)
             resultValue = try JSONCodec.encode(result)
 
-        case "startCapture", "stopCapture", "cancelCapture":
-            throw SidecarRpcError.unsupportedCapability(
-                "\(method) is not implemented by this backend at this phase")
+        case "startCapture":
+            let decodedParams = try decodeParams(StartCaptureParams.self, from: params)
+            let result = try CaptureSessionManager.shared.startCapture(params: decodedParams)
+            resultValue = try JSONCodec.encode(result)
+
+        case "stopCapture":
+            let decodedParams = try decodeParams(StopCaptureParams.self, from: params)
+            let result = try CaptureSessionManager.shared.stopCapture(params: decodedParams)
+            resultValue = try JSONCodec.encode(result)
+
+        case "cancelCapture":
+            let decodedParams = try decodeParams(CancelCaptureParams.self, from: params)
+            let result = try CaptureSessionManager.shared.cancelCapture(params: decodedParams)
+            resultValue = try JSONCodec.encode(result)
 
         default:
             throw SidecarRpcError.unsupportedCapability("Unknown method: \(method)")
@@ -176,6 +198,16 @@ func handle(line: String) {
         logStderr("windower-sidecar-macos: ignoring unexpected notification: \(parsedLine.method ?? "?")")
     case .other:
         logStderr("windower-sidecar-macos: ignoring line that is neither request nor notification")
+    }
+}
+
+// Sidecar-initiated notifications (currently `captureEnded`) are emitted
+// from SCStream's background delegate queues; `writeLine` is the
+// serialized stdout writer they funnel through.
+CaptureSessionManager.shared.onNotification = { method, params in
+    let notification = JsonRpcNotification(method: method, params: params)
+    if let line = EnvelopeCodec.encodeLine(notification) {
+        writeLine(line)
     }
 }
 

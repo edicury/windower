@@ -16,6 +16,21 @@ public struct JsonRpcLine: Codable {
     public let error: JSONValue?
 }
 
+/// Sidecar → daemon notification (`event`, `log`, `captureEnded`) — a
+/// JSON-RPC 2.0 notification carries `method`/`params` and deliberately no
+/// `id`, so the daemon knows no response is expected
+/// (contracts/sidecar-protocol.md §Notifications).
+public struct JsonRpcNotification: Encodable {
+    public let jsonrpc: String = "2.0"
+    public let method: String
+    public let params: JSONValue
+
+    public init(method: String, params: JSONValue) {
+        self.method = method
+        self.params = params
+    }
+}
+
 public struct JsonRpcSuccessResponse: Encodable {
     public let jsonrpc: String = "2.0"
     public let id: JSONValue

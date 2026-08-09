@@ -1,8 +1,8 @@
 # Spec Status
 
-Current phase: **4 — Video Capture** (not started)
-Active phase file: `tasks/phase-4-video-capture.md`
-Previous: Phase 3 (Window Control) — complete, see below.
+Current phase: **5 — Audio** (not started)
+Active phase file: `tasks/phase-5-audio.md`
+Previous: Phase 4 (Video Capture) — complete, see below.
 
 Blocked: none
 
@@ -12,9 +12,17 @@ Planned (v1.1): Phase 15 (Post-Processing: trim, auto-zoom, ripples, gif/webm)
 
 Planned (post-MVP): Phase 16 (Windows backend), Phase 17 (Linux backend)
 
-Completed: Phase 0 (Foundation), Phase 1 (Sidecar Protocol & Capability Model), Phase 2 (macOS Enumeration & Permissions), Phase 3 (Window Control)
+Completed: Phase 0 (Foundation), Phase 1 (Sidecar Protocol & Capability Model), Phase 2 (macOS Enumeration & Permissions), Phase 3 (Window Control), Phase 4 (Video Capture)
 
 ## Recently completed
+
+- **Phase 4 — Video Capture** (2026-08-09): `startCapture`/`stopCapture`/`cancelCapture` implemented, video-only (audio deferred to Phase 5).
+  - Built via 3 subagents: two independent/parallel (`CaptureConfig.swift` — pure quality/geometry math; `VideoAssetWriter.swift` — `AVAssetWriter` wrapper, no SCK dependency) followed by one integration pass (`CaptureService.swift` — `CaptureSessionManager` wiring `SCStream` frame delivery into the writer, `SCContentFilter`/`SCStreamConfiguration` resolution for display/window/region targets, `NSLock`-protected session dict for concurrent-session safety, `captureEnded` notification on stream failure).
+  - `main.swift`: `capture.display`/`capture.window`/`capture.region` now advertised; `writeLine` made thread-safe (background SCStream queues emit notifications concurrently with the main dispatch loop).
+  - Quality→bitrate mapping table documented in `tasks/phase-4-video-capture.md`. Region crop done via `SCStreamConfiguration.sourceRect`/`.destinationRect`, not a content filter (SCK has no arbitrary-rect target).
+  - `packages/core` untouched — Phase 1 already shipped `startCapture`/`stopCapture`/`cancelCapture` schemas/client methods correctly.
+  - 61/61 Swift tests passing (35 new). `VideoAssetWriterTests` is a real functional test with no TCC dependency (synthetic-frame write→finalize→read-back via `AVURLAsset`). `pnpm build` + `pnpm turbo run test`: 12/12 passing.
+  - Not verified in this sandbox (no Screen Recording/Accessibility grant, no GUI — same gap as Phase 2/3): any real `SCStream` capture, `ffprobe`/VLC-verified output correctness, live region-crop framing, concurrent two-session capture, `captureEnded` end-to-end. Deferred to Phase 13's local e2e process. Also flagged: `captureEnded.reason` always reports `"error"` (SCK doesn't document a way to distinguish target-closed from a generic stream failure via `didStopWithError`) — daemon behavior is identical either way per contract, so this is a documented limitation, not a bug.
 
 - **Phase 3 — Window Control** (2026-08-09): `resizeWindow` implemented in the macOS sidecar.
   - `native/macos/Sources/WindowerSidecarCore/WindowControl.swift`: `CGWindowID` → owning pid (`CGWindowListCopyWindowInfo`) → `AXUIElementCreateApplication` → best-match `AXUIElement` window (position/size Euclidean distance + title tiebreaker, since AX has no direct `CGWindowID` lookup) → `AXUIElementIsAttributeSettable` pre-check (`RESIZE_UNSUPPORTED` if not resizable) → pixels→points via the same `backingScaleFactor` convention `EnumerationService.mapWindow` already established → `AXUIElementSetAttributeValue` for position/size → read-back → points→pixels → epsilon (1.0px) comparison for `result: "success"|"partial"`. `TARGET_NOT_FOUND` on stale/unmatched windowID. Wired into `main.swift` (`"window-control"` now advertised in `describe`). `packages/core`'s `resizeWindow` client/schema needed zero changes — Phase 1 already shipped it correctly.

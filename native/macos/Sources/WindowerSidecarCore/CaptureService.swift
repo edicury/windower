@@ -1,0 +1,611 @@
+import AVFoundation
+import CoreGraphics
+import CoreMedia
+import CoreVideo
+import Foundation
+import ScreenCaptureKit
+
+// Phase 4 — video capture. Wires `CaptureConfigService` (pure geometry/
+// bitrate math) and `VideoAssetWriter` (AVAssetWriter plumbing) to a live
+// `SCStream`, and exposes the three RPC entry points from
+// contracts/sidecar-protocol.md: startCapture/stopCapture/cancelCapture.
+//
+// Everything here is macOS-specific by construction — it lives below the
+// stdio line, so no protocol-shape decisions are made here beyond matching
+// the params/result shapes already frozen in
+// packages/core/src/protocol/methods.ts.
+
+// MARK: - Wire shapes (mirror packages/core/src/protocol/methods.ts)
+
+/// Decodable view of `CaptureTargetSchema`'s discriminated union. The
+/// existing `CaptureTarget` enum in CaptureTarget.swift is Encodable-only
+/// and shaped for `enumerateTargets`' *output* (it has no `region` case,
+/// since regions are never enumerated). `startCapture` accepts a region as
+/// *input*, so decoding needs this permissive flat struct instead.
+public struct CaptureTargetInput: Codable, Equatable {
+    public let kind: String
+    /// Present for `display`/`window` targets.
+    public let id: String?
+    /// Present for `region` targets — the containing display's id.
+    public let displayId: String?
+    /// Present for `window`/`display`/`region`; pixels, global space.
+    public let bounds: Rect?
+
+    public init(kind: String, id: String? = nil, displayId: String? = nil, bounds: Rect? = nil) {
+        self.kind = kind
+        self.id = id
+        self.displayId = displayId
+        self.bounds = bounds
+    }
+}
+
+/// Mirrors `VideoSettingsSchema`. `resolution` omitted means "native target
+/// resolution" (data-model.md §VideoSettings).
+public struct VideoSettingsInput: Codable, Equatable {
+    public struct Resolution: Codable, Equatable {
+        public let width: Double
+        public let height: Double
+
+        public init(width: Double, height: Double) {
+            self.width = width
+            self.height = height
+        }
+    }
+
+    public let fps: Int
+    public let codec: String
+    public let container: String
+    public let resolution: Resolution?
+    public let quality: String
+    public let showCursor: Bool
+
+    public init(
+        fps: Int, codec: String, container: String, resolution: Resolution?, quality: String,
+        showCursor: Bool
+    ) {
+        self.fps = fps
+        self.codec = codec
+        self.container = container
+        self.resolution = resolution
+        self.quality = quality
+        self.showCursor = showCursor
+    }
+}
+
+public struct StartCaptureParams: Decodable {
+    public let sessionId: String
+    public let target: CaptureTargetInput
+    public let video: VideoSettingsInput
+    /// `AudioSettings` is decoded permissively as an opaque JSON value: this
+    /// phase is video-only (Phase 5 implements audio), and `audio.*` is not
+    /// advertised in `describe().capabilities`, so producing a video-only
+    /// file when audio tracks are requested is the expected protocol
+    /// behavior here, not a bug. Keeping it opaque guarantees a well-formed
+    /// `AudioSettings` payload from the daemon can never fail to decode.
+    public let audio: JSONValue?
+}
+
+public struct StartCaptureResult: Codable, Equatable {
+    public let started: Bool
+
+    public init(started: Bool = true) {
+        self.started = started
+    }
+}
+
+public struct StopCaptureParams: Codable, Equatable {
+    public let sessionId: String
+
+    public init(sessionId: String) {
+        self.sessionId = sessionId
+    }
+}
+
+public struct StopCaptureResult: Codable, Equatable {
+    public struct Resolution: Codable, Equatable {
+        public let width: Int
+        public let height: Int
+
+        public init(width: Int, height: Int) {
+            self.width = width
+            self.height = height
+        }
+    }
+
+    public let outputFilePath: String
+    public let actualDurationMs: Double
+    public let actualResolution: Resolution
+
+    public init(outputFilePath: String, actualDurationMs: Double, actualResolution: Resolution) {
+        self.outputFilePath = outputFilePath
+        self.actualDurationMs = actualDurationMs
+        self.actualResolution = actualResolution
+    }
+}
+
+public struct CancelCaptureParams: Codable, Equatable {
+    public let sessionId: String
+
+    public init(sessionId: String) {
+        self.sessionId = sessionId
+    }
+}
+
+public struct CancelCaptureResult: Codable, Equatable {
+    public let canceled: Bool
+
+    public init(canceled: Bool = true) {
+        self.canceled = canceled
+    }
+}
+
+/// Mirrors `CaptureEndedNotificationParamsSchema`.
+public struct CaptureEndedNotificationParams: Codable, Equatable {
+    public let sessionId: String
+    /// "target-closed" | "error"
+    public let reason: String
+
+    public init(sessionId: String, reason: String) {
+        self.sessionId = sessionId
+        self.reason = reason
+    }
+}
+
+// MARK: - Stream plumbing
+
+/// Receives `CMSampleBuffer`s from `SCStream` on a dedicated serial queue
+/// and feeds them to the session's `VideoAssetWriter`.
+///
+/// SCStream does NOT retain its output/delegate objects — the owning
+/// `CaptureSessionContext` holds the strong reference for the session's
+/// lifetime. Letting this deallocate would silently stop frame delivery.
+final class CaptureStreamOutput: NSObject, SCStreamOutput {
+    private let writer: VideoAssetWriter
+    /// Only ever touched from the session's serial sample-handler queue.
+    private var didStartSession = false
+    private let startedLock = NSLock()
+
+    init(writer: VideoAssetWriter) {
+        self.writer = writer
+    }
+
+    /// True once the first frame has arrived and the asset writer session
+    /// has been started. `stopCapture` needs this to distinguish "recorded
+    /// zero frames" (finishWriting would fail) from a normal finish.
+    var hasStartedSession: Bool {
+        startedLock.lock()
+        defer { startedLock.unlock() }
+        return didStartSession
+    }
+
+    func stream(
+        _ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
+        of type: SCStreamOutputType
+    ) {
+        guard type == .screen else { return }
+        guard CMSampleBufferIsValid(sampleBuffer) else { return }
+        // SCStream also delivers "idle"/"blank" status frames with no image
+        // buffer when the screen content hasn't changed; appending those
+        // would corrupt the timeline.
+        guard CMSampleBufferGetImageBuffer(sampleBuffer) != nil else { return }
+        guard isCompleteFrame(sampleBuffer) else { return }
+
+        startedLock.lock()
+        let needsStart = !didStartSession
+        if needsStart { didStartSession = true }
+        startedLock.unlock()
+
+        if needsStart {
+            writer.start(at: CMSampleBufferGetPresentationTimeStamp(sampleBuffer))
+        }
+        // A false return means the writer wasn't ready for more data —
+        // dropping the frame under backpressure is correct for live
+        // capture, not an error.
+        _ = writer.append(sampleBuffer: sampleBuffer)
+    }
+
+    /// SCStream attaches an `SCStreamFrameInfo.status` to each buffer;
+    /// only `.complete` frames carry new pixel content.
+    private func isCompleteFrame(_ sampleBuffer: CMSampleBuffer) -> Bool {
+        guard
+            let attachments = CMSampleBufferGetSampleAttachmentsArray(
+                sampleBuffer, createIfNecessary: false) as? [[SCStreamFrameInfo: Any]],
+            let first = attachments.first,
+            let rawStatus = first[.status] as? Int,
+            let status = SCFrameStatus(rawValue: rawStatus)
+        else {
+            // No attachment metadata at all — treat as usable rather than
+            // silently dropping every frame if Apple changes the shape.
+            return true
+        }
+        return status == .complete
+    }
+}
+
+/// Surfaces SCStream-initiated stops (target window closed, display
+/// disconnected, stream error) so the sidecar can emit `captureEnded`
+/// instead of leaving the daemon's session hung in `recording`.
+final class CaptureStreamDelegate: NSObject, SCStreamDelegate {
+    private let sessionId: String
+    private weak var manager: CaptureSessionManager?
+
+    init(sessionId: String, manager: CaptureSessionManager) {
+        self.sessionId = sessionId
+        self.manager = manager
+    }
+
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        manager?.handleStreamStoppedUnexpectedly(sessionId: sessionId, error: error)
+    }
+}
+
+/// Everything the manager needs to keep alive for one in-flight capture.
+/// A class (not a struct) so the delegate/output back-references stay
+/// stable and the whole thing is cheap to hand around under a lock.
+final class CaptureSessionContext {
+    let sessionId: String
+    let stream: SCStream
+    let writer: VideoAssetWriter
+    let output: CaptureStreamOutput
+    let delegate: CaptureStreamDelegate
+    let sampleQueue: DispatchQueue
+    let outputURL: URL
+    let resolvedWidth: Int
+    let resolvedHeight: Int
+    let startedAt: Date
+
+    init(
+        sessionId: String, stream: SCStream, writer: VideoAssetWriter,
+        output: CaptureStreamOutput, delegate: CaptureStreamDelegate,
+        sampleQueue: DispatchQueue, outputURL: URL, resolvedWidth: Int, resolvedHeight: Int,
+        startedAt: Date
+    ) {
+        self.sessionId = sessionId
+        self.stream = stream
+        self.writer = writer
+        self.output = output
+        self.delegate = delegate
+        self.sampleQueue = sampleQueue
+        self.outputURL = outputURL
+        self.resolvedWidth = resolvedWidth
+        self.resolvedHeight = resolvedHeight
+        self.startedAt = startedAt
+    }
+}
+
+// MARK: - Session manager
+
+/// Owns all in-flight capture sessions for this sidecar process, keyed by
+/// `sessionId`. The dictionary is NSLock-protected because SCStream
+/// delegate callbacks arrive on arbitrary background queues (one per
+/// session) concurrently with the synchronous main-thread dispatch loop.
+public final class CaptureSessionManager {
+    public static let shared = CaptureSessionManager()
+
+    private var sessions: [String: CaptureSessionContext] = [:]
+    private let lock = NSLock()
+
+    /// Set once at startup by main.swift to a thread-safe stdout line
+    /// writer. Called from background stream-delegate queues, so the
+    /// installed closure MUST be thread-safe.
+    private var notificationHandler: ((String, JSONValue) -> Void)?
+    private let notificationLock = NSLock()
+
+    public init() {}
+
+    public var onNotification: ((String, JSONValue) -> Void)? {
+        get {
+            notificationLock.lock()
+            defer { notificationLock.unlock() }
+            return notificationHandler
+        }
+        set {
+            notificationLock.lock()
+            notificationHandler = newValue
+            notificationLock.unlock()
+        }
+    }
+
+    // MARK: startCapture
+
+    public func startCapture(params: StartCaptureParams) throws -> StartCaptureResult {
+        let video = params.video
+        let content = try fetchShareableContentMappingErrors()
+
+        let filter: SCContentFilter
+        let nativeWidth: Double
+        let nativeHeight: Double
+        var sourceRect: CGRect?
+
+        switch params.target.kind {
+        case "display":
+            let display = try resolveDisplay(id: params.target.id, in: content)
+            filter = SCContentFilter(display: display, excludingWindows: [])
+            let bounds = displayPixelBounds(display)
+            nativeWidth = bounds.width
+            nativeHeight = bounds.height
+
+        case "window":
+            guard let id = params.target.id,
+                let window = content.windows.first(where: { String($0.windowID) == id })
+            else {
+                throw SidecarRpcError.serverError(
+                    "No window matching id \(params.target.id ?? "<nil>")", code: .targetNotFound)
+            }
+            filter = SCContentFilter(desktopIndependentWindow: window)
+            let scaleFactor = EnumerationService.backingScaleFactor(forPoint: window.frame.origin)
+            nativeWidth = window.frame.width * scaleFactor
+            nativeHeight = window.frame.height * scaleFactor
+
+        case "region":
+            // SCK has no arbitrary-rect capture target (research.md §2) —
+            // a region is a full-display capture cropped via
+            // sourceRect/destinationRect on the stream configuration.
+            let display = try resolveDisplay(id: params.target.displayId, in: content)
+            guard let regionBounds = params.target.bounds else {
+                throw SidecarRpcError.invalidParams("region target requires bounds")
+            }
+            filter = SCContentFilter(display: display, excludingWindows: [])
+            nativeWidth = regionBounds.width
+            nativeHeight = regionBounds.height
+            let displayBounds = displayPixelBounds(display)
+            let scaleFactor = EnumerationService.backingScaleFactor(forDisplayID: display.displayID)
+            sourceRect = CaptureConfigService.regionSourceRect(
+                regionPixelBounds: (
+                    x: regionBounds.x, y: regionBounds.y, width: regionBounds.width,
+                    height: regionBounds.height
+                ),
+                displayPixelBounds: (
+                    x: displayBounds.x, y: displayBounds.y, width: displayBounds.width,
+                    height: displayBounds.height
+                ),
+                scaleFactor: scaleFactor
+            )
+
+        default:
+            throw SidecarRpcError.serverError(
+                "Unsupported capture target kind: \(params.target.kind)", code: .targetNotFound)
+        }
+
+        let resolved = CaptureConfigService.resolvedPixelDimensions(
+            requestedWidth: video.resolution?.width,
+            requestedHeight: video.resolution?.height,
+            nativeWidth: nativeWidth,
+            nativeHeight: nativeHeight
+        )
+
+        let configuration = SCStreamConfiguration()
+        // SCStreamConfiguration.width/height are the output frame buffer's
+        // dimensions in **pixels** — deliberately the same numbers handed to
+        // AVAssetWriter below, so the encoder's expected frame size and the
+        // delivered buffer size can never disagree.
+        configuration.width = resolved.width
+        configuration.height = resolved.height
+        configuration.minimumFrameInterval = CaptureConfigService.minimumFrameInterval(
+            forFps: video.fps)
+        configuration.showsCursor = video.showCursor
+        configuration.pixelFormat = kCVPixelFormatType_32BGRA
+        configuration.queueDepth = 5
+        if let sourceRect = sourceRect {
+            configuration.sourceRect = sourceRect
+            configuration.destinationRect = CGRect(
+                x: 0, y: 0, width: resolved.width, height: resolved.height)
+        }
+
+        let bitrate = CaptureConfigService.bitrate(
+            forQuality: video.quality, width: resolved.width, height: resolved.height)
+
+        // Phase 6's daemon owns real output-path management (manifest and
+        // timeline live next to the video file, per CLAUDE.md); the sidecar
+        // just needs *a* writable, collision-free path.
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("windower-\(params.sessionId).\(video.container)")
+        try? FileManager.default.removeItem(at: outputURL)
+
+        let writer: VideoAssetWriter
+        do {
+            writer = try VideoAssetWriter(
+                outputURL: outputURL, width: resolved.width, height: resolved.height,
+                codec: video.codec, container: video.container, bitrate: bitrate)
+        } catch {
+            throw SidecarRpcError.serverError(
+                "Failed to prepare video writer: \(error)", code: .captureFailed)
+        }
+
+        let output = CaptureStreamOutput(writer: writer)
+        let delegate = CaptureStreamDelegate(sessionId: params.sessionId, manager: self)
+        let stream = SCStream(filter: filter, configuration: configuration, delegate: delegate)
+        let sampleQueue = DispatchQueue(label: "windower.capture.\(params.sessionId)")
+
+        do {
+            try stream.addStreamOutput(
+                output, type: .screen, sampleHandlerQueue: sampleQueue)
+        } catch {
+            writer.cancel()
+            throw SidecarRpcError.serverError(
+                "Failed to attach stream output: \(error)", code: .captureFailed)
+        }
+
+        if let error = awaitCompletion({ done in stream.startCapture(completionHandler: done) }) {
+            writer.cancel()
+            let nsError = error as NSError
+            if nsError.domain == "com.apple.ScreenCaptureKit.SCStreamErrorDomain",
+                nsError.code == -3801
+            {
+                throw SidecarRpcError.serverError(
+                    "startCapture failed: Screen Recording permission not granted",
+                    code: .permissionDenied)
+            }
+            throw SidecarRpcError.serverError(
+                "startCapture failed: \(error)", code: .captureFailed)
+        }
+
+        let context = CaptureSessionContext(
+            sessionId: params.sessionId, stream: stream, writer: writer, output: output,
+            delegate: delegate, sampleQueue: sampleQueue, outputURL: outputURL,
+            resolvedWidth: resolved.width, resolvedHeight: resolved.height, startedAt: Date())
+
+        lock.lock()
+        sessions[params.sessionId] = context
+        lock.unlock()
+
+        return StartCaptureResult(started: true)
+    }
+
+    // MARK: stopCapture
+
+    public func stopCapture(params: StopCaptureParams) throws -> StopCaptureResult {
+        guard let context = removeSession(params.sessionId) else {
+            throw SidecarRpcError.serverError(
+                "Unknown sessionId: \(params.sessionId)", code: .sessionNotFound)
+        }
+
+        // Best-effort: even if the stream errors on stop, the frames already
+        // handed to the writer are still worth finalizing.
+        _ = awaitCompletion { done in context.stream.stopCapture(completionHandler: done) }
+
+        let durationMs = Date().timeIntervalSince(context.startedAt) * 1000
+
+        guard context.output.hasStartedSession else {
+            // AVAssetWriter was never started (no frames ever arrived), so
+            // finishWriting would fail and leave a zero-byte file behind.
+            context.writer.cancel()
+            throw SidecarRpcError.serverError(
+                "Capture produced no frames for session \(params.sessionId)", code: .captureFailed)
+        }
+
+        // MUST be awaited — reading the file before finishWriting completes
+        // yields a corrupt/truncated video (phase-4 exit criteria).
+        var finishError: Error?
+        let semaphore = DispatchSemaphore(value: 0)
+        context.writer.finish { result in
+            if case .failure(let error) = result { finishError = error }
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        if let finishError = finishError {
+            throw SidecarRpcError.serverError(
+                "Failed to finalize recording: \(finishError)", code: .captureFailed)
+        }
+
+        return StopCaptureResult(
+            outputFilePath: context.outputURL.path,
+            actualDurationMs: durationMs,
+            actualResolution: StopCaptureResult.Resolution(
+                width: context.resolvedWidth, height: context.resolvedHeight)
+        )
+    }
+
+    // MARK: cancelCapture
+
+    public func cancelCapture(params: CancelCaptureParams) throws -> CancelCaptureResult {
+        guard let context = removeSession(params.sessionId) else {
+            throw SidecarRpcError.serverError(
+                "Unknown sessionId: \(params.sessionId)", code: .sessionNotFound)
+        }
+        // Errors ignored deliberately — we're discarding the output anyway.
+        _ = awaitCompletion { done in context.stream.stopCapture(completionHandler: done) }
+        context.writer.cancel()
+        return CancelCaptureResult(canceled: true)
+    }
+
+    // MARK: Stream-initiated stop
+
+    /// Called from `SCStreamDelegate.stream(_:didStopWithError:)` on a
+    /// background queue. Discards the in-flight session and notifies the
+    /// daemon so it can mark the session `failed` rather than hanging in
+    /// `recording`.
+    func handleStreamStoppedUnexpectedly(sessionId: String, error: Error) {
+        guard let context = removeSession(sessionId) else { return }
+        context.writer.cancel()
+        emitCaptureEnded(sessionId: sessionId, reason: captureEndedReason(for: error))
+    }
+
+    /// ScreenCaptureKit reports a closed target window and a generic stream
+    /// failure through the same `didStopWithError` path, and the error codes
+    /// it uses are not documented as distinguishing the two. Rather than
+    /// guess wrong, everything defaults to `"error"` — the daemon's
+    /// behaviour (transition to `failed`) is identical for both reasons per
+    /// contracts/sidecar-protocol.md.
+    private func captureEndedReason(for error: Error) -> String {
+        _ = error
+        return "error"
+    }
+
+    private func emitCaptureEnded(sessionId: String, reason: String) {
+        guard let handler = onNotification else { return }
+        let params = CaptureEndedNotificationParams(sessionId: sessionId, reason: reason)
+        guard let encoded = try? JSONCodec.encode(params) else { return }
+        handler("captureEnded", encoded)
+    }
+
+    // MARK: Helpers
+
+    /// Test/introspection hook — number of sessions currently in flight.
+    public var activeSessionCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return sessions.count
+    }
+
+    private func removeSession(_ sessionId: String) -> CaptureSessionContext? {
+        lock.lock()
+        defer { lock.unlock() }
+        return sessions.removeValue(forKey: sessionId)
+    }
+
+    private func resolveDisplay(id: String?, in content: SCShareableContent) throws -> SCDisplay {
+        guard let id = id,
+            let display = content.displays.first(where: { String($0.displayID) == id })
+        else {
+            throw SidecarRpcError.serverError(
+                "No display matching id \(id ?? "<nil>")", code: .targetNotFound)
+        }
+        return display
+    }
+
+    /// Same pixel conversion `EnumerationService.mapDisplay` performs — an
+    /// `SCDisplay.frame` is in points, everything above the sidecar boundary
+    /// is pixels (CLAUDE.md §units, research.md §3).
+    private func displayPixelBounds(_ display: SCDisplay) -> Rect {
+        let scaleFactor = EnumerationService.backingScaleFactor(forDisplayID: display.displayID)
+        return Rect(
+            x: display.frame.origin.x * scaleFactor,
+            y: display.frame.origin.y * scaleFactor,
+            width: display.frame.width * scaleFactor,
+            height: display.frame.height * scaleFactor
+        )
+    }
+
+    private func fetchShareableContentMappingErrors() throws -> SCShareableContent {
+        do {
+            return try EnumerationService.fetchShareableContent()
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == "com.apple.ScreenCaptureKit.SCStreamErrorDomain",
+                nsError.code == -3801
+            {
+                throw SidecarRpcError.serverError(
+                    "startCapture failed: Screen Recording permission not granted",
+                    code: .permissionDenied)
+            }
+            throw SidecarRpcError.serverError(
+                "Failed to enumerate shareable content: \(error)", code: .captureFailed)
+        }
+    }
+
+    /// Bridges SCStream's async completion-handler API into the sidecar's
+    /// synchronous per-line dispatch loop — the same blocking convention
+    /// `EnumerationService.fetchShareableContent()` established.
+    private func awaitCompletion(_ body: (@escaping (Error?) -> Void) -> Void) -> Error? {
+        var captured: Error?
+        let semaphore = DispatchSemaphore(value: 0)
+        body { error in
+            captured = error
+            semaphore.signal()
+        }
+        semaphore.wait()
+        return captured
+    }
+}

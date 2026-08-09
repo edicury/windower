@@ -59,8 +59,13 @@ final class IntegrationTests: XCTestCase {
         XCTAssertTrue(capabilities.contains("enumerate.windows"))
         // Implemented as of Phase 3.
         XCTAssertTrue(capabilities.contains("window-control"))
+        // Implemented as of Phase 4.
+        XCTAssertTrue(capabilities.contains("capture.display"))
+        XCTAssertTrue(capabilities.contains("capture.window"))
+        XCTAssertTrue(capabilities.contains("capture.region"))
         // Not yet implemented at this phase — must not be advertised.
-        XCTAssertFalse(capabilities.contains("capture.display"))
+        XCTAssertFalse(capabilities.contains("audio.system"))
+        XCTAssertFalse(capabilities.contains("eventTimeline.cursor"))
     }
 
     func testUnknownMethodReturnsUnsupportedCapabilityTaxonomyCode() throws {
