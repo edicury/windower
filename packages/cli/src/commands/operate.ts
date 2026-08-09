@@ -7,9 +7,11 @@ import {
   formatModelConfig,
   readRawConfig,
 } from "@windower/core";
+import { OperatorRunStore } from "@windower/engine";
 import type { Command } from "commander";
+import { resolveForcedMode, withBackend } from "../backend.js";
 import { withDaemon } from "../daemon.js";
-import { printResult } from "../output.js";
+import { printError, printResult } from "../output.js";
 import {
   type OperateOpts,
   addOperateFlags,
@@ -79,16 +81,28 @@ export function registerOperateCommand(program: Command): void {
     },
   );
 
+  // `operate status`/`operate list` are `local` mode per contracts/cli.md's
+  // Daemon policy — plain disk reads of `~/.windower/operator-runs/*.json`
+  // via `OperatorRunStore`, no backend/daemon involved at all (same
+  // treatment as `windower status`/`windower list`). `operate abort` stays
+  // `daemon` mode (only meaningful against a detached run).
   operate
     .command("status <runId>")
     .description("Report the current state of an operator run")
     .option("--json", "output JSON")
     .action(async (runId: string, opts: { json?: boolean }, cmd: Command) => {
       const json = jsonFlag(opts, cmd);
-      await withDaemon(json, async (client) => {
-        const run = await client.getOperatorRun({ runId });
+      try {
+        const store = new OperatorRunStore();
+        await store.load();
+        const run = store.get(runId);
+        if (!run) {
+          throw new DaemonError("OPERATOR_RUN_NOT_FOUND", `Operator run "${runId}" not found`);
+        }
         printResult(json, run, renderOperatorRun);
-      });
+      } catch (err) {
+        process.exitCode = printError(json, err);
+      }
     });
 
   operate
@@ -97,10 +111,16 @@ export function registerOperateCommand(program: Command): void {
     .option("--json", "output JSON")
     .action(async (runId: string, opts: { json?: boolean }, cmd: Command) => {
       const json = jsonFlag(opts, cmd);
-      await withDaemon(json, async (client) => {
-        const result = await client.abortOperatorRun({ runId });
-        printResult(json, result, () => renderAbortResult(runId, result));
-      });
+      const forcedMode = resolveForcedMode(cmd.optsWithGlobals());
+      await withBackend(
+        "operate abort",
+        json,
+        async (backend) => {
+          const result = await backend.abortOperatorRun({ runId });
+          printResult(json, result, () => renderAbortResult(runId, result));
+        },
+        { forcedMode },
+      );
     });
 
   operate
@@ -110,12 +130,16 @@ export function registerOperateCommand(program: Command): void {
     .option("--json", "output JSON")
     .action(async (opts: { state?: string; json?: boolean }, cmd: Command) => {
       const json = jsonFlag(opts, cmd);
-      await withDaemon(json, async (client) => {
+      try {
+        const store = new OperatorRunStore();
+        await store.load();
         const state = opts.state as OperatorRun["state"] | undefined;
-        const result = await client.listOperatorRuns(state ? { state } : {});
-        const sorted: ListOperatorRunsResult = { runs: sortByStartedAtDesc(result.runs) };
+        const runs = store.list(state);
+        const sorted: ListOperatorRunsResult = { runs: sortByStartedAtDesc(runs) };
         printResult(json, sorted, renderOperatorRunsTable);
-      });
+      } catch (err) {
+        process.exitCode = printError(json, err);
+      }
     });
 }
 

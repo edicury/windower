@@ -1,22 +1,28 @@
 import type { CaptureTarget, ListTargetsResult } from "@windower/core";
 import type { Command } from "commander";
-import { withDaemon } from "../daemon.js";
+import { resolveForcedMode, withBackend } from "../backend.js";
 import { printResult } from "../output.js";
 
-/** `windower targets [--kind display|window|app] [--json]` — contracts/cli.md. */
+/** `windower targets [--kind display|window|app] [--json]` — contracts/cli.md. `local` mode. */
 export function registerTargetsCommand(program: Command): void {
   program
     .command("targets")
     .description("List current capture targets (displays, windows, apps)")
     .option("--kind <kind>", "filter by kind: display|window|app")
     .option("--json", "output JSON")
-    .action(async (opts: { kind?: string; json?: boolean }) => {
+    .action(async (opts: { kind?: string; json?: boolean }, cmd: Command) => {
       const json = Boolean(opts.json);
-      await withDaemon(json, async (client) => {
-        const kinds = opts.kind ? [opts.kind as "display" | "window" | "app"] : undefined;
-        const result = await client.listTargets({ kinds });
-        printResult(json, result, renderTargetsTable);
-      });
+      const forcedMode = resolveForcedMode(cmd.optsWithGlobals());
+      await withBackend(
+        "targets",
+        json,
+        async (backend) => {
+          const kinds = opts.kind ? [opts.kind as "display" | "window" | "app"] : undefined;
+          const result = await backend.listTargets({ kinds });
+          printResult(json, result, renderTargetsTable);
+        },
+        { forcedMode },
+      );
     });
 }
 

@@ -45,6 +45,26 @@ describe("SecretResolver", () => {
     ).rejects.toMatchObject({ code: "INVALID_ARGS" });
   });
 
+  it("prefers a forwarded (connection-snapshot) value over its own env for a matching env: ref", async () => {
+    // Regression for the daemon-optional bug: a daemon spawned by one shell
+    // must not silently answer env:-sourced lookups out of its own (possibly
+    // stale) process environment when the calling connection already
+    // resolved the ref against a different one and forwarded the value.
+    const resolver = new SecretResolver({ env: { MY_PASSWORD: "daemons-own-value" } });
+    const refs: SecretRef[] = [{ name: "password", source: "env", ref: "MY_PASSWORD" }];
+    await expect(
+      resolver.resolveAll(refs, [{ name: "password", value: "callers-value" }]),
+    ).resolves.toEqual([{ name: "password", value: "callers-value" }]);
+  });
+
+  it("falls back to its own resolution when a ref has no forwarded match", async () => {
+    const resolver = new SecretResolver({ env: { MY_PASSWORD: "hunter2" } });
+    const refs: SecretRef[] = [{ name: "password", source: "env", ref: "MY_PASSWORD" }];
+    await expect(
+      resolver.resolveAll(refs, [{ name: "other", value: "unrelated" }]),
+    ).resolves.toEqual([{ name: "password", value: "hunter2" }]);
+  });
+
   it("accepts literal refs but warns about shell-history exposure", async () => {
     const warnings: string[] = [];
     const resolver = new SecretResolver({ env: {}, warn: (m) => warnings.push(m) });

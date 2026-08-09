@@ -1,9 +1,15 @@
-import type { RecordingSession } from "@windower/core";
+import { DaemonError, type RecordingSession } from "@windower/core";
+import { SessionStore } from "@windower/engine";
 import type { Command } from "commander";
-import { withDaemon } from "../daemon.js";
-import { printResult } from "../output.js";
+import { printError, printResult } from "../output.js";
 
-/** `windower status <sessionId> [--json]` — contracts/cli.md. Returns the current `RecordingSession`. */
+/**
+ * `windower status <sessionId> [--json]` — contracts/cli.md. Returns the
+ * current `RecordingSession`. Per `phase-20-daemon-optional.md`: a "plain
+ * disk read" — `~/.windower/sessions/<id>.json` is the durable record, so
+ * this reads `SessionStore` directly rather than going through any backend
+ * (no daemon started, contacted, or required).
+ */
 export function registerStatusCommand(program: Command): void {
   program
     .command("status <sessionId>")
@@ -11,10 +17,17 @@ export function registerStatusCommand(program: Command): void {
     .option("--json", "output JSON")
     .action(async (sessionId: string, opts: { json?: boolean }) => {
       const json = Boolean(opts.json);
-      await withDaemon(json, async (client) => {
-        const session = await client.getSession({ sessionId });
+      try {
+        const store = new SessionStore();
+        await store.load();
+        const session = store.get(sessionId);
+        if (!session) {
+          throw new DaemonError("SESSION_NOT_FOUND", `Session "${sessionId}" not found`);
+        }
         printResult(json, session, renderStatus);
-      });
+      } catch (err) {
+        process.exitCode = printError(json, err);
+      }
     });
 }
 

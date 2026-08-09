@@ -1,6 +1,6 @@
 import { DaemonError, type DaemonRequestPermissionResult } from "@windower/core";
 import type { Command } from "commander";
-import { withDaemon } from "../daemon.js";
+import { resolveForcedMode, withBackend } from "../backend.js";
 import { printError, printResult } from "../output.js";
 
 const PERMISSION_KINDS = ["screenRecording", "accessibility", "microphone"] as const;
@@ -23,7 +23,7 @@ export function registerPermissionCommand(program: Command): void {
     .command("request <kind>")
     .description("Explicitly trigger the OS permission prompt for one capability")
     .option("--json", "output JSON")
-    .action(async (kind: string, opts: { json?: boolean }) => {
+    .action(async (kind: string, opts: { json?: boolean }, cmd: Command) => {
       const json = Boolean(opts.json);
 
       if (!isPermissionKind(kind)) {
@@ -35,10 +35,16 @@ export function registerPermissionCommand(program: Command): void {
         return;
       }
 
-      await withDaemon(json, async (client) => {
-        const result = await client.requestPermission({ kind });
-        printResult(json, result, (data) => renderPermissionResult(kind, data));
-      });
+      const forcedMode = resolveForcedMode(cmd.optsWithGlobals());
+      await withBackend(
+        "permission request",
+        json,
+        async (backend) => {
+          const result = await backend.requestPermission({ kind });
+          printResult(json, result, (data) => renderPermissionResult(kind, data));
+        },
+        { forcedMode },
+      );
     });
 }
 

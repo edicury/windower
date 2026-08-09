@@ -14,11 +14,12 @@ import {
   writeConfig,
 } from "@windower/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { OperatorRunManager } from "./operator-run-manager.js";
+import { OperatorRunEngine } from "./operator-run-engine.js";
 import { OperatorRunStore, operatorRunFilePath } from "./operator-run-store.js";
 import { PassthroughService } from "./passthrough.js";
+import { RecordingEngine } from "./recording-engine.js";
+import type { RequestContext } from "./request-context.js";
 import { SecretResolver } from "./secret-resolver.js";
-import { SessionManager } from "./session-manager.js";
 import { SessionStore } from "./session-store.js";
 import { createFakeSidecarFactory } from "./test-helpers/fake-sidecar-factory.js";
 
@@ -38,7 +39,7 @@ type RunnerImpl = (options: OperatorRunOptions, deps: OperatorDeps) => Promise<O
 
 const SUCCEED: RunnerImpl = async () => ({ state: "succeeded", steps: [], summary: "done" });
 
-describe("OperatorRunManager", () => {
+describe("OperatorRunEngine", () => {
   let home: string;
   let originalHome: string | undefined;
 
@@ -70,7 +71,7 @@ describe("OperatorRunManager", () => {
       targets: [DISPLAY_TARGET],
       capabilities: options.capabilities,
     });
-    const sessionManager = new SessionManager({ store: sessionStore, spawnSidecar });
+    const sessionManager = new RecordingEngine({ store: sessionStore, spawnSidecar });
     const passthrough = new PassthroughService(spawnSidecar);
     const seen: Array<{ options: OperatorRunOptions; deps: OperatorDeps }> = [];
     const impl = options.impl ?? SUCCEED;
@@ -78,7 +79,7 @@ describe("OperatorRunManager", () => {
       seen.push({ options: runOptions, deps });
       return impl(runOptions, deps);
     };
-    const manager = new OperatorRunManager({
+    const manager = new OperatorRunEngine({
       store,
       sessionManager,
       passthrough,
@@ -276,6 +277,97 @@ describe("OperatorRunManager", () => {
     const raw = await readFile(operatorRunFilePath(runId), "utf8");
     expect(raw).not.toContain("sup3r-s3cret");
     expect(raw).toContain("{{password}}");
+  });
+
+  // ---- Root fix for the phase-20 bug: a connection's hello env snapshot
+  // must reach resolveModel, not the daemon process's own frozen env. ----
+
+  it("threads the calling connection's hello env snapshot into the loop's options.env, not the daemon's own process.env", async () => {
+    let seenEnv: NodeJS.ProcessEnv | undefined;
+    // Deliberately empty — this is the daemon's *own* environment. The
+    // point of this test is that the run must NOT fall back to it.
+    const { manager } = makeManager({
+      env: {},
+      impl: async (options) => {
+        seenEnv = options.env;
+        return { state: "succeeded", steps: [] };
+      },
+    });
+
+    const context: RequestContext = {
+      env: { ANTHROPIC_API_KEY: "caller-shells-key" },
+      resolvedSecrets: [],
+      cwd: "/wherever",
+      windowerHome: "/wherever/.windower",
+    };
+
+    const { runId } = await manager.runOperator({ task: "do a thing", model: MODEL }, context);
+    await manager.whenSettled(runId);
+
+    expect(seenEnv).toEqual({ ANTHROPIC_API_KEY: "caller-shells-key" });
+  });
+
+  it("snapshots the connection's env at run start — a mutation to the context object afterward must not affect an in-flight run", async () => {
+    let seenEnv: NodeJS.ProcessEnv | undefined;
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { manager } = makeManager({
+      env: {},
+      impl: async (options) => {
+        await gate;
+        seenEnv = options.env;
+        return { state: "succeeded", steps: [] };
+      },
+    });
+
+    const context: RequestContext = {
+      env: { ANTHROPIC_API_KEY: "original-value" },
+      resolvedSecrets: [],
+      cwd: "/wherever",
+      windowerHome: "/wherever/.windower",
+    };
+
+    const { runId } = await manager.runOperator({ task: "do a thing", model: MODEL }, context);
+    // Simulates the connection disconnecting and its context object being
+    // mutated/reused after the run started — a detached run outlives its
+    // connection (phase-20-daemon-optional.md).
+    context.env.ANTHROPIC_API_KEY = "mutated-after-snapshot";
+    release();
+    await manager.whenSettled(runId);
+
+    expect(seenEnv?.ANTHROPIC_API_KEY).toBe("original-value");
+  });
+
+  it("prefers a forwarded (connection-resolved) secret value over the daemon's own env resolution", async () => {
+    let handed: string | undefined;
+    const { manager } = makeManager({
+      env: { MY_PASSWORD: "daemons-own-value" },
+      impl: async (options) => {
+        handed = options.secrets[0]?.value;
+        return { state: "succeeded", steps: [] };
+      },
+    });
+
+    const context: RequestContext = {
+      env: {},
+      resolvedSecrets: [{ name: "password", value: "callers-value" }],
+      cwd: "/wherever",
+      windowerHome: "/wherever/.windower",
+    };
+
+    const { runId } = await manager.runOperator(
+      {
+        task: "log in with {{password}}",
+        model: MODEL,
+        secrets: [{ name: "password", source: "env", ref: "MY_PASSWORD" }],
+      },
+      context,
+    );
+    await manager.whenSettled(runId);
+
+    expect(handed).toBe("callers-value");
   });
 
   it("surfaces UNSUPPORTED_CAPABILITY instead of crashing when the sidecar lacks a capability", async () => {

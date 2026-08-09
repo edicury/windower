@@ -14,6 +14,16 @@ import { PermissionReportSchema, PermissionStatusSchema } from "../schemas/permi
 import { RectSchema } from "../schemas/rect.js";
 import { RecordingSessionSchema, SessionStateSchema } from "../schemas/session.js";
 import { VideoSettingsSchema } from "../schemas/video-settings.js";
+import {
+  type DaemonHelloRequest,
+  DaemonHelloRequestSchema,
+  type DaemonHelloResult,
+  DaemonHelloResultSchema,
+  type DaemonInfoParams,
+  DaemonInfoParamsSchema,
+  type DaemonInfoResult,
+  DaemonInfoResultSchema,
+} from "./protocol.js";
 
 /**
  * The daemon RPC method table — contracts/mcp-tools.md operations, spoken
@@ -35,6 +45,10 @@ export const DaemonErrorCodeSchema = z.enum([
   // Phase 19 (operator): daemon-only, mirrors SESSION_NOT_FOUND for
   // `get_operator_run`/`abort_operator_run` against an unknown runId.
   "OPERATOR_RUN_NOT_FOUND",
+  // Phase 20 (daemon-optional): `hello` handshake outcomes. See
+  // contracts/daemon-rpc.md's "Error codes" section.
+  "DAEMON_VERSION_MISMATCH",
+  "DAEMON_BUSY",
 ]);
 export type DaemonErrorCode = z.infer<typeof DaemonErrorCodeSchema>;
 
@@ -205,7 +219,15 @@ export type ListOperatorRunsResult = z.infer<typeof ListOperatorRunsResultSchema
 // a running daemon to exit over the wire (SIGTERM works but is not
 // reachable from a plain RPC client). Mirrors contracts/mcp-tools.md-style
 // method shape; see that file for the prominent note on this addition.
-export const ShutdownParamsSchema = z.object({});
+// `mode` added Phase 20 (contracts/daemon-rpc.md "Graceful shutdown"):
+// `"graceful"` (default) drains connections, finalizes in-flight
+// recordings/operator runs, then exits; `"immediate"` skips the drain and
+// exits as fast as possible, leaving `recoverCrashedSessions()` to clean up
+// anything left `recording`. Optional so an old (pre-Phase-20) daemon still
+// accepts a bare `{}` shutdown call unchanged.
+export const ShutdownParamsSchema = z.object({
+  mode: z.enum(["graceful", "immediate"]).optional(),
+});
 export type ShutdownParams = z.infer<typeof ShutdownParamsSchema>;
 
 export const ShutdownResultSchema = z.object({
@@ -213,9 +235,22 @@ export const ShutdownResultSchema = z.object({
 });
 export type ShutdownResult = z.infer<typeof ShutdownResultSchema>;
 
+// ---- hello / daemon_info ----
+// Version handshake, contracts/daemon-rpc.md. `hello` is sent once per
+// connection before any other RPC; `daemon_info` is a no-op probe with no
+// handshake/env-snapshot side effects, used by `windower doctor`. Schemas
+// live in `protocol.ts` alongside `DAEMON_PROTOCOL_VERSION` (and are
+// re-exported from there via `index.ts`'s barrel, not re-exported again
+// here) so they slot into the same DaemonMethodMap/DAEMON_METHOD_SCHEMAS
+// pattern as every other method below.
+type HelloParams = DaemonHelloRequest;
+type HelloResult = DaemonHelloResult;
+
 // ---- Method table ----
 
 export const DAEMON_METHODS = [
+  "hello",
+  "daemon_info",
   "list_targets",
   "check_permissions",
   "request_permission",
@@ -234,6 +269,8 @@ export const DAEMON_METHODS = [
 export type DaemonMethod = (typeof DAEMON_METHODS)[number];
 
 export interface DaemonMethodMap {
+  hello: { params: HelloParams; result: HelloResult };
+  daemon_info: { params: DaemonInfoParams; result: DaemonInfoResult };
   list_targets: { params: ListTargetsParams; result: ListTargetsResult };
   check_permissions: { params: CheckPermissionsParams; result: CheckPermissionsResult };
   request_permission: {
@@ -259,6 +296,8 @@ export const DAEMON_METHOD_SCHEMAS: {
     result: z.ZodType<DaemonMethodMap[M]["result"]>;
   };
 } = {
+  hello: { params: DaemonHelloRequestSchema, result: DaemonHelloResultSchema },
+  daemon_info: { params: DaemonInfoParamsSchema, result: DaemonInfoResultSchema },
   list_targets: { params: ListTargetsParamsSchema, result: ListTargetsResultSchema },
   check_permissions: { params: CheckPermissionsParamsSchema, result: CheckPermissionsResultSchema },
   request_permission: {

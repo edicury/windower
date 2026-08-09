@@ -66,10 +66,13 @@ type RecordingSession = {
   outputPath?: string;         // present once finalized
   manifestPath?: string;       // present once finalized
   eventTimelinePath?: string;  // present once finalized
+  owner?: { pid: number; startedAt: string }; // Phase 20 — process that created/owns this session
 }
 ```
 
 Persisted at `~/.windower/sessions/<id>.json`, updated on every state transition — this is what makes `windower status <id>` and crash recovery work without the daemon holding all state only in memory.
+
+- `owner` (Phase 20, optional so 0.1.x session files without it still parse): identifies the process that created the session, so a process only mutates (transitions/finalizes) sessions it owns or whose owner pid is confirmed dead. This is what makes the `attach`-mode local `stop`/`cancel` fallback safe — if nothing is listening on the socket at `stop` time, the CLI checks `owner.pid` liveness itself before marking the session `failed`/`canceled` locally, instead of spawning a fresh daemon that would just answer `SESSION_NOT_FOUND`. `startedAt` here is the owner process's start time (not the session's), used to disambiguate a dead pid from a live unrelated process that happens to have been assigned the same pid after reuse.
 
 ## OutputManifest (`manifest.json`, written next to the video file)
 
@@ -198,8 +201,104 @@ type PermissionReport = {
   daemonRunning: boolean;
   sidecarAvailable: boolean;
   sidecarVersion?: string;
+
+  // Phase 20 additions — all optional so an older client parsing a response
+  // written by a pre-Phase-20 daemon (or vice versa) still succeeds. A field
+  // being absent means "reporter predates this field," not "false"/"unknown."
+  daemon?: {
+    running: boolean;
+    pid?: number;
+    version?: string;
+    protocolVersion?: number;
+    startedAt?: string;              // ISO 8601, from daemon.json
+    ageSeconds?: number;              // derived: now - startedAt, computed by the reporter
+    socketPath?: string;
+    versionMatchesClient?: boolean;   // daemon.version === client.version
+  };
+  client?: {
+    name: string;                     // e.g. "windower-cli" | "windower-mcp-server"
+    version: string;
+    protocolVersion: number;
+  };
+  sidecar?: {
+    available: boolean;
+    version?: string;
+    resolvedPath?: string;
+    source?: "env-override" | "dev-build" | "npm-package";
+    expectedVersion?: string;
+  };
+  windowerHome?: {
+    path: string;
+    fromEnvOverride: boolean;         // true if WINDOWER_HOME was set, false if defaulted
+  };
+  outputDir?: {
+    path: string;
+    writable: boolean;
+  };
+  activeSessions?: number;
+  activeRuns?: number;
+
+  // API-key env var presence only — booleans, never values. A row reading
+  // "present in CLI: yes / present in daemon: no" is the one-line
+  // self-diagnosis of the frozen-daemon-env bug that motivated Phase 20.
+  apiKeyEnvVars?: Array<{
+    name: string;                     // e.g. "ANTHROPIC_API_KEY", or the configured apiKeyEnvVar
+    presentInClient: boolean;
+    presentInDaemon: boolean;         // false/omitted-effectively-false when no daemon is running
+  }>;
 }
 ```
+
+**Where `apiKeyEnvVars` lives:** modeled on `PermissionReport` itself, not a separate `DoctorReport` type. `packages/core/src/schemas/permissions.ts` defines exactly one report schema (`PermissionReportSchema`), consumed by both `windower doctor` and the `check_permissions` MCP tool (`GetPermissionsResultSchema = PermissionReportSchema.partial()` in `packages/core/src/protocol/methods.ts` — the sidecar's own permission response is a partial view over the same shape). Introducing a sibling `DoctorReport` type would fork that single-schema convention for a feature (env-var-presence diffing) that is just more permission/environment diagnostics, and `doctor`'s job in this codebase has always been "render `PermissionReport` plus daemon reachability" — see `contracts/cli.md`'s existing `doctor` section. Every new field above is optional for the same reason the existing ones already vary by reporter (`sidecarVersion` is only known once a sidecar has responded): different callers (sidecar `GetPermissionsResultSchema`, CLI-local `doctor`, daemon-backed `check_permissions`) populate different subsets of the same object, so exhaustiveness was never assumed even pre-Phase-20.
+
+## Daemon state file (`~/.windower/daemon.json`)
+
+Written by the daemon on successful `listen()`, unlinked on graceful shutdown. Lets `doctor` and stale-socket detection (`ensureDaemonRunning`) learn daemon identity and check pid liveness without connecting to the socket — see `specs/001-windower-mvp/tasks/phase-20-daemon-optional.md`.
+
+```ts
+type DaemonStateFile = {
+  pid: number;
+  version: string;                    // from packageVersion(), not a hardcoded constant
+  protocolVersion: number;            // DAEMON_PROTOCOL_VERSION at listen time
+  startedAt: string;                  // ISO 8601
+  socketPath: string;
+  windowerHome: string;               // resolved WINDOWER_HOME the daemon is operating against
+  execPath: string;                   // process.execPath — for diagnosing which node ran the daemon
+  entryPath: string;                  // resolved path of the daemon's entry module
+}
+```
+
+## DaemonHello / DaemonInfo (`hello` / `daemon_info` RPC payloads)
+
+The version-handshake payloads exchanged when a client connects to the daemon socket, per `contracts/daemon-rpc.md`. Defined here — not only in the contract — per this repo's convention that Zod shapes are the source of truth in `data-model.md` even when the RPC method semantics (request/response framing, error codes) live in `contracts/*.md` (see `OperatorRun` above, whose method-level docs live in `contracts/mcp-tools.md` / `contracts/cli.md` but whose shape is defined here).
+
+```ts
+// Client -> daemon, first call on every new connection.
+type DaemonHelloRequest = {
+  clientName: string;                 // e.g. "windower-cli" | "windower-mcp-server"
+  clientVersion: string;
+  protocolVersion: number;            // client's DAEMON_PROTOCOL_VERSION
+  windowerHome: string;                // resolved WINDOWER_HOME, compared against the daemon's — mismatch is an error
+  env?: {                              // scoped env snapshot, never process.env wholesale — see "Settled decisions" in phase-20-daemon-optional.md
+    apiKeyEnvVar?: string;             // name of the model API key var, e.g. "ANTHROPIC_API_KEY"
+    apiKeyValue?: string;              // the value itself — only ever sent for detached operate runs; never logged, never persisted
+    secretRefs?: Array<{ name: string; value: string }>; // resolved `env:`-sourced SecretRefs named in this request only
+  };
+}
+
+// Daemon -> client, response to `hello`; also the shape of `daemon_info` (a
+// no-op probe callable without a full hello, used by `doctor` to report
+// daemon identity without mutating connection state).
+type DaemonInfo = {
+  pid: number;
+  version: string;
+  protocolVersion: number;
+  startedAt: string;                  // ISO 8601
+  windowerHome: string;
+}
+```
+
+`DaemonHelloRequest.env` is the one place a secret value is allowed to cross the socket, and only because the socket is already `0600`, same-UID-only, unauthenticated by design (see phase-20 "Settled decisions"). Blocking `operate` (the default) never populates it; only `operate --detach` and MCP's `run_operator` do.
 
 ## WindowerConfig (`~/.windower/config.json`)
 

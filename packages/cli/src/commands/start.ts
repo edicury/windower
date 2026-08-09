@@ -1,6 +1,6 @@
 import type { StartRecordingResult } from "@windower/core";
 import type { Command } from "commander";
-import { withDaemon } from "../daemon.js";
+import { resolveForcedMode, withBackend } from "../backend.js";
 import { printResult } from "../output.js";
 import {
   type SharedRecordingOpts,
@@ -10,7 +10,8 @@ import {
 
 /**
  * `windower start --target <id> [--kind window|display|region] [--region
- * x,y,w,h] [video/audio flags] [--json]` — contracts/cli.md.
+ * x,y,w,h] [video/audio flags] [--json]` — contracts/cli.md. `daemon` mode
+ * (auto-spawns if needed).
  *
  * Per CLAUDE.md's "two-call recording pattern": starts a session in the
  * background daemon and returns immediately with `{ sessionId }` — no
@@ -20,13 +21,19 @@ import {
 export function registerStartCommand(program: Command): void {
   addSharedRecordingFlags(
     program.command("start").description("Start a recording session in the background daemon"),
-  ).action(async (opts: SharedRecordingOpts) => {
+  ).action(async (opts: SharedRecordingOpts, cmd: Command) => {
     const json = Boolean(opts.json);
-    await withDaemon(json, async (client) => {
-      const params = buildStartRecordingParams(opts);
-      const result = await client.startRecording(params);
-      printResult(json, result, renderStartResult);
-    });
+    const forcedMode = resolveForcedMode(cmd.optsWithGlobals());
+    await withBackend(
+      "start",
+      json,
+      async (backend) => {
+        const params = buildStartRecordingParams(opts);
+        const result = await backend.startRecording(params);
+        printResult(json, result, renderStartResult);
+      },
+      { forcedMode },
+    );
   });
 }
 

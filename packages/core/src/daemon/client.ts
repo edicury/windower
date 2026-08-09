@@ -123,8 +123,27 @@ export class DaemonClient {
   }
 
   /** Asks a running daemon to close its socket and exit. See methods.ts's `shutdown` note. */
-  shutdown(): Promise<DaemonMethodMap["shutdown"]["result"]> {
-    return this.call("shutdown", {});
+  shutdown(
+    params: DaemonMethodMap["shutdown"]["params"] = {},
+  ): Promise<DaemonMethodMap["shutdown"]["result"]> {
+    return this.call("shutdown", params);
+  }
+
+  /**
+   * Phase 20 version handshake. Sent once per connection by
+   * `ensureDaemonRunning` before any other RPC — see
+   * `contracts/daemon-rpc.md`'s `hello`.
+   */
+  hello(params: DaemonMethodMap["hello"]["params"]): Promise<DaemonMethodMap["hello"]["result"]> {
+    return this.call("hello", params);
+  }
+
+  /**
+   * Read-only daemon identity probe — no handshake, no env snapshot, no
+   * side effects. Used by `windower doctor`.
+   */
+  daemonInfo(): Promise<DaemonMethodMap["daemon_info"]["result"]> {
+    return this.call("daemon_info", {});
   }
 
   /**

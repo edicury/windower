@@ -7,7 +7,7 @@ import {
   type SpawnSidecarOptions,
   createFakeSidecarPair,
 } from "@windower/core";
-import type { SidecarFactory, SidecarHandle } from "../session-manager.js";
+import type { SidecarFactory, SidecarHandle } from "@windower/engine";
 
 export interface SpawnedFakeSidecar {
   client: SidecarClient;
@@ -22,7 +22,12 @@ export interface SpawnedFakeSidecar {
  * resolution, passthrough ops) see the same world as session-owning ones.
  * Records each spawn so tests can reach into a specific session's fake
  * sidecar (e.g. to call `emitCaptureEnded`) or manually fire the `onExit`
- * callback `SessionManager` registered, simulating a real process crash.
+ * callback `RecordingEngine` registered, simulating a real process crash.
+ *
+ * Duplicated (not imported) from `@windower/engine`'s own copy
+ * (`packages/engine/src/test-helpers/fake-sidecar-factory.ts`) — this
+ * package's own tests (`server.test.ts`) need it and test helpers aren't
+ * part of a package's public exports.
  */
 export function createFakeSidecarFactory(options: {
   targets?: CaptureTarget[];

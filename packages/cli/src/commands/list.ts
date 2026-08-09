@@ -1,16 +1,14 @@
 import type { CaptureTarget, ListSessionsResult, RecordingSession } from "@windower/core";
+import { SessionStore } from "@windower/engine";
 import type { Command } from "commander";
-import { withDaemon } from "../daemon.js";
-import { printResult } from "../output.js";
+import { printError, printResult } from "../output.js";
 
 /**
  * `windower list [--state recording|finalized|...] [--json]` — contracts/cli.md.
- * Goes through the daemon's `list_sessions` RPC (`DaemonClient.listSessions`)
- * rather than reading `~/.windower/sessions/*.json` directly — per
- * CLAUDE.md's "session state is disk-persisted" note, `apps/daemon`'s
- * `SessionStore` already owns that directory and re-reads from disk when
- * not cached, so the daemon stays the single source of truth even for a
- * CLI command that's "really" about files on disk.
+ * Per `phase-20-daemon-optional.md`: a "plain disk read" — reads
+ * `~/.windower/sessions/*.json` directly via `SessionStore` (`@windower/engine`),
+ * no daemon started, contacted, or required, so `windower list` keeps
+ * working even with no daemon running (or ever having run).
  */
 export function registerListCommand(program: Command): void {
   program
@@ -20,12 +18,16 @@ export function registerListCommand(program: Command): void {
     .option("--json", "output JSON")
     .action(async (opts: { state?: string; json?: boolean }) => {
       const json = Boolean(opts.json);
-      await withDaemon(json, async (client) => {
+      try {
+        const store = new SessionStore();
+        await store.load();
         const state = opts.state as RecordingSession["state"] | undefined;
-        const result = await client.listSessions(state ? { state } : {});
-        const sorted: ListSessionsResult = { sessions: sortByStartedAtDesc(result.sessions) };
+        const sessions = store.list(state);
+        const sorted: ListSessionsResult = { sessions: sortByStartedAtDesc(sessions) };
         printResult(json, sorted, renderSessionsTable);
-      });
+      } catch (err) {
+        process.exitCode = printError(json, err);
+      }
     });
 }
 

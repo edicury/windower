@@ -1,6 +1,6 @@
 import { DaemonError, type DaemonResizeWindowResult, type Rect } from "@windower/core";
 import type { Command } from "commander";
-import { withDaemon } from "../daemon.js";
+import { resolveForcedMode, withBackend } from "../backend.js";
 import { printError, printResult } from "../output.js";
 
 interface ResizeOpts {
@@ -46,7 +46,7 @@ export function registerResizeCommand(program: Command): void {
     .option("--x <px>", "x position in pixels (default: current position)")
     .option("--y <px>", "y position in pixels (default: current position)")
     .option("--json", "output JSON")
-    .action(async (opts: ResizeOpts) => {
+    .action(async (opts: ResizeOpts, cmd: Command) => {
       const json = Boolean(opts.json);
 
       let width: number;
@@ -63,24 +63,30 @@ export function registerResizeCommand(program: Command): void {
         return;
       }
 
-      await withDaemon(json, async (client) => {
-        if (x === undefined || y === undefined) {
-          const { targets } = await client.listTargets({});
-          const target = targets.find((t) => t.kind === "window" && t.id === opts.window);
-          if (!target) {
-            throw new DaemonError(
-              "INVALID_ARGS",
-              `Unknown window target "${opts.window}" — run \`windower targets\` first`,
-            );
+      const forcedMode = resolveForcedMode(cmd.optsWithGlobals());
+      await withBackend(
+        "resize",
+        json,
+        async (backend) => {
+          if (x === undefined || y === undefined) {
+            const { targets } = await backend.listTargets({});
+            const target = targets.find((t) => t.kind === "window" && t.id === opts.window);
+            if (!target) {
+              throw new DaemonError(
+                "INVALID_ARGS",
+                `Unknown window target "${opts.window}" — run \`windower targets\` first`,
+              );
+            }
+            x ??= target.bounds.x;
+            y ??= target.bounds.y;
           }
-          x ??= target.bounds.x;
-          y ??= target.bounds.y;
-        }
 
-        const bounds: Rect = { x, y, width, height };
-        const result = await client.resizeWindow({ targetId: opts.window, bounds });
-        printResult(json, result, (data) => renderResizeResult(opts.window, data));
-      });
+          const bounds: Rect = { x, y, width, height };
+          const result = await backend.resizeWindow({ targetId: opts.window, bounds });
+          printResult(json, result, (data) => renderResizeResult(opts.window, data));
+        },
+        { forcedMode },
+      );
     });
 }
 

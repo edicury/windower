@@ -1,5 +1,6 @@
 import type { Writable } from "node:stream";
-import { type DaemonClient, DaemonError, ensureDaemonRunning } from "@windower/core";
+import { DaemonError, type WindowerBackend } from "@windower/core";
+import { LocalWindower } from "@windower/engine";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerResizeCommand, renderResizeResult } from "./resize.js";
@@ -31,14 +32,16 @@ describe("renderResizeResult", () => {
 });
 
 // `windower resize` propagation of a DaemonError all the way through the
-// real command action (`registerResizeCommand`'s `.action(...)`, `withDaemon`,
+// real command action (`registerResizeCommand`'s `.action(...)`, `withBackend`,
 // `printError`) — not just `renderResizeResult`'s success-path rendering.
-// `ensureDaemonRunning` is mocked (it spawns a real daemon process, which
-// unit tests can't do) so the resolved `DaemonClient` is a fake whose
-// `resizeWindow` rejects with the taxonomy code under test.
-vi.mock("@windower/core", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@windower/core")>();
-  return { ...actual, ensureDaemonRunning: vi.fn() };
+// `resize` is `local` mode (contracts/cli.md's Daemon policy: a one-shot
+// transient sidecar spawn, no daemon), so `withBackend` constructs a real
+// `LocalWindower` — mocked here (it would otherwise spawn a real sidecar
+// process, which a unit test can't do) so its `resizeWindow` rejects with
+// the taxonomy code under test.
+vi.mock("@windower/engine", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@windower/engine")>();
+  return { ...actual, LocalWindower: vi.fn() };
 });
 
 function spyOnWrite(stream: Writable): { calls: string[]; restore: () => void } {
@@ -51,8 +54,8 @@ function spyOnWrite(stream: Writable): { calls: string[]; restore: () => void } 
   return { calls, restore: () => spy.mockRestore() };
 }
 
-function fakeDaemonClient(resizeWindow: DaemonClient["resizeWindow"]): DaemonClient {
-  return { dispose: () => {}, resizeWindow } as unknown as DaemonClient;
+function fakeLocalWindower(resizeWindow: WindowerBackend["resizeWindow"]): WindowerBackend {
+  return { resizeWindow } as unknown as WindowerBackend;
 }
 
 async function runResize(args: string[]): Promise<void> {
@@ -63,7 +66,7 @@ async function runResize(args: string[]): Promise<void> {
 }
 
 describe("registerResizeCommand (CLI propagation of DaemonError)", () => {
-  const mockedEnsureDaemonRunning = vi.mocked(ensureDaemonRunning);
+  const mockedLocalWindower = vi.mocked(LocalWindower);
   let stderrWrite: ReturnType<typeof spyOnWrite>;
   let originalExitCode: number | string | null | undefined;
 
@@ -75,18 +78,19 @@ describe("registerResizeCommand (CLI propagation of DaemonError)", () => {
   afterEach(() => {
     stderrWrite.restore();
     process.exitCode = originalExitCode as number | string | undefined;
-    mockedEnsureDaemonRunning.mockReset();
+    mockedLocalWindower.mockReset();
   });
 
   it("surfaces RESIZE_UNSUPPORTED (window-control capability absent) with the generic failure exit code", async () => {
-    mockedEnsureDaemonRunning.mockResolvedValue(
-      fakeDaemonClient(
-        vi
-          .fn()
-          .mockRejectedValue(
-            new DaemonError("RESIZE_UNSUPPORTED", "Backend does not support window-control"),
-          ),
-      ),
+    mockedLocalWindower.mockImplementation(
+      () =>
+        fakeLocalWindower(
+          vi
+            .fn()
+            .mockRejectedValue(
+              new DaemonError("RESIZE_UNSUPPORTED", "Backend does not support window-control"),
+            ),
+        ) as unknown as LocalWindower,
     );
 
     await runResize([
@@ -108,14 +112,15 @@ describe("registerResizeCommand (CLI propagation of DaemonError)", () => {
   });
 
   it("surfaces UNSUPPORTED_CAPABILITY with the generic failure exit code", async () => {
-    mockedEnsureDaemonRunning.mockResolvedValue(
-      fakeDaemonClient(
-        vi
-          .fn()
-          .mockRejectedValue(
-            new DaemonError("UNSUPPORTED_CAPABILITY", "Sidecar does not advertise resizeWindow"),
-          ),
-      ),
+    mockedLocalWindower.mockImplementation(
+      () =>
+        fakeLocalWindower(
+          vi
+            .fn()
+            .mockRejectedValue(
+              new DaemonError("UNSUPPORTED_CAPABILITY", "Sidecar does not advertise resizeWindow"),
+            ),
+        ) as unknown as LocalWindower,
     );
 
     await runResize([
@@ -137,14 +142,15 @@ describe("registerResizeCommand (CLI propagation of DaemonError)", () => {
   });
 
   it("surfaces PERMISSION_DENIED (Accessibility not granted, window-control gated) with its own exit code", async () => {
-    mockedEnsureDaemonRunning.mockResolvedValue(
-      fakeDaemonClient(
-        vi
-          .fn()
-          .mockRejectedValue(
-            new DaemonError("PERMISSION_DENIED", "Accessibility permission not granted"),
-          ),
-      ),
+    mockedLocalWindower.mockImplementation(
+      () =>
+        fakeLocalWindower(
+          vi
+            .fn()
+            .mockRejectedValue(
+              new DaemonError("PERMISSION_DENIED", "Accessibility permission not granted"),
+            ),
+        ) as unknown as LocalWindower,
     );
 
     await runResize([

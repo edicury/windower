@@ -20,6 +20,16 @@ import { DaemonError, type DaemonErrorCode } from "@windower/core";
  *       Accessibility, Microphone — isn't granted; kept distinct from the
  *       generic failure code so a script/agent can react by calling
  *       `windower permission request` instead of just failing)
+ *   6 — DAEMON_BUSY (Phase 20: a version-mismatch auto-restart was refused
+ *       because a session or operator run is still active; recoverable by
+ *       clearing the in-flight work — `windower stop <id>` / `windower
+ *       operate abort <runId>` — or forcing with `windower daemon restart
+ *       --force`, per contracts/daemon-rpc.md)
+ *   7 — DAEMON_VERSION_MISMATCH (Phase 20: the connected daemon's protocol
+ *       version disagrees with the client's and an auto-restart either
+ *       wasn't attempted or didn't resolve it, including a `windowerHome`
+ *       disagreement surfaced during `hello`; recoverable by `windower
+ *       daemon restart`)
  *
  * Phase 19 (`windower operate`) deliberately adds **no** new codes —
  * contracts/cli.md: "No new exit codes are introduced for `operate`". The
@@ -40,12 +50,16 @@ export const EXIT_DAEMON_UNREACHABLE = 2;
 export const EXIT_INVALID_ARGS = 3;
 export const EXIT_OUTPUT_DIR_NOT_WRITABLE = 4;
 export const EXIT_PERMISSION_DENIED = 5;
+export const EXIT_DAEMON_BUSY = 6;
+export const EXIT_DAEMON_VERSION_MISMATCH = 7;
 
 const DAEMON_ERROR_EXIT_CODES: Partial<Record<DaemonErrorCode, number>> = {
   DAEMON_UNREACHABLE: EXIT_DAEMON_UNREACHABLE,
   INVALID_ARGS: EXIT_INVALID_ARGS,
   OUTPUT_DIR_NOT_WRITABLE: EXIT_OUTPUT_DIR_NOT_WRITABLE,
   PERMISSION_DENIED: EXIT_PERMISSION_DENIED,
+  DAEMON_BUSY: EXIT_DAEMON_BUSY,
+  DAEMON_VERSION_MISMATCH: EXIT_DAEMON_VERSION_MISMATCH,
 };
 
 /** Maps any thrown error to a process exit code. Unknown/non-`DaemonError` errors get `EXIT_GENERIC_FAILURE`. */

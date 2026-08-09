@@ -5,3 +5,7 @@ export * from "./jsonrpc.js";
 export * from "./client.js";
 export * from "./connect.js";
 export * from "./config-file.js";
+export * from "./protocol.js";
+export * from "./state-file.js";
+export * from "./backend.js";
+export * from "./policy.js";

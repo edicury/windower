@@ -11,8 +11,9 @@ import {
   writeConfig,
 } from "@windower/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { SessionManager, type SessionManagerOptions } from "./session-manager.js";
+import { RecordingEngine, type RecordingEngineOptions } from "./recording-engine.js";
 import { SessionStore } from "./session-store.js";
+import { FileTargetLock } from "./target-lock.js";
 import { createFakeSidecarFactory } from "./test-helpers/fake-sidecar-factory.js";
 
 const DISPLAY_TARGET: CaptureTarget = {
@@ -35,7 +36,7 @@ const WINDOW_TARGET: CaptureTarget = {
   resizable: true,
 };
 
-describe("SessionManager", () => {
+describe("RecordingEngine", () => {
   let home: string;
   let originalHome: string | undefined;
 
@@ -59,7 +60,7 @@ describe("SessionManager", () => {
   function makeManager(targets: CaptureTarget[] = [DISPLAY_TARGET, WINDOW_TARGET]) {
     const store = new SessionStore();
     const { spawnSidecar, spawns } = createFakeSidecarFactory({ targets });
-    const manager = new SessionManager({ store, spawnSidecar });
+    const manager = new RecordingEngine({ store, spawnSidecar });
     return { manager, store, spawns };
   }
 
@@ -161,7 +162,7 @@ describe("SessionManager", () => {
     await store.load();
 
     const { spawnSidecar } = createFakeSidecarFactory({ targets: [] });
-    const manager = new SessionManager({ store, spawnSidecar });
+    const manager = new RecordingEngine({ store, spawnSidecar });
     await manager.recoverCrashedSessions();
 
     const session = manager.getSession({ sessionId: "orphan-1" });
@@ -230,7 +231,7 @@ describe("SessionManager", () => {
         "eventTimeline.mouse",
       ],
     });
-    const manager = new SessionManager({ store, spawnSidecar });
+    const manager = new RecordingEngine({ store, spawnSidecar });
 
     const { sessionId } = await manager.startRecording({ target: DISPLAY_TARGET });
     const spawn = spawns.at(-1);
@@ -248,14 +249,14 @@ describe("SessionManager", () => {
 
   describe("narration", () => {
     function makeManagerWithNarration(overrides: {
-      validateNarrationFile?: SessionManagerOptions["validateNarrationFile"];
-      muxNarration?: SessionManagerOptions["muxNarration"];
+      validateNarrationFile?: RecordingEngineOptions["validateNarrationFile"];
+      muxNarration?: RecordingEngineOptions["muxNarration"];
     }) {
       const store = new SessionStore();
       const { spawnSidecar } = createFakeSidecarFactory({
         targets: [DISPLAY_TARGET, WINDOW_TARGET],
       });
-      const manager = new SessionManager({ store, spawnSidecar, ...overrides });
+      const manager = new RecordingEngine({ store, spawnSidecar, ...overrides });
       return { manager, store };
     }
 
@@ -378,6 +379,67 @@ describe("SessionManager", () => {
       const result = await manager.stopRecording({ sessionId });
 
       expect(() => OutputManifestSchema.parse(result.manifest)).not.toThrow();
+    });
+  });
+
+  // Phase 20 "Cross-process safety": two `RecordingEngine` instances backed
+  // by the real `FileTargetLock` (rather than the default in-memory one)
+  // simulate a daemon-backed `start` and a daemon-free `record` racing the
+  // same target — the scenario `InMemoryTargetLock` structurally cannot
+  // protect against, since each process gets its own empty Map.
+  describe("cross-process target contention (FileTargetLock)", () => {
+    function makeFileLockedManager(targets: CaptureTarget[] = [DISPLAY_TARGET, WINDOW_TARGET]) {
+      const store = new SessionStore();
+      const { spawnSidecar } = createFakeSidecarFactory({ targets });
+      const manager = new RecordingEngine({ store, spawnSidecar, targetLock: new FileTargetLock() });
+      return { manager, store };
+    }
+
+    it("a second process's RecordingEngine is refused TARGET_ALREADY_RECORDING, naming the owning session/pid", async () => {
+      const { manager: daemonManager } = makeFileLockedManager();
+      const { manager: recordManager } = makeFileLockedManager();
+
+      const { sessionId } = await daemonManager.startRecording({ target: DISPLAY_TARGET });
+
+      await expect(recordManager.startRecording({ target: DISPLAY_TARGET })).rejects.toMatchObject(
+        {
+          code: "TARGET_ALREADY_RECORDING",
+          message: expect.stringContaining(sessionId),
+        },
+      );
+    });
+
+    it("releasing on one instance lets a different instance acquire the same target", async () => {
+      const { manager: daemonManager } = makeFileLockedManager();
+      const { manager: recordManager } = makeFileLockedManager();
+
+      const { sessionId } = await daemonManager.startRecording({ target: DISPLAY_TARGET });
+      await daemonManager.stopRecording({ sessionId });
+
+      await expect(
+        recordManager.startRecording({ target: DISPLAY_TARGET }),
+      ).resolves.toMatchObject({});
+    });
+
+    it("a crashed process's lock (dead pid) is stolen by a fresh RecordingEngine instead of silently double-capturing", async () => {
+      const { manager: recordManager } = makeFileLockedManager();
+
+      // Simulate a crashed daemon: acquire the lock directly with a pid that
+      // cannot be alive, bypassing `startRecording` (which always uses
+      // `process.pid` — this test process — for the owner).
+      const lock = new FileTargetLock();
+      await lock.acquire("display:display-1", {
+        sessionId: "crashed-session",
+        pid: 999_999,
+        startedAt: "2020-01-01T00:00:00.000Z",
+      });
+
+      // A fresh process (e.g. a restarted daemon, which per the old bug
+      // started with an empty in-memory map and would have silently allowed
+      // a double-capture) must be able to acquire the same target.
+      await expect(
+        recordManager.startRecording({ target: DISPLAY_TARGET }),
+      ).resolves.toMatchObject({});
     });
   });
 });

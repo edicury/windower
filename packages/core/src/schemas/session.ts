@@ -30,5 +30,9 @@ export const RecordingSessionSchema = z.object({
   outputPath: z.string().optional(),
   manifestPath: z.string().optional(),
   eventTimelinePath: z.string().optional(),
+  // Phase 20: process that created/owns this session — see data-model.md
+  // §RecordingSession. Optional so 0.1.x session files without it still
+  // parse.
+  owner: z.object({ pid: z.number(), startedAt: z.string() }).optional(),
 });
 export type RecordingSession = z.infer<typeof RecordingSessionSchema>;

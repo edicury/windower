@@ -1,6 +1,13 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Writable } from "node:stream";
 import type { RecordingSession } from "@windower/core";
-import { describe, expect, it } from "vitest";
-import { renderStatus } from "./status.js";
+import { WINDOWER_HOME_ENV } from "@windower/core";
+import { SessionStore } from "@windower/engine";
+import { Command } from "commander";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerStatusCommand, renderStatus } from "./status.js";
 
 const BASE_SESSION: RecordingSession = {
   id: "sess-1",
@@ -76,5 +83,66 @@ describe("renderStatus", () => {
     const output = renderStatus(session);
     expect(output).toContain("Session sess-1: failed");
     expect(output).toContain("[CAPTURE_FAILED] Sidecar-initiated stop: target-closed");
+  });
+});
+
+// `windower status` reads `SessionStore` directly (a "plain disk read" per
+// phase-20-daemon-optional.md) — no daemon involved at all, not even a
+// `LocalWindower`. Verified end-to-end through the real command action.
+function spyOnWrite(stream: Writable): { calls: string[]; restore: () => void } {
+  const calls: string[] = [];
+  const original = stream.write.bind(stream);
+  const spy = vi.spyOn(stream, "write").mockImplementation(((chunk: string) => {
+    calls.push(chunk);
+    return true;
+  }) as unknown as typeof original);
+  return { calls, restore: () => spy.mockRestore() };
+}
+
+async function runStatus(args: string[]): Promise<void> {
+  const program = new Command();
+  program.exitOverride();
+  registerStatusCommand(program);
+  await program.parseAsync(["status", ...args], { from: "user" });
+}
+
+describe("registerStatusCommand (plain disk read)", () => {
+  let home: string;
+  let originalHome: string | undefined;
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "windower-status-test-"));
+    originalHome = process.env[WINDOWER_HOME_ENV];
+    process.env[WINDOWER_HOME_ENV] = home;
+  });
+
+  afterEach(async () => {
+    if (originalHome === undefined) delete process.env[WINDOWER_HOME_ENV];
+    else process.env[WINDOWER_HOME_ENV] = originalHome;
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("reads a session straight from disk, no daemon required", async () => {
+    const store = new SessionStore();
+    await store.save(BASE_SESSION);
+
+    const stdoutWrite = spyOnWrite(process.stdout);
+    await runStatus(["sess-1", "--json"]);
+
+    expect(stdoutWrite.calls.join("")).toContain('"id": "sess-1"');
+    stdoutWrite.restore();
+  });
+
+  it("reports SESSION_NOT_FOUND for an unknown session id", async () => {
+    const stderrWrite = spyOnWrite(process.stderr);
+    const originalExitCode = process.exitCode;
+
+    await runStatus(["nonexistent", "--json"]);
+
+    expect(stderrWrite.calls.join("")).toContain("SESSION_NOT_FOUND");
+    expect(process.exitCode).toBe(1);
+
+    stderrWrite.restore();
+    process.exitCode = originalExitCode as number | string | undefined;
   });
 });

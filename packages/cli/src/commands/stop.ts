@@ -1,6 +1,6 @@
 import { DaemonError, type StopRecordingResult } from "@windower/core";
 import type { Command } from "commander";
-import { withDaemon } from "../daemon.js";
+import { withAttachBackend } from "../backend.js";
 import { printResult } from "../output.js";
 
 export interface StopOpts {
@@ -40,7 +40,13 @@ export function buildNarrationParam(
   return { filePath: opts.narration!, offsetMs };
 }
 
-/** `windower stop <sessionId> [--narration <file> --narration-offset <ms>] [--json]` — contracts/cli.md. */
+/**
+ * `windower stop <sessionId> [--narration <file> --narration-offset <ms>]
+ * [--json]` — contracts/cli.md. `attach` mode: connects only to a daemon
+ * already listening (never spawns) and falls back to marking an orphaned
+ * session `failed` locally if nothing is listening — see
+ * `backend.ts`'s `withAttachBackend`/`markOrphanedSessionTerminal`.
+ */
 export function registerStopCommand(program: Command): void {
   program
     .command("stop <sessionId>")
@@ -50,7 +56,7 @@ export function registerStopCommand(program: Command): void {
     .option("--json", "output JSON")
     .action(async (sessionId: string, opts: StopOpts) => {
       const json = Boolean(opts.json);
-      await withDaemon(json, async (client) => {
+      await withAttachBackend("stop", json, sessionId, "failed", async (client) => {
         const narration = buildNarrationParam(opts);
         const result = await client.stopRecording({
           sessionId,

@@ -58,6 +58,18 @@ export interface OperatorRunOptions {
   signal: AbortSignal;
   /** Called per completed step; the caller persists it. */
   onStep?: (step: OperatorStep) => void | Promise<void>;
+  /**
+   * Environment `resolveModel` reads the model's API-key var from. Defaults
+   * to `process.env` inside `packages/operator` when omitted (tests / the
+   * blocking `operate` in-process path, which runs in the caller's own
+   * process already). Daemon-backed runs (`operate --detach`, MCP's
+   * `run_operator`) must set this to a **snapshot** of the connection's
+   * `hello` env — never a live reference — since a detached run outlives the
+   * connection that started it (phase-20-daemon-optional.md "Daemon
+   * lifecycle hardening"). This is what makes `resolveModel` see the
+   * *caller's* key instead of the daemon process's own frozen environment.
+   */
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface OperatorRunResult {

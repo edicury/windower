@@ -50,8 +50,6 @@ const OBSERVATION_FORMAT = "png" as const;
 export interface OperatorRunInternals {
   /** Injected language model, bypassing the provider registry (tests). */
   languageModel?: LanguageModel;
-  /** Environment used for API-key lookup. Defaults to `process.env`. */
-  env?: NodeJS.ProcessEnv;
   /** Redacted log sink. Defaults to stderr when WINDOWER_OPERATOR_DEBUG is set. */
   logSink?: LogSink;
   /** Injected clock, for deterministic `tMs` in tests. */
@@ -168,7 +166,7 @@ export const runOperator: RunOperator = async (
   let nextFrameMaxWidth: number | undefined;
 
   try {
-    const model = internals.languageModel ?? resolveModel(options.model, internals.env);
+    const model = internals.languageModel ?? resolveModel(options.model, options.env);
     const tools = buildToolSet();
     const system = buildSystemPrompt({
       task: options.task,
