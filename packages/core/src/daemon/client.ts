@@ -34,6 +34,13 @@ export class DaemonClient {
     this.stream = stream;
     const rl = createInterface({ input: stream, terminal: false });
     rl.on("line", (line) => this.handleLine(line));
+    // See SidecarClient's identical listener for why this is needed: an
+    // abruptly torn-down transport (e.g. a socket that never fully
+    // connected) can surface as an AbortError readline re-emits on this
+    // Interface, which otherwise crashes the process as an unhandled
+    // "error" event. The pending-request rejection already happens via
+    // `stream`'s "close" handler below.
+    rl.on("error", () => {});
     this.stream.once("close", () => {
       this.disposed = true;
       rl.close();

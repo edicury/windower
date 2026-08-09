@@ -3,6 +3,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { type DaemonClient, DaemonError, type ListTargetsResult } from "@windower/core";
 import { beforeEach, describe, expect, it } from "vitest";
+import type { GetBackend } from "../backend.js";
 import { registerReadTools } from "./read.js";
 
 /** Minimal fake satisfying only the DaemonClient methods `registerReadTools` calls. */
@@ -36,7 +37,7 @@ describe("registerReadTools (round-trip via an in-memory MCP client)", () => {
   beforeEach(async () => {
     const server = new McpServer({ name: "windower-test", version: "0.0.0" });
     const fake = fakeDaemonClient();
-    registerReadTools(server, async () => fake as unknown as DaemonClient);
+    registerReadTools(server, (async () => fake) as unknown as GetBackend);
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     client = new Client({ name: "test-client", version: "0.0.0" });
@@ -83,7 +84,7 @@ describe("registerReadTools error path (resize_window)", () => {
         throw err;
       },
     });
-    registerReadTools(server, async () => fake as unknown as DaemonClient);
+    registerReadTools(server, (async () => fake) as unknown as GetBackend);
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "test-client", version: "0.0.0" });

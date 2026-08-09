@@ -1,17 +1,16 @@
 /**
  * Read/control MCP tools that don't manage a recording session's lifecycle:
  * `list_targets`, `check_permissions`, `request_permission`, `resize_window`
- * (contracts/mcp-tools.md). Each is a thin wrapper over `DaemonClient` —
- * same `@windower/core` client the CLI uses (packages/cli/src/commands/
- * targets.ts, resize.ts, permission.ts) — with input/output validated by
- * the exact Zod schemas `@windower/core` exports, so MCP results are
- * schema-identical to the CLI's `--json` output.
+ * (contracts/mcp-tools.md). All four run `local` (Phase 20) — a transient,
+ * daemon-free sidecar spawn via the shared `LocalWindower`, never a daemon
+ * connection — with input/output validated by the exact Zod schemas
+ * `@windower/core` exports, so MCP results are schema-identical to the
+ * CLI's `--json` output.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   CheckPermissionsParamsSchema,
   CheckPermissionsResultSchema,
-  type DaemonClient,
   DaemonRequestPermissionParamsSchema,
   DaemonRequestPermissionResultSchema,
   DaemonResizeWindowParamsSchema,
@@ -19,9 +18,10 @@ import {
   ListTargetsParamsSchema,
   ListTargetsResultSchema,
 } from "@windower/core";
+import type { GetBackend } from "../backend.js";
 import { toMcpError } from "../daemon-client.js";
 
-export function registerReadTools(server: McpServer, getClient: () => Promise<DaemonClient>): void {
+export function registerReadTools(server: McpServer, getBackend: GetBackend): void {
   server.registerTool(
     "list_targets",
     {
@@ -37,8 +37,8 @@ export function registerReadTools(server: McpServer, getClient: () => Promise<Da
     },
     async (params) => {
       try {
-        const client = await getClient();
-        const result = await client.listTargets(params);
+        const backend = await getBackend("list_targets");
+        const result = await backend.listTargets(params);
         return {
           structuredContent: result,
           content: [{ type: "text", text: JSON.stringify(result) }],
@@ -65,8 +65,8 @@ export function registerReadTools(server: McpServer, getClient: () => Promise<Da
     },
     async () => {
       try {
-        const client = await getClient();
-        const result = await client.checkPermissions();
+        const backend = await getBackend("check_permissions");
+        const result = await backend.checkPermissions();
         return {
           structuredContent: result,
           content: [{ type: "text", text: JSON.stringify(result) }],
@@ -94,8 +94,8 @@ export function registerReadTools(server: McpServer, getClient: () => Promise<Da
     },
     async (params) => {
       try {
-        const client = await getClient();
-        const result = await client.requestPermission(params);
+        const backend = await getBackend("request_permission");
+        const result = await backend.requestPermission(params);
         return {
           structuredContent: result,
           content: [{ type: "text", text: JSON.stringify(result) }],
@@ -123,8 +123,8 @@ export function registerReadTools(server: McpServer, getClient: () => Promise<Da
     },
     async (params) => {
       try {
-        const client = await getClient();
-        const result = await client.resizeWindow(params);
+        const backend = await getBackend("resize_window");
+        const result = await backend.resizeWindow(params);
         return {
           structuredContent: result,
           content: [{ type: "text", text: JSON.stringify(result) }],

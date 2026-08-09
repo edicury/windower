@@ -1,22 +1,41 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Writable } from "node:stream";
 import {
   DaemonError,
   type ListOperatorRunsResult,
   type OperatorRun,
   OperatorRunSchema,
   type RunOperatorResult,
+  WINDOWER_HOME_ENV,
+  ensureDaemonRunning,
 } from "@windower/core";
 import { Command } from "commander";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EXIT_GENERIC_FAILURE, EXIT_INVALID_ARGS, exitCodeForError } from "../exit-codes.js";
+import { runOperatorBlocking } from "./operate-blocking.js";
 import { type OperateOpts, addOperateFlags, buildRunOperatorParams } from "./operate-params.js";
 import {
   jsonFlag,
+  registerOperateCommand,
   renderAbortResult,
   renderOperatorRun,
   renderOperatorRunsTable,
   renderRunOperatorResult,
+  runBlocking,
 } from "./operate.js";
 import { addSharedRecordingFlags } from "./record-params.js";
+
+vi.mock("@windower/core", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@windower/core")>();
+  return { ...actual, ensureDaemonRunning: vi.fn() };
+});
+
+vi.mock("./operate-blocking.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./operate-blocking.js")>();
+  return { ...actual, runOperatorBlocking: vi.fn() };
+});
 
 function run(overrides: Partial<OperatorRun> = {}): OperatorRun {
   return OperatorRunSchema.parse({
@@ -269,5 +288,163 @@ describe("jsonFlag (operate subcommands)", () => {
 
   it("stays false when --json is absent", () => {
     expect(resolveJson(["operate", "status", "op-1"])).toBe(false);
+  });
+});
+
+function spyOnWrite(stream: Writable): { calls: string[]; restore: () => void } {
+  const calls: string[] = [];
+  const original = stream.write.bind(stream);
+  const spy = vi.spyOn(stream, "write").mockImplementation(((chunk: string) => {
+    calls.push(chunk);
+    return true;
+  }) as unknown as typeof original);
+  return { calls, restore: () => spy.mockRestore() };
+}
+
+/**
+ * `runBlocking` — `operate`'s default `local` path (`contracts/cli.md`
+ * "operate blocking by default"). `runOperatorBlocking` (operate-blocking.ts)
+ * is mocked here so these tests exercise only the CLI-level wiring: exit
+ * code mapping, stdout JSON shape, and SIGINT -> AbortSignal plumbing. The
+ * loop/finalize behavior itself is covered by operate-blocking.test.ts.
+ */
+describe("runBlocking (operate's default local/blocking path)", () => {
+  const mockedRunOperatorBlocking = vi.mocked(runOperatorBlocking);
+  let home: string;
+  let originalHome: string | undefined;
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "windower-operate-runblocking-test-"));
+    originalHome = process.env[WINDOWER_HOME_ENV];
+    process.env[WINDOWER_HOME_ENV] = home;
+    mockedRunOperatorBlocking.mockReset();
+    process.exitCode = undefined;
+  });
+
+  afterEach(async () => {
+    if (originalHome === undefined) delete process.env[WINDOWER_HOME_ENV];
+    else process.env[WINDOWER_HOME_ENV] = originalHome;
+    await rm(home, { recursive: true, force: true });
+    process.exitCode = undefined;
+  });
+
+  const params = { task: "t", model: { provider: "anthropic" as const, model: "claude-sonnet-5" } };
+
+  it("prints the terminal OperatorRun as JSON on stdout and exits 0 on success", async () => {
+    mockedRunOperatorBlocking.mockResolvedValue(run({ state: "succeeded" }));
+    const { calls, restore } = spyOnWrite(process.stdout);
+    await runBlocking(params, true);
+    restore();
+
+    const printed = JSON.parse(calls.join(""));
+    expect(printed).toMatchObject({ id: "op-1", state: "succeeded" });
+    expect(process.exitCode ?? 0).toBe(0);
+  });
+
+  it("exits 1 when the terminal OperatorRun.state is not 'succeeded'", async () => {
+    mockedRunOperatorBlocking.mockResolvedValue(run({ state: "failed" }));
+    const { restore } = spyOnWrite(process.stdout);
+    await runBlocking(params, true);
+    restore();
+
+    expect(process.exitCode).toBe(EXIT_GENERIC_FAILURE);
+  });
+
+  it("exits 1 for 'aborted' and 'timed_out' terminal states too", async () => {
+    for (const state of ["aborted", "timed_out"] as const) {
+      mockedRunOperatorBlocking.mockResolvedValue(run({ state }));
+      const { restore } = spyOnWrite(process.stdout);
+      await runBlocking(params, true);
+      restore();
+      expect(process.exitCode).toBe(EXIT_GENERIC_FAILURE);
+      process.exitCode = undefined;
+    }
+  });
+
+  it("wires SIGINT to the AbortSignal passed into runOperatorBlocking", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    mockedRunOperatorBlocking.mockImplementation(
+      (_params, options) =>
+        new Promise((resolve) => {
+          capturedSignal = options.signal;
+          // `sessionStore.load()`'s real filesystem I/O (this mock is only
+          // reached after it resolves) means the SIGINT emitted synchronously
+          // below can — and does — win the race and abort the signal before
+          // this executor even runs; check `aborted` up front rather than
+          // relying on the `abort` event firing after the fact (mirrors
+          // operate-blocking.test.ts's identical fix).
+          const settle = () => resolve(run({ state: "aborted" }));
+          if (options.signal.aborted) settle();
+          else options.signal.addEventListener("abort", settle);
+        }),
+    );
+
+    const { restore } = spyOnWrite(process.stdout);
+    const promise = runBlocking(params, true);
+    process.emit("SIGINT");
+    await promise;
+    restore();
+
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(process.exitCode).toBe(EXIT_GENERIC_FAILURE);
+  });
+
+  it("surfaces a thrown error (e.g. run couldn't even start) via printError instead of an uncaught rejection", async () => {
+    mockedRunOperatorBlocking.mockRejectedValue(new DaemonError("INVALID_ARGS", "bad --model"));
+    const { restore } = spyOnWrite(process.stderr);
+    await runBlocking(params, true);
+    restore();
+
+    expect(process.exitCode).toBe(EXIT_INVALID_ARGS);
+  });
+});
+
+/**
+ * `--detach` regression (Phase 19): must still resolve to `daemon` mode and
+ * produce the original non-blocking `{ runId }` shape, unaffected by the
+ * blocking rewrite above.
+ */
+describe("registerOperateCommand --detach (daemon-backed, non-blocking, regression)", () => {
+  const mockedEnsureDaemonRunning = vi.mocked(ensureDaemonRunning);
+  let home: string;
+  let originalHome: string | undefined;
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "windower-operate-detach-test-"));
+    originalHome = process.env[WINDOWER_HOME_ENV];
+    process.env[WINDOWER_HOME_ENV] = home;
+    mockedEnsureDaemonRunning.mockReset();
+  });
+
+  afterEach(async () => {
+    if (originalHome === undefined) delete process.env[WINDOWER_HOME_ENV];
+    else process.env[WINDOWER_HOME_ENV] = originalHome;
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("--detach connects to (and auto-starts) a daemon and returns { runId } immediately", async () => {
+    const fakeClient = {
+      runOperator: vi.fn().mockResolvedValue({ runId: "op-42" } satisfies RunOperatorResult),
+      dispose: vi.fn(),
+    };
+    // biome-ignore lint/suspicious/noExplicitAny: minimal fake DaemonClient
+    mockedEnsureDaemonRunning.mockResolvedValue(fakeClient as any);
+
+    const program = new Command();
+    program.exitOverride();
+    program.configureOutput({ writeErr: () => {} });
+    registerOperateCommand(program);
+
+    const { calls, restore } = spyOnWrite(process.stdout);
+    await program.parseAsync(
+      ["operate", "Open the app", "--model", "anthropic:claude-sonnet-5", "--detach", "--json"],
+      { from: "user" },
+    );
+    restore();
+
+    expect(mockedEnsureDaemonRunning).toHaveBeenCalled();
+    expect(fakeClient.runOperator).toHaveBeenCalled();
+    expect(JSON.parse(calls.join(""))).toEqual({ runId: "op-42" });
+    expect(fakeClient.dispose).toHaveBeenCalled();
   });
 });

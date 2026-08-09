@@ -75,6 +75,9 @@ importers:
       '@windower/engine':
         specifier: workspace:*
         version: link:../engine
+      '@windower/operator':
+        specifier: workspace:*
+        version: link:../operator
       commander:
         specifier: ^12.1.0
         version: 12.1.0
@@ -147,6 +150,9 @@ importers:
       '@windower/core':
         specifier: workspace:*
         version: link:../core
+      '@windower/engine':
+        specifier: workspace:*
+        version: link:../engine
       zod:
         specifier: ^4.4.3
         version: 4.4.3

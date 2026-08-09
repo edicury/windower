@@ -22,6 +22,7 @@
     "@windower/core": "workspace:*",
     "@windower/daemon": "workspace:*",
     "@windower/engine": "workspace:*",
+    "@windower/operator": "workspace:*",
     "commander": "^12.1.0"
   },
   "optionalDependencies": {

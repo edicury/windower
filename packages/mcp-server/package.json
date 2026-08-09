@@ -21,6 +21,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@windower/core": "workspace:*",
+    "@windower/engine": "workspace:*",
     "zod": "^4.4.3"
   },
   "devDependencies": {

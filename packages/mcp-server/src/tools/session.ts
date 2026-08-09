@@ -2,16 +2,17 @@
  * Session-lifecycle MCP tools: `start_recording`, `get_session`,
  * `stop_recording`, `cancel_recording`, `list_sessions` (contracts/mcp-tools.md).
  *
- * Thin wrappers over `DaemonClient` — same `@windower/core` client the CLI
- * uses — with input/output validated by the exact Zod schemas
- * `@windower/core` exports, so MCP results are schema-identical to the CLI's
- * `--json` output.
+ * Backend routing (Phase 20): `get_session`/`list_sessions` run `local`
+ * (a direct session-store read, no daemon involved); `start_recording`/
+ * `stop_recording`/`cancel_recording` stay `daemon`-backed — split-invocation
+ * recording needs a process that outlives the calling tool call. Input/
+ * output are validated by the exact Zod schemas `@windower/core` exports, so
+ * MCP results are schema-identical to the CLI's `--json` output.
  */
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
   CancelRecordingParamsSchema,
   CancelRecordingResultSchema,
-  type DaemonClient,
   GetSessionParamsSchema,
   GetSessionResultSchema,
   ListSessionsParamsSchema,
@@ -21,12 +22,10 @@ import {
   StopRecordingParamsSchema,
   StopRecordingResultSchema,
 } from "@windower/core";
+import type { GetBackend } from "../backend.js";
 import { toMcpError } from "../daemon-client.js";
 
-export function registerSessionTools(
-  server: McpServer,
-  getClient: () => Promise<DaemonClient>,
-): void {
+export function registerSessionTools(server: McpServer, getBackend: GetBackend): void {
   server.registerTool(
     "start_recording",
     {
@@ -48,8 +47,8 @@ export function registerSessionTools(
     },
     async (params) => {
       try {
-        const client = await getClient();
-        const result = await client.startRecording(params);
+        const backend = await getBackend("start_recording");
+        const result = await backend.startRecording(params);
         return {
           structuredContent: result,
           content: [{ type: "text", text: JSON.stringify(result) }],
@@ -75,8 +74,8 @@ export function registerSessionTools(
     },
     async (params) => {
       try {
-        const client = await getClient();
-        const result = await client.getSession(params);
+        const backend = await getBackend("get_session");
+        const result = await backend.getSession(params);
         return {
           structuredContent: result,
           content: [{ type: "text", text: JSON.stringify(result) }],
@@ -103,8 +102,8 @@ export function registerSessionTools(
     },
     async (params) => {
       try {
-        const client = await getClient();
-        const result = await client.stopRecording(params);
+        const backend = await getBackend("stop_recording");
+        const result = await backend.stopRecording(params);
         return {
           structuredContent: result,
           content: [{ type: "text", text: JSON.stringify(result) }],
@@ -128,8 +127,8 @@ export function registerSessionTools(
     },
     async (params) => {
       try {
-        const client = await getClient();
-        const result = await client.cancelRecording(params);
+        const backend = await getBackend("cancel_recording");
+        const result = await backend.cancelRecording(params);
         return {
           structuredContent: result,
           content: [{ type: "text", text: JSON.stringify(result) }],
@@ -154,8 +153,8 @@ export function registerSessionTools(
     },
     async (params) => {
       try {
-        const client = await getClient();
-        const result = await client.listSessions(params);
+        const backend = await getBackend("list_sessions");
+        const result = await backend.listSessions(params);
         return {
           structuredContent: result,
           content: [{ type: "text", text: JSON.stringify(result) }],

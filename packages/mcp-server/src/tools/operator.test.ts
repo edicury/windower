@@ -12,6 +12,7 @@ import {
   type RunOperatorResult,
 } from "@windower/core";
 import { beforeEach, describe, expect, it } from "vitest";
+import type { GetBackend } from "../backend.js";
 import { registerOperatorTools } from "./operator.js";
 
 const runId = "22222222-2222-2222-2222-222222222222";
@@ -33,20 +34,40 @@ const validRun: OperatorRun = {
   startedAt: "2026-08-09T00:00:00.000Z",
 };
 
-type FakeDaemonClient = Pick<DaemonClient, "runOperator" | "getOperatorRun" | "abortOperatorRun">;
+type FakeDaemonClient = Pick<
+  DaemonClient,
+  "runOperator" | "getOperatorRun" | "abortOperatorRun" | "dispose"
+>;
 
 function fakeDaemonClient(overrides: Partial<FakeDaemonClient> = {}): FakeDaemonClient {
   return {
     runOperator: async (): Promise<RunOperatorResult> => ({ runId }),
     getOperatorRun: async (): Promise<GetOperatorRunResult> => validRun,
     abortOperatorRun: async (): Promise<AbortOperatorRunResult> => ({ aborted: true }),
+    dispose: () => {},
     ...overrides,
   };
 }
 
-async function connectServer(fake: FakeDaemonClient) {
+/**
+ * `run_operator` doesn't go through `getBackend` — it opens its own
+ * env-scoped connection via `connectForRun` (`registerOperatorTools`'s third
+ * param, injectable so tests never touch a real daemon). `getBackend` still
+ * backs `get_operator_run`/`abort_operator_run`.
+ */
+async function connectServer(
+  fake: FakeDaemonClient,
+  options: { onConnectForRun?: (env: unknown) => void } = {},
+) {
   const server = new McpServer({ name: "windower-test", version: "0.0.0" });
-  registerOperatorTools(server, async () => fake as unknown as DaemonClient);
+  registerOperatorTools(
+    server,
+    (async () => fake) as unknown as GetBackend,
+    async (env) => {
+      options.onConnectForRun?.(env);
+      return fake as unknown as DaemonClient;
+    },
+  );
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test-client", version: "0.0.0" });
@@ -207,6 +228,116 @@ describe("registerOperatorTools error path", () => {
     expect(result.isError).toBe(true);
     const content = result.content as Array<{ type: string; text: string }>;
     expect(content[0]?.text).toContain("PERMISSION_DENIED");
+  });
+});
+
+describe("registerOperatorTools backend routing (Phase 20)", () => {
+  it("run_operator connects via connectForRun (env-scoped), NOT getBackend", async () => {
+    let getBackendCalls = 0;
+    let connectForRunCalls = 0;
+    const fake = fakeDaemonClient();
+    const server = new McpServer({ name: "windower-test", version: "0.0.0" });
+    registerOperatorTools(
+      server,
+      (async () => {
+        getBackendCalls++;
+        return fake;
+      }) as unknown as GetBackend,
+      async () => {
+        connectForRunCalls++;
+        return fake as unknown as DaemonClient;
+      },
+    );
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    await client.callTool({
+      name: "run_operator",
+      arguments: {
+        task: "t",
+        model: { provider: "anthropic", model: "claude-sonnet-5" },
+      },
+    });
+
+    expect(connectForRunCalls).toBe(1);
+    expect(getBackendCalls).toBe(0);
+  });
+
+  it("get_operator_run and abort_operator_run still route through getBackend (unchanged, daemon-backed)", async () => {
+    const seenToolIds: string[] = [];
+    const fake = fakeDaemonClient();
+    const server = new McpServer({ name: "windower-test", version: "0.0.0" });
+    registerOperatorTools(server, (async (toolId: string) => {
+      seenToolIds.push(toolId);
+      return fake;
+    }) as unknown as GetBackend);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "test-client", version: "0.0.0" });
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    await client.callTool({ name: "get_operator_run", arguments: { runId } });
+    await client.callTool({ name: "abort_operator_run", arguments: { runId } });
+
+    expect(seenToolIds).toEqual(["get_operator_run", "abort_operator_run"]);
+  });
+
+  it("run_operator's connectForRun receives an env built from this process's own environment (API key present)", async () => {
+    const previous = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = "sk-test-value";
+    try {
+      let seenEnv: unknown;
+      const client = await connectServer(fakeDaemonClient(), {
+        onConnectForRun: (env) => {
+          seenEnv = env;
+        },
+      });
+
+      await client.callTool({
+        name: "run_operator",
+        arguments: {
+          task: "t",
+          model: { provider: "anthropic", model: "claude-sonnet-5" },
+        },
+      });
+
+      expect(seenEnv).toEqual({
+        apiKeyEnvVar: "ANTHROPIC_API_KEY",
+        apiKeyValue: "sk-test-value",
+        secretRefs: undefined,
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.ANTHROPIC_API_KEY;
+      } else {
+        process.env.ANTHROPIC_API_KEY = previous;
+      }
+    }
+  });
+
+  it("run_operator disposes its connection after the call (success and error)", async () => {
+    let disposed = 0;
+    const fake = fakeDaemonClient({ dispose: () => void disposed++ });
+    const client = await connectServer(fake);
+
+    await client.callTool({
+      name: "run_operator",
+      arguments: { task: "t", model: { provider: "anthropic", model: "claude-sonnet-5" } },
+    });
+    expect(disposed).toBe(1);
+
+    const failingFake = fakeDaemonClient({
+      dispose: () => void disposed++,
+      runOperator: async () => {
+        throw new DaemonError("INVALID_ARGS", "no key");
+      },
+    });
+    const failingClient = await connectServer(failingFake);
+    await failingClient.callTool({
+      name: "run_operator",
+      arguments: { task: "t", model: { provider: "anthropic", model: "claude-sonnet-5" } },
+    });
+    expect(disposed).toBe(2);
   });
 });
 

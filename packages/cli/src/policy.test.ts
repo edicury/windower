@@ -1,4 +1,4 @@
-import { POLICY_TABLE, resolveBackendMode } from "@windower/core";
+import { type CommandId, POLICY_TABLE, resolveBackendMode } from "@windower/core";
 import type { Command } from "commander";
 import { describe, expect, it } from "vitest";
 import { buildProgram } from "./program.js";
@@ -44,11 +44,11 @@ describe("backend policy completeness", () => {
       // (blocking) mode — resolveBackendMode is the actual source of truth
       // for it (see policy.ts). Any id resolvable without throwing counts.
       try {
-        // biome-ignore lint/suspicious/noExplicitAny: CommandId is a closed
-        // string-literal union; `id` is only known to be a string here, and
-        // the whole point of this test is to catch an id that ISN'T one of
-        // those literals — so a type-level cast would defeat it.
-        resolveBackendMode(id as any);
+        // `CommandId` is a closed string-literal union and `id` is only
+        // known to be a `string` here — that's the whole point of this
+        // test, to catch a real Commander id that ISN'T one of those
+        // literals, so the cast is deliberately loose rather than `any`.
+        resolveBackendMode(id as CommandId);
         return false;
       } catch {
         return true;

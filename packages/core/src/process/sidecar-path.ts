@@ -1,5 +1,5 @@
-import { createRequire } from "node:module";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -71,7 +71,24 @@ const SIDECAR_BINARY_FILENAME_BY_PLATFORM: Partial<Record<NodeJS.Platform, strin
 };
 
 /**
- * Resolves the filesystem path to the native sidecar binary.
+ * Which of the three resolution strategies in
+ * `resolveSidecarBinaryPathWithSource` produced the resolved path — surfaced
+ * by `windower doctor`'s `sidecar.source` field (`data-model.md`
+ * §PermissionReport) so a diagnostic can say e.g. "you're running a dev
+ * build, not the npm-installed binary" instead of just a bare path.
+ */
+export type SidecarBinarySource = "env-override" | "dev-build" | "npm-package";
+
+export interface ResolvedSidecarBinary {
+  path: string;
+  source: SidecarBinarySource;
+}
+
+/**
+ * Resolves the filesystem path to the native sidecar binary, tagged with
+ * which resolution strategy produced it. `resolveSidecarBinaryPath` below is
+ * a thin wrapper over this that drops the tag — kept as the single place
+ * this resolution order is implemented so the two can't drift.
  *
  * Resolution order:
  * 1. `WINDOWER_SIDECAR_BINARY_PATH` env var, if set — an explicit override,
@@ -93,13 +110,13 @@ const SIDECAR_BINARY_FILENAME_BY_PLATFORM: Partial<Record<NodeJS.Platform, strin
  * on; they just ask "give me the sidecar binary" and react to capabilities
  * from `describe()` afterward.
  */
-export function resolveSidecarBinaryPath(
+export function resolveSidecarBinaryPathWithSource(
   platform: NodeJS.Platform = process.platform,
   arch: NodeJS.Architecture = process.arch,
-): string {
+): ResolvedSidecarBinary {
   const override = process.env[SIDECAR_BINARY_PATH_ENV];
   if (override && override.trim().length > 0) {
-    return override;
+    return { path: override, source: "env-override" };
   }
 
   const relativePath = DEV_BUILD_RELATIVE_PATH[platform];
@@ -108,7 +125,7 @@ export function resolveSidecarBinaryPath(
       const repoRoot = findRepoRoot(thisModuleDir());
       const resolved = join(repoRoot, relativePath);
       if (existsSync(resolved)) {
-        return resolved;
+        return { path: resolved, source: "dev-build" };
       }
     } catch {
       // Not running inside a monorepo checkout (e.g. installed from npm) —
@@ -120,7 +137,10 @@ export function resolveSidecarBinaryPath(
   const binaryFilename = SIDECAR_BINARY_FILENAME_BY_PLATFORM[platform];
   if (packageName && binaryFilename) {
     try {
-      return require.resolve(`${packageName}/bin/${binaryFilename}`);
+      return {
+        path: require.resolve(`${packageName}/bin/${binaryFilename}`),
+        source: "npm-package",
+      };
     } catch {
       // Optional dependency not installed (wrong platform/arch, or not
       // installed via npm at all) — fall through to the error below.
@@ -131,4 +151,12 @@ export function resolveSidecarBinaryPath(
     `No sidecar available for platform "${platform}"/arch "${arch}" yet (windows/linux backends are post-MVP — see specs/001-windower-mvp/tasks/phase-16-windows-backend.md and phase-17-linux-backend.md). ` +
       `Set ${SIDECAR_BINARY_PATH_ENV} to point at a binary explicitly if you're testing a custom build.`,
   );
+}
+
+/** `resolveSidecarBinaryPathWithSource(...).path` — see that function for resolution order/doc. */
+export function resolveSidecarBinaryPath(
+  platform: NodeJS.Platform = process.platform,
+  arch: NodeJS.Architecture = process.arch,
+): string {
+  return resolveSidecarBinaryPathWithSource(platform, arch).path;
 }

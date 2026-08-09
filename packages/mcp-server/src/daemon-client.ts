@@ -7,8 +7,17 @@
  * session. We memoize one `DaemonClient` for the process lifetime instead of
  * reconnecting (or disposing) per call.
  */
-import { type DaemonClient, DaemonError, ensureDaemonRunning } from "@windower/core";
+import {
+  type DaemonClient,
+  type DaemonHelloEnv,
+  DaemonError,
+  ensureDaemonRunning,
+} from "@windower/core";
 import { ZodError } from "zod";
+
+/** `hello`'s `clientName`/`clientVersion` for every connection this process opens. */
+export const MCP_CLIENT_NAME = "windower-mcp-server";
+export const MCP_CLIENT_VERSION = "0.0.0";
 
 let clientPromise: Promise<DaemonClient> | undefined;
 
@@ -27,7 +36,10 @@ let clientPromise: Promise<DaemonClient> | undefined;
  */
 export function getDaemonClient(): Promise<DaemonClient> {
   if (!clientPromise) {
-    clientPromise = ensureDaemonRunning().catch((err) => {
+    clientPromise = ensureDaemonRunning({
+      clientName: MCP_CLIENT_NAME,
+      clientVersion: MCP_CLIENT_VERSION,
+    }).catch((err) => {
       // Allow a later call to retry instead of being stuck on one failure
       // for the rest of the process lifetime.
       clientPromise = undefined;
@@ -49,6 +61,40 @@ export function getDaemonClient(): Promise<DaemonClient> {
 /** Test-only hook to reset the memoized client between test cases. */
 export function resetDaemonClientForTests(): void {
   clientPromise = undefined;
+}
+
+/**
+ * A dedicated, non-memoized daemon connection for a single `run_operator`
+ * call (Phase 20, `phase-20-daemon-optional.md`'s "Scoped env snapshot over
+ * the socket"). `getDaemonClient()` above memoizes one connection for this
+ * whole process's lifetime, so its `hello` fires (at most) once — but the
+ * scoped API-key/`env:`-secret snapshot a `run_operator` call needs to send
+ * is specific to *that call's* `ModelConfig`/`secrets`, which can differ
+ * from whatever the first daemon-backed tool call in this process happened
+ * to need. Reusing the memoized connection would silently drop a later
+ * call's key. Establishing a fresh connection instead guarantees this
+ * call's `hello` carries this call's `env` — the socket connect + handshake
+ * cost is negligible (same-host unix socket).
+ *
+ * The caller must `dispose()` the returned client once `runOperator`
+ * resolves — the operator run itself continues server-side independent of
+ * this connection, mirroring `packages/cli/src/backend.ts`'s per-command
+ * connect/dispose pattern.
+ *
+ * `env` is sourced from the MCP SERVER PROCESS's own `process.env` — i.e.
+ * whatever `mcpServers.<name>.env` block the user configured in their MCP
+ * host (Claude Desktop, etc.). That host config is the well-defined place
+ * for a user to put a model API key or an `env:`-sourced secret for
+ * `run_operator`; this never reads or forwards the daemon's own
+ * environment. Never sent for `local`-mode tools — only `run_operator`
+ * builds and passes an `env` here.
+ */
+export function connectForOperatorRun(env: DaemonHelloEnv | undefined): Promise<DaemonClient> {
+  return ensureDaemonRunning({
+    clientName: MCP_CLIENT_NAME,
+    clientVersion: MCP_CLIENT_VERSION,
+    env,
+  });
 }
 
 export interface McpToolErrorResult {

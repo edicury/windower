@@ -32,6 +32,8 @@ export interface OperateOpts extends SharedRecordingOpts {
   unbounded?: boolean;
   /** commander's `--no-record` sets this to `false`; undefined when not passed. */
   record?: boolean;
+  /** Opts out of the default blocking/`local` shape — see `operate.ts`. */
+  detach?: boolean;
 }
 
 /** `~/.windower/config.json`'s `operator` block — fallbacks for omitted flags. */
@@ -56,7 +58,11 @@ export function addOperateFlags(command: Command): Command {
     .option("--max-steps <n>", "maximum operator steps before the run fails")
     .option("--timeout <s>", "wall-clock timeout in seconds")
     .option("--unbounded", "disable the target-bounds coordinate clamp (use with care)")
-    .option("--no-record", "run the operator without recording a video");
+    .option("--no-record", "run the operator without recording a video")
+    .option(
+      "--detach",
+      "don't block — start the run in a daemon and return { runId } immediately (original non-blocking shape)",
+    );
 }
 
 function collectSecret(value: string, previous: string[]): string[] {

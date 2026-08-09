@@ -1,7 +1,13 @@
 import { type DaemonClient, DaemonError } from "@windower/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { type ZodError, z } from "zod";
-import { getDaemonClient, resetDaemonClientForTests, toMcpError } from "./daemon-client.js";
+import {
+  MCP_CLIENT_NAME,
+  connectForOperatorRun,
+  getDaemonClient,
+  resetDaemonClientForTests,
+  toMcpError,
+} from "./daemon-client.js";
 
 const { ensureDaemonRunningMock } = vi.hoisted(() => ({
   ensureDaemonRunningMock: vi.fn(),
@@ -99,5 +105,53 @@ describe("getDaemonClient", () => {
     const third = await getDaemonClient();
     expect(third).toBe(freshClient);
     expect(ensureDaemonRunningMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes this process's identity (clientName/clientVersion) to ensureDaemonRunning", async () => {
+    const client = makeFakeClient();
+    ensureDaemonRunningMock.mockResolvedValue(client);
+
+    await getDaemonClient();
+
+    expect(ensureDaemonRunningMock).toHaveBeenCalledWith(
+      expect.objectContaining({ clientName: MCP_CLIENT_NAME }),
+    );
+  });
+});
+
+describe("connectForOperatorRun (Phase 20 env-scoped operator connection)", () => {
+  beforeEach(() => {
+    ensureDaemonRunningMock.mockReset();
+  });
+
+  it("establishes a fresh connection per call — never memoized — passing `env` straight through", async () => {
+    const clientA = makeFakeClient();
+    const clientB = makeFakeClient();
+    ensureDaemonRunningMock.mockResolvedValueOnce(clientA).mockResolvedValueOnce(clientB);
+
+    const env = { apiKeyEnvVar: "ANTHROPIC_API_KEY", apiKeyValue: "sk-test" };
+    const first = await connectForOperatorRun(env);
+    const second = await connectForOperatorRun(env);
+
+    expect(first).toBe(clientA);
+    expect(second).toBe(clientB);
+    expect(ensureDaemonRunningMock).toHaveBeenCalledTimes(2);
+    expect(ensureDaemonRunningMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ clientName: MCP_CLIENT_NAME, env }),
+    );
+    expect(ensureDaemonRunningMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ clientName: MCP_CLIENT_NAME, env }),
+    );
+  });
+
+  it("passes env: undefined through unchanged when no scoped env applies", async () => {
+    const client = makeFakeClient();
+    ensureDaemonRunningMock.mockResolvedValue(client);
+
+    await connectForOperatorRun(undefined);
+
+    expect(ensureDaemonRunningMock).toHaveBeenCalledWith(expect.objectContaining({ env: undefined }));
   });
 });

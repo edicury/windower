@@ -42,12 +42,18 @@ function spyOnWrite(stream: Writable): { calls: string[]; restore: () => void } 
 describe("resolveForcedMode", () => {
   const originalEnv = process.env.WINDOWER_BACKEND;
 
+  // An `= undefined` assignment would leave the var set to the *string*
+  // "undefined" (Node coerces env values to strings), not actually unset it
+  // — `delete` is the only way to restore "the var was never set" for this
+  // describe block's assertions.
   afterEach(() => {
+    // biome-ignore lint/performance/noDelete: see the block comment above.
     if (originalEnv === undefined) delete process.env.WINDOWER_BACKEND;
     else process.env.WINDOWER_BACKEND = originalEnv;
   });
 
   it("returns undefined when neither the flag nor the env var is set", () => {
+    // biome-ignore lint/performance/noDelete: see the block comment above `describe`.
     delete process.env.WINDOWER_BACKEND;
     expect(resolveForcedMode({})).toBeUndefined();
   });

@@ -41,6 +41,18 @@ export class SidecarProcess {
   private readonly killTimeoutMs: number;
   private exited = false;
   private killTimer: NodeJS.Timeout | undefined;
+  /**
+   * Resolves once the child has definitively stopped — via either "exit"
+   * (the normal case) or "error" (e.g. `spawn()` failing on a nonexistent
+   * binary path, which Node reports as "error" WITHOUT ever following up
+   * with "exit"). `terminate()` awaits this instead of `child`'s "exit"
+   * event directly, so a spawn failure doesn't hang it forever — this was a
+   * real bug: `windower doctor` probing a bad `WINDOWER_SIDECAR_BINARY_PATH`
+   * would spawn, get "error", and then hang indefinitely in its `finally {
+   * await handle.terminate() }` cleanup, since `exited` was never set and
+   * "exit" was never coming.
+   */
+  private readonly settled: Promise<void>;
 
   private constructor(
     child: ChildProcessByStdio<Writable, Readable, Readable>,
@@ -72,6 +84,11 @@ export class SidecarProcess {
       }
     });
 
+    let resolveSettled: () => void = () => {};
+    this.settled = new Promise((resolve) => {
+      resolveSettled = resolve;
+    });
+
     child.once("exit", (code, signal) => {
       this.exited = true;
       if (this.killTimer) {
@@ -83,11 +100,22 @@ export class SidecarProcess {
       // rejects any in-flight requests — don't rely on stdout's "end"/"close"
       // reliably propagating through the Duplex.from() wrapper.
       this.transport.destroy();
+      resolveSettled();
     });
 
     child.once("error", (err) => {
+      // A spawn-time failure (e.g. ENOENT on a bad binary path) — Node
+      // reports this via "error" only, never "exit", so this must settle
+      // the process on its own rather than waiting for an "exit" that will
+      // never come (see `settled`'s doc).
+      this.exited = true;
+      if (this.killTimer) {
+        clearTimeout(this.killTimer);
+        this.killTimer = undefined;
+      }
       options.onStderrLine?.(`sidecar process error: ${err.message}`);
       this.transport.destroy();
+      resolveSettled();
     });
   }
 
@@ -123,10 +151,6 @@ export class SidecarProcess {
       return;
     }
 
-    const exitPromise = new Promise<void>((resolve) => {
-      this.child.once("exit", () => resolve());
-    });
-
     this.child.kill("SIGTERM");
     this.killTimer = setTimeout(() => {
       if (!this.exited) {
@@ -134,7 +158,9 @@ export class SidecarProcess {
       }
     }, this.killTimeoutMs);
 
-    await exitPromise;
+    // `settled` resolves on either "exit" (normal case) or "error" (e.g. a
+    // spawn-time ENOENT, which never follows up with "exit") — see its doc.
+    await this.settled;
     this.client.dispose();
   }
 }

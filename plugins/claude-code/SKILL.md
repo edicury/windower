@@ -111,6 +111,22 @@ Then poll `get_operator_run({ runId })` for `state`
 `abort_operator_run({ runId })` to stop a run that's gone wrong — an active
 recording is finalized rather than discarded.
 
+**`run_operator` is always non-blocking.** It returns `{ runId }` immediately
+and the run continues in Windower's daemon; you get the result by polling
+`get_operator_run`. This is deliberate and does not change based on how long
+the task is expected to take — an MCP host imposes a per-tool-call timeout far
+shorter than a real operator run, so a blocking tool here would time out at
+the host and orphan a live run. Always poll rather than assuming a short task
+finishes fast enough to skip the poll loop.
+
+(If you ever see `windower operate` invoked from a terminal rather than
+through these MCP tools — not part of this skill's own workflow, since this
+skill never shells out to the CLI — note that the CLI surface behaves
+differently: `windower operate` **blocks by default**, holding the shell open
+and streaming progress until the run finishes, with `--detach` as the opt-out
+that restores the `{ runId }` / poll shape used here. That CLI-level default
+is unrelated to `run_operator`, which has been and remains non-blocking.)
+
 **Credentials.** Never put a password, token, or API key in the `task` string.
 Pass it as a secret ref (`env`, `keychain`, or — discouraged — `literal`) and
 refer to it in the task as `{{name}}`. The operator's model only ever sees the

@@ -6,12 +6,14 @@ import {
   type RunOperatorResult,
   formatModelConfig,
   readRawConfig,
+  spawnSidecar as realSpawnSidecar,
 } from "@windower/core";
-import { OperatorRunStore } from "@windower/engine";
+import { FileTargetLock, OperatorRunStore, RecordingEngine, SessionStore } from "@windower/engine";
 import type { Command } from "commander";
 import { resolveForcedMode, withBackend } from "../backend.js";
-import { withDaemon } from "../daemon.js";
+import { EXIT_GENERIC_FAILURE } from "../exit-codes.js";
 import { printError, printResult } from "../output.js";
+import { renderOperatorStepLine, runOperatorBlocking } from "./operate-blocking.js";
 import {
   type OperateOpts,
   addOperateFlags,
@@ -24,13 +26,22 @@ import { addSharedRecordingFlags } from "./record-params.js";
 /**
  * `windower operate "<task>" [recording flags] [--model p:m] [--base-url u]
  * [--secret name=source:ref]... [--max-steps n] [--timeout s] [--unbounded]
- * [--no-record] [--json]` plus `operate status|abort|list` — contracts/cli.md.
+ * [--no-record] [--detach] [--json]` plus `operate status|abort|list` —
+ * contracts/cli.md.
  *
- * Non-blocking, exactly like `start`: contracts/cli.md says `operate`
- * "Returns immediately with `{ runId }` — same non-blocking two-call shape as
- * `start`/`stop`", so this command does **not** follow or stream the run.
- * Human-readable output prints the runId plus the `operate status`/`operate
- * abort` follow-ups; `--json` prints the bare `{ runId }` daemon result.
+ * **Blocks by default, `local` mode** (`phase-20-daemon-optional.md` "operate
+ * blocking by default"): the operator engine (`@windower/operator`'s
+ * `runOperator`, loaded lazily via `operate-blocking.ts`) runs in-process
+ * against a `RecordingEngine` this command owns for the run's whole life — no
+ * daemon, no socket, no RPC. Step-by-step progress streams to **stderr**
+ * (`renderOperatorStepLine`); the terminal `OperatorRun` goes to **stdout**
+ * under `--json` (human-readable text otherwise). A terminal state other than
+ * `succeeded` exits `1` (`contracts/cli.md`: "reusing the existing 0/1/2/3
+ * exit-code scheme ... no new codes are introduced").
+ *
+ * `--detach` restores the original non-blocking, `daemon`-mode, `{ runId }`
+ * shape via `withBackend`/`resolveBackendMode("operate", { detach: true })` —
+ * unchanged from Phase 19 (see `renderRunOperatorResult`).
  *
  * The recording flags are `addSharedRecordingFlags` verbatim (per the phase
  * brief — not redefined here); `operate`-only flags come from
@@ -59,25 +70,45 @@ export function registerOperateCommand(program: Command): void {
     .argument("[task]", "the natural-language instruction to carry out");
 
   addOperateFlags(addSharedRecordingFlags(operate)).action(
-    async (task: string | undefined, opts: OperateOpts) => {
+    async (task: string | undefined, opts: OperateOpts, cmd: Command) => {
       const json = Boolean(opts.json);
-      await withDaemon(json, async (client) => {
-        if (task === undefined) {
-          throw new DaemonError(
+
+      if (task === undefined) {
+        process.exitCode = printError(
+          json,
+          new DaemonError(
             "INVALID_ARGS",
             'A <task> is required, e.g. windower operate "Open the app and create an incident"',
-          );
-        }
+          ),
+        );
+        return;
+      }
 
-        for (const warning of secretWarnings(parseSecretRefs(opts.secret ?? []))) {
-          process.stderr.write(`${warning}\n`);
-        }
+      for (const warning of secretWarnings(parseSecretRefs(opts.secret ?? []))) {
+        process.stderr.write(`${warning}\n`);
+      }
 
-        const config = await readRawConfig();
-        const params = buildRunOperatorParams(task, opts, config.operator ?? {});
-        const result = await client.runOperator(params);
-        printResult(json, result, renderRunOperatorResult);
-      });
+      const config = await readRawConfig();
+      const params = buildRunOperatorParams(task, opts, config.operator ?? {});
+
+      if (opts.detach) {
+        // `--detach`: original Phase 19 shape, unchanged. `daemon` mode
+        // (`resolveBackendMode("operate", { detach: true })`), auto-starts a
+        // daemon if needed, returns `{ runId }` immediately.
+        const forcedMode = resolveForcedMode(cmd.optsWithGlobals());
+        await withBackend(
+          "operate",
+          json,
+          async (backend) => {
+            const result = await backend.runOperator(params);
+            printResult(json, result, renderRunOperatorResult);
+          },
+          { detach: true, forcedMode },
+        );
+        return;
+      }
+
+      await runBlocking(params, json);
     },
   );
 
@@ -141,6 +172,58 @@ export function registerOperateCommand(program: Command): void {
         process.exitCode = printError(json, err);
       }
     });
+}
+
+/**
+ * The blocking (default) path: owns a fresh `RecordingEngine` for the run's
+ * whole life (mirrors `record.ts`'s `withBackend("record", ...)`, which does
+ * the same for `start`/sleep/`stop`), wires SIGINT to the operator loop's
+ * `AbortSignal` — one Ctrl-C aborts the run and finalizes (not discards) any
+ * active recording, `contracts/cli.md`'s "same as a normal completion" — and
+ * maps a non-`succeeded` terminal state to exit `1`.
+ *
+ * Exported for tests, which fire a synthetic `SIGINT` instead of waiting out
+ * a real run (mirrors `record.ts`'s `runInterruptibleRecording` test seam).
+ */
+export async function runBlocking(
+  params: Parameters<typeof runOperatorBlocking>[0],
+  json: boolean,
+): Promise<void> {
+  // Registered before any `await` so a SIGINT that arrives while this
+  // function's own setup (`sessionStore.load()`, etc.) is still in flight is
+  // never dropped — an `await` suspends this async function and returns
+  // control to the event loop, and `process.on` only starts catching signals
+  // once it has actually run.
+  const controller = new AbortController();
+  const onSigint = () => controller.abort();
+  process.on("SIGINT", onSigint);
+
+  try {
+    const sessionStore = new SessionStore();
+    await sessionStore.load();
+    const recordingEngine = new RecordingEngine({
+      store: sessionStore,
+      spawnSidecar: realSpawnSidecar,
+      targetLock: new FileTargetLock(),
+    });
+
+    const run = await runOperatorBlocking(params, {
+      signal: controller.signal,
+      recordingEngine,
+      onStep: (step) => {
+        process.stderr.write(`${renderOperatorStepLine(step)}\n`);
+      },
+    });
+
+    printResult(json, run, renderOperatorRun);
+    if (run.state !== "succeeded") {
+      process.exitCode = EXIT_GENERIC_FAILURE;
+    }
+  } catch (err) {
+    process.exitCode = printError(json, err);
+  } finally {
+    process.removeListener("SIGINT", onSigint);
+  }
 }
 
 export function renderRunOperatorResult(result: RunOperatorResult): string {

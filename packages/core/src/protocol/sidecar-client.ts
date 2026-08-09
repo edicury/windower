@@ -49,6 +49,16 @@ export class SidecarClient {
     this.stream = stream;
     const rl = createInterface({ input: stream, terminal: false });
     rl.on("line", (line) => this.handleLine(line));
+    // A transport torn down abruptly (e.g. the child process's stdio never
+    // came up at all — spawn() failed on a nonexistent binary path) can
+    // surface as an internal duplex/AbortError that readline re-emits on
+    // this Interface. `SidecarProcess` already swallows the equivalent
+    // event on `transport` itself for the same reason (see its comment);
+    // without a listener here too, readline's own EventEmitter throws an
+    // unhandled "error" and crashes the whole process. The pending-request
+    // rejection this client needs already happens via `stream`'s "close"
+    // handler below, so this is purely to prevent the crash.
+    rl.on("error", () => {});
     this.stream.once("close", () => {
       this.disposed = true;
       rl.close();

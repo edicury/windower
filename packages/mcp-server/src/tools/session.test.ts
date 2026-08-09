@@ -11,6 +11,7 @@ import {
   type StopRecordingResult,
 } from "@windower/core";
 import { beforeEach, describe, expect, it } from "vitest";
+import type { GetBackend } from "../backend.js";
 import { registerSessionTools } from "./session.js";
 
 const validDisplayTarget = {
@@ -87,7 +88,7 @@ function fakeDaemonClient(overrides: Partial<FakeDaemonClient> = {}): FakeDaemon
 
 async function connectServer(fake: FakeDaemonClient) {
   const server = new McpServer({ name: "windower-test", version: "0.0.0" });
-  registerSessionTools(server, async () => fake as unknown as DaemonClient);
+  registerSessionTools(server, (async () => fake) as unknown as GetBackend);
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test-client", version: "0.0.0" });

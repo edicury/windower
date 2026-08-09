@@ -20,16 +20,27 @@ import {
   AbortOperatorRunParamsSchema,
   AbortOperatorRunResultSchema,
   type DaemonClient,
+  type DaemonHelloEnv,
   GetOperatorRunParamsSchema,
   GetOperatorRunResultSchema,
   RunOperatorParamsSchema,
   RunOperatorResultSchema,
 } from "@windower/core";
-import { toMcpError } from "../daemon-client.js";
+import type { GetBackend } from "../backend.js";
+import { connectForOperatorRun, toMcpError } from "../daemon-client.js";
+import { buildOperatorHelloEnv } from "../operator-env.js";
+
+/**
+ * Injectable so tests can fake the env-scoped `run_operator` connection
+ * without spawning/connecting a real daemon — production callers omit this
+ * and get the real `connectForOperatorRun` (`../daemon-client.js`).
+ */
+export type ConnectForOperatorRun = (env: DaemonHelloEnv | undefined) => Promise<DaemonClient>;
 
 export function registerOperatorTools(
   server: McpServer,
-  getClient: () => Promise<DaemonClient>,
+  getBackend: GetBackend,
+  connectForRun: ConnectForOperatorRun = connectForOperatorRun,
 ): void {
   server.registerTool(
     "run_operator",
@@ -74,8 +85,17 @@ export function registerOperatorTools(
       outputSchema: RunOperatorResultSchema,
     },
     async (params) => {
+      // `run_operator` gets its own connection, per call, rather than
+      // `getBackend`'s memoized daemon client — see `connectForOperatorRun`'s
+      // doc for why: this call's `hello` must carry THIS call's scoped
+      // API-key/`env:`-secret snapshot (sourced from this MCP server
+      // process's own environment — i.e. the `mcpServers.<name>.env` block
+      // the user configured in their MCP host), and a memoized connection's
+      // `hello` may have already fired for a different (or no) model.
+      let client: DaemonClient | undefined;
       try {
-        const client = await getClient();
+        const env = buildOperatorHelloEnv(params);
+        client = await connectForRun(env);
         const result = await client.runOperator(params);
         return {
           structuredContent: result,
@@ -83,6 +103,10 @@ export function registerOperatorTools(
         };
       } catch (err) {
         return toMcpError(err);
+      } finally {
+        // The run itself continues server-side once accepted — only this
+        // short-lived calling connection is torn down here.
+        client?.dispose();
       }
     },
   );
@@ -105,8 +129,8 @@ export function registerOperatorTools(
     },
     async (params) => {
       try {
-        const client = await getClient();
-        const result = await client.getOperatorRun(params);
+        const backend = await getBackend("get_operator_run");
+        const result = await backend.getOperatorRun(params);
         return {
           structuredContent: result,
           content: [{ type: "text", text: JSON.stringify(result) }],
@@ -133,8 +157,8 @@ export function registerOperatorTools(
     },
     async (params) => {
       try {
-        const client = await getClient();
-        const result = await client.abortOperatorRun(params);
+        const backend = await getBackend("abort_operator_run");
+        const result = await backend.abortOperatorRun(params);
         return {
           structuredContent: result,
           content: [{ type: "text", text: JSON.stringify(result) }],

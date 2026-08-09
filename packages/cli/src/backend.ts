@@ -161,9 +161,7 @@ export async function markOrphanedSessionTerminal(
     stoppedAt: new Date().toISOString(),
     error: {
       code: "DAEMON_UNREACHABLE",
-      message:
-        "No daemon was reachable to finalize this session — its owning daemon appears to have " +
-        `died. Marked ${terminalState} locally by \`windower ${terminalState === "failed" ? "stop" : "cancel"}\`.`,
+      message: `No daemon was reachable to finalize this session — its owning daemon appears to have died. Marked ${terminalState} locally by \`windower ${terminalState === "failed" ? "stop" : "cancel"}\`.`,
     },
   });
   return { sessionId, state: terminalState, alreadyTerminal: false };

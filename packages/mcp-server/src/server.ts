@@ -5,7 +5,7 @@
  * by tests without touching stdin/stdout.
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getDaemonClient } from "./daemon-client.js";
+import { defaultGetBackend } from "./backend.js";
 import { registerTools } from "./tools/index.js";
 
 export const MCP_SERVER_NAME = "windower";
@@ -17,7 +17,7 @@ export function createServer(): McpServer {
     version: MCP_SERVER_VERSION,
   });
 
-  registerTools(server, getDaemonClient);
+  registerTools(server, defaultGetBackend());
 
   return server;
 }
