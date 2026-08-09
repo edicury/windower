@@ -6,6 +6,9 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "windower-daemon": "./dist/bin.js"
+  },
   "scripts": {
     "build": "tsc --build",
     "test": "vitest run --passWithNoTests",
@@ -13,9 +16,11 @@
     "clean": "tsc --build --clean"
   },
   "dependencies": {
-    "@windower/core": "workspace:*"
+    "@windower/core": "workspace:*",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/node": "^22.10.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

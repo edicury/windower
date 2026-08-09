@@ -1,8 +1,8 @@
 # Spec Status
 
-Current phase: **6 — Daemon & Session Lifecycle** (not started)
-Active phase file: `tasks/phase-6-daemon-session-lifecycle.md`
-Previous: Phase 5 (Audio) — complete, see below.
+Current phase: **7 — CLI** (not started)
+Active phase file: `tasks/phase-7-cli.md`
+Previous: Phase 6 (Daemon & Session Lifecycle) — complete, see below.
 
 Blocked: none
 
@@ -12,9 +12,17 @@ Planned (v1.1): Phase 15 (Post-Processing: trim, auto-zoom, ripples, gif/webm)
 
 Planned (post-MVP): Phase 16 (Windows backend), Phase 17 (Linux backend)
 
-Completed: Phase 0 (Foundation), Phase 1 (Sidecar Protocol & Capability Model), Phase 2 (macOS Enumeration & Permissions), Phase 3 (Window Control), Phase 4 (Video Capture), Phase 5 (Audio)
+Completed: Phase 0 (Foundation), Phase 1 (Sidecar Protocol & Capability Model), Phase 2 (macOS Enumeration & Permissions), Phase 3 (Window Control), Phase 4 (Video Capture), Phase 5 (Audio), Phase 6 (Daemon & Session Lifecycle)
 
 ## Recently completed
+
+- **Phase 6 — Daemon & Session Lifecycle** (2026-08-09): `apps/daemon` implemented — unix socket JSON-RPC server, session state machine, sidecar process lifecycle.
+  - `packages/core/src/daemon/`: a full daemon RPC protocol layer parallel to the sidecar one — `methods.ts` (the 9 contracts/mcp-tools.md operations as JSON-RPC methods, `DaemonErrorCodeSchema` = sidecar codes + `DAEMON_UNREACHABLE`/`INVALID_ARGS`/`TARGET_ALREADY_RECORDING`), `jsonrpc.ts` (a daemon-specific line schema — reusing the sidecar's would reject daemon-only error codes during `safeParse`), `client.ts` (`DaemonClient`, same newline-delimited-JSON shape as `SidecarClient`), `paths.ts` (`~/.windower/{daemon.sock,sessions/,config.json}`, `WINDOWER_HOME` env override for tests), `connect.ts` (`connectToDaemon`/`spawnDaemonDetached`/`ensureDaemonRunning` — the auto-spawn helper CLI/MCP will use, with a `WINDOWER_DAEMON_BIN_PATH` env override mirroring the sidecar's resolution pattern). Two RPC-shape name collisions with the sidecar's `methods.ts` (`RequestPermissionParams`, `ResizeWindowParams`) resolved by prefixing the daemon versions (`DaemonRequestPermissionParams`, `DaemonResizeWindowParams`).
+  - `apps/daemon/src/`: `SessionStore` (persists `RecordingSession` to `~/.windower/sessions/<id>.json` on every transition, in-memory cache, `load()`/`save()`/`list()`/`get()`, skips malformed files rather than crashing startup); `SessionManager` (the `pending → recording → stopping → finalized|canceled|failed` state machine — one `SidecarProcess` per active session via an injectable `SidecarFactory` so tests use `createFakeSidecarPair` instead of a real child process; concurrency policy keyed on target identity, `TARGET_ALREADY_RECORDING` on collision; fast-fail on synchronous `startCapture` rejection; writes a minimal `<video>.manifest.json` at stop per `OutputManifestSchema` — full manifest semantics are Phase 12's; reacts to both the sidecar's `captureEnded` notification and an unexpected process `exit` by marking the session `failed`); `PassthroughService` (`list_targets`/`check_permissions`/`request_permission`/`resize_window` — each spawns a short-lived transient sidecar, not tied to any session); `DaemonServer` (unix socket, `0600` perms, stale-socket cleanup on start, idle-shutdown via a periodic zero-active-sessions check rather than per-call reset — literally "idle" per the phase file's wording); `SessionStore`-driven crash recovery (`recoverCrashedSessions()`, scans for stale `recording`/`stopping` on startup and marks them `failed`); `main.ts`/`bin.ts` (process entrypoint, SIGTERM/SIGINT → clean socket teardown, idle shutdown calls `process.exit(0)` by default).
+  - Deviation from the phase file's literal wording: `list_targets`' `kinds` accepts `"app"` (contracts/mcp-tools.md's shape) but the sidecar's `enumerateTargets` only understands `"display"|"window"` (Phase 1's contract correction) — the daemon filters `"app"` out before calling the sidecar rather than erroring, documented inline in `passthrough.ts`.
+  - Known gap, intentionally deferred: `start_recording`'s `outputDir` param is accepted (schema-valid, contract-compliant) but not yet threaded anywhere — the sidecar protocol's `startCapture` params (Phase 1, frozen) have no output-path field, so where the sidecar writes today is whatever `native/macos`'s `VideoAssetWriter` defaults to. Phase 12 (Output Management) owns moving/naming the file into the configured output folder; wiring `outputDir` through earlier would be speculative plumbing with nothing to receive it yet.
+  - 19 new `@windower/daemon` tests (`session-store`, `session-manager` — start/stop/cancel, concurrency rejection, target-by-id resolution, `captureEnded` and process-exit failure paths, crash recovery — and `server`, a real-unix-socket round trip via `DaemonClient` including a live idle-shutdown test) plus 3 new `@windower/core` tests (`connectToDaemon`/`ensureDaemonRunning`/`spawnDaemonDetached` against a real spawned fixture process, `daemon/fixtures/fake-daemon-cli.mjs` mirroring the existing sidecar fixture pattern). Full `pnpm build`/`turbo run typecheck`/`turbo run test`/`biome check` clean: 100 Swift tests + 77 TS tests (up from 58).
+  - Not verified in this sandbox: real concurrent-session behavior against the actual macOS sidecar (only exercised against `FakeSidecar`/fixtures here, per the existing CI/e2e split), `windower daemon status|stop` CLI ergonomics (that command doesn't exist until Phase 7).
 
 - **Phase 5 — Audio** (2026-08-09): system-audio and microphone capture wired into Phase 4's video pipeline.
   - Built via 2 parallel subagents (`AudioCaptureConfig.swift` — pure `AudioSettingsInput`/`AudioTrackPlan` decode+config math, `AudioDeviceService` device enumeration/resolution; `VideoAssetWriter.swift` extended with `addAudioInput(outputSettings:)` returning an `AudioWriterInputHandle`, so system/mic tracks share the video input's `AVAssetWriter` and session-start time; `MicrophoneCaptureSource.swift` — `AVCaptureSession` wrapper) followed by this integration pass (`CaptureService.swift`).

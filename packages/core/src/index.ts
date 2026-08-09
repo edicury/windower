@@ -9,3 +9,4 @@ export const CORE_PACKAGE_NAME = "@windower/core";
 export * from "./schemas/index.js";
 export * from "./protocol/index.js";
 export * from "./process/index.js";
+export * from "./daemon/index.js";
