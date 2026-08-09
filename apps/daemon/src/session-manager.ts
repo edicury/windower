@@ -205,6 +205,9 @@ export class SessionManager {
       onExit: (info) => {
         void this.handleSidecarExit(sessionId, info);
       },
+      onStderrLine: (line) => {
+        console.error(`[SessionManager] sidecar[${sessionId}] stderr: ${line}`);
+      },
     });
 
     const writer = new EventTimelineWriter(sessionId);
@@ -237,6 +240,11 @@ export class SessionManager {
       this.eventCapabilities.set(sessionId, eventCapabilities);
       handle.client.on("event", (payload) => {
         void writer.append(payload.event);
+      });
+      handle.client.on("log", (payload) => {
+        console.error(
+          `[SessionManager] sidecar[${sessionId}] log (${payload.level}): ${payload.message}`,
+        );
       });
       await handle.client.startCapture({ sessionId, target, video, audio });
     } catch (err) {
