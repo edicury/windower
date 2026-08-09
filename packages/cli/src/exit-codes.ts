@@ -11,15 +11,19 @@ import { DaemonError, type DaemonErrorCode } from "@windower/core";
  *       daemon down from bad input" — kept as its own code for exactly that)
  *   3 — INVALID_ARGS / validation failure (bad input, as opposed to daemon
  *       down or a capture-side failure)
+ *   4 — OUTPUT_DIR_NOT_WRITABLE (bad `outputDir` config, caught at `start`
+ *       preflight rather than after a recording completes)
  */
 export const EXIT_SUCCESS = 0;
 export const EXIT_GENERIC_FAILURE = 1;
 export const EXIT_DAEMON_UNREACHABLE = 2;
 export const EXIT_INVALID_ARGS = 3;
+export const EXIT_OUTPUT_DIR_NOT_WRITABLE = 4;
 
 const DAEMON_ERROR_EXIT_CODES: Partial<Record<DaemonErrorCode, number>> = {
   DAEMON_UNREACHABLE: EXIT_DAEMON_UNREACHABLE,
   INVALID_ARGS: EXIT_INVALID_ARGS,
+  OUTPUT_DIR_NOT_WRITABLE: EXIT_OUTPUT_DIR_NOT_WRITABLE,
 };
 
 /** Maps any thrown error to a process exit code. Unknown/non-`DaemonError` errors get `EXIT_GENERIC_FAILURE`. */

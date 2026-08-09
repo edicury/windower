@@ -1,12 +1,14 @@
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   type CaptureTarget,
   DaemonError,
   EventTimelineSchema,
+  OutputManifestSchema,
   type TimelineEvent,
   WINDOWER_HOME_ENV,
+  writeConfig,
 } from "@windower/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { SessionManager, type SessionManagerOptions } from "./session-manager.js";
@@ -41,6 +43,11 @@ describe("SessionManager", () => {
     home = await mkdtemp(join(tmpdir(), "windower-session-manager-"));
     originalHome = process.env[WINDOWER_HOME_ENV];
     process.env[WINDOWER_HOME_ENV] = home;
+    // Every test gets a config.json pointing outputDir at a dir under the
+    // temp WINDOWER_HOME, so `defaultOutputDir()` (which resolves under the
+    // real user homedir, ignoring WINDOWER_HOME) is never hit — recordings
+    // in this suite must never touch a real user's filesystem.
+    await writeConfig({ outputDir: join(home, "output") });
   });
 
   afterEach(async () => {
@@ -316,6 +323,61 @@ describe("SessionManager", () => {
       const session = manager.getSession({ sessionId });
       expect(session.state).toBe("finalized");
       expect(session.outputPath).toBe(result.outputPath);
+    });
+  });
+
+  describe("output management", () => {
+    it("moves the finalized recording into the configured output dir using the filename template", async () => {
+      const outputDir = join(home, "custom-output");
+      await writeConfig({ outputDir, filenameTemplate: "{target}-recording" });
+      const { manager } = makeManager();
+
+      const { sessionId } = await manager.startRecording({ target: DISPLAY_TARGET });
+      const result = await manager.stopRecording({ sessionId });
+
+      expect(result.outputPath).toBe(join(outputDir, "Built-in-recording.mp4"));
+      const fileStat = await stat(result.outputPath);
+      expect(fileStat.isFile()).toBe(true);
+      expect(result.manifest.file.path).toBe(result.outputPath);
+    });
+
+    it("appends -2 rather than overwriting on a filename collision", async () => {
+      const outputDir = join(home, "collide-output");
+      await writeConfig({ outputDir, filenameTemplate: "fixed-name" });
+      const { manager: managerA } = makeManager();
+      const { sessionId: sessionIdA } = await managerA.startRecording({ target: DISPLAY_TARGET });
+      const resultA = await managerA.stopRecording({ sessionId: sessionIdA });
+      expect(resultA.outputPath).toBe(join(outputDir, "fixed-name.mp4"));
+
+      const { manager: managerB } = makeManager();
+      const { sessionId: sessionIdB } = await managerB.startRecording({ target: DISPLAY_TARGET });
+      const resultB = await managerB.stopRecording({ sessionId: sessionIdB });
+      expect(resultB.outputPath).toBe(join(outputDir, "fixed-name-2.mp4"));
+
+      // The first file must still exist, untouched — never silently overwritten.
+      await expect(stat(resultA.outputPath)).resolves.toBeDefined();
+    });
+
+    it("fails fast at start with OUTPUT_DIR_NOT_WRITABLE when outputDir is not writable, and persists no session", async () => {
+      const { manager, store } = makeManager();
+      // A regular file can never be mkdir'd into / written to as a directory.
+      const notADir = join(home, "not-a-dir");
+      await writeFile(notADir, "not a directory");
+
+      await expect(
+        manager.startRecording({ target: DISPLAY_TARGET, outputDir: notADir }),
+      ).rejects.toMatchObject({ code: "OUTPUT_DIR_NOT_WRITABLE" });
+
+      expect(store.list()).toHaveLength(0);
+      expect(manager.activeSessionCount).toBe(0);
+    });
+
+    it("finalized manifest validates against OutputManifestSchema", async () => {
+      const { manager } = makeManager();
+      const { sessionId } = await manager.startRecording({ target: DISPLAY_TARGET });
+      const result = await manager.stopRecording({ sessionId });
+
+      expect(() => OutputManifestSchema.parse(result.manifest)).not.toThrow();
     });
   });
 });

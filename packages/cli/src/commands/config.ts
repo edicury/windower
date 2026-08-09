@@ -3,6 +3,7 @@ import {
   type ResolvedWindowerConfig,
   WindowerConfigSchema,
   readConfig,
+  readRawConfig,
   writeConfig,
 } from "@windower/core";
 import type { Command } from "commander";
@@ -159,15 +160,11 @@ export function registerConfigCommand(program: Command): void {
     .action(async (key: string, value: string, opts: { json?: boolean }) => {
       const json = Boolean(opts.json);
       try {
-        const resolved = await readConfig();
-        // Start from the currently-resolved config (minus universally-defaulted
-        // scalars we never want to freeze into the file just because a user set
-        // an unrelated key) so an existing defaultVideo/defaultAudio survives a
-        // dotted-path merge instead of being clobbered.
-        const base: Record<string, unknown> = {
-          ...(resolved.defaultVideo ? { defaultVideo: resolved.defaultVideo } : {}),
-          ...(resolved.defaultAudio ? { defaultAudio: resolved.defaultAudio } : {}),
-        };
+        // Start from the raw on-disk config (not readConfig()'s defaulted
+        // view) so a field with a universal default — e.g. outputDir — that
+        // was explicitly set earlier doesn't silently vanish just because
+        // this call is setting some other unrelated key.
+        const base: Record<string, unknown> = await readRawConfig();
         const merged = mergeConfigSet(base, key, value);
         const parsed = WindowerConfigSchema.partial().safeParse(merged);
         if (!parsed.success) {

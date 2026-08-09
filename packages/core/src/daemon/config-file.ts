@@ -19,20 +19,32 @@ export interface ResolvedWindowerConfig {
 }
 
 /**
+ * Reads `~/.windower/config.json` (or `WINDOWER_HOME`-overridden path)
+ * verbatim, with no defaults merged in — a missing file reads as `{}`.
+ * Callers that want to update one field without clobbering the others
+ * already on disk (e.g. `windower config set`) should start from this, not
+ * from `readConfig()`'s defaulted view, or an explicitly-set field with a
+ * universal default (like `outputDir`) would silently vanish on the next
+ * unrelated `set`.
+ */
+export async function readRawConfig(): Promise<WindowerConfig> {
+  try {
+    const text = await readFile(configFilePath(), "utf8");
+    return WindowerConfigSchema.parse(JSON.parse(text));
+  } catch (err) {
+    if (!isFileNotFound(err)) throw err;
+    return {};
+  }
+}
+
+/**
  * Reads `~/.windower/config.json` (or `WINDOWER_HOME`-overridden path) and
  * merges it with defaults. A missing file is not an error — it's treated
  * the same as an empty config, since the file is only written on first
  * `windower config set`.
  */
 export async function readConfig(): Promise<ResolvedWindowerConfig> {
-  let raw: WindowerConfig = {};
-  try {
-    const text = await readFile(configFilePath(), "utf8");
-    raw = WindowerConfigSchema.parse(JSON.parse(text));
-  } catch (err) {
-    if (!isFileNotFound(err)) throw err;
-  }
-
+  const raw = await readRawConfig();
   return {
     outputDir: raw.outputDir ?? defaultOutputDir(),
     filenameTemplate: raw.filenameTemplate ?? DEFAULT_FILENAME_TEMPLATE,

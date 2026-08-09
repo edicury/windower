@@ -1,3 +1,6 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { Duplex, PassThrough } from "node:stream";
 import type { CaptureTarget } from "../schemas/capture-target.js";
@@ -273,8 +276,16 @@ export class FakeSidecar {
       throw new FakeSidecarError("SESSION_NOT_FOUND", `No session "${params.sessionId}"`);
     }
     this.sessions.delete(params.sessionId);
+    // Real sidecars always write a real file to their own temp location
+    // (contracts/sidecar-protocol.md — the sidecar is never told an output
+    // path) before returning `outputFilePath`; the fake mirrors that so the
+    // daemon's real `rename()` into the configured output dir has something
+    // real to move, instead of the daemon needing a test-only fallback.
+    const outputFilePath = join(tmpdir(), "fake-sidecar", `${params.sessionId}.mov`);
+    mkdirSync(dirname(outputFilePath), { recursive: true });
+    writeFileSync(outputFilePath, "fake-mov-data");
     return {
-      outputFilePath: `/tmp/fake-sidecar/${params.sessionId}.mov`,
+      outputFilePath,
       actualDurationMs: Date.now() - session.startedAt,
       actualResolution: { width: 1920, height: 1080 },
     };

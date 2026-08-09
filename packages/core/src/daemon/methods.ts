@@ -24,6 +24,7 @@ export const DaemonErrorCodeSchema = z.enum([
   "DAEMON_UNREACHABLE",
   "INVALID_ARGS",
   "TARGET_ALREADY_RECORDING",
+  "OUTPUT_DIR_NOT_WRITABLE",
 ]);
 export type DaemonErrorCode = z.infer<typeof DaemonErrorCodeSchema>;
 

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, rename, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
 import {
   type AudioSettings,
@@ -14,12 +14,18 @@ import {
   type SpawnSidecarOptions,
   type VideoSettings,
   VideoSettingsSchema,
+  readConfig,
 } from "@windower/core";
 import { EventTimelineWriter } from "./event-timeline-writer.js";
 import {
   muxNarration as defaultMuxNarration,
   validateNarrationFile as defaultValidateNarrationFile,
 } from "./narration-mux.js";
+import {
+  ensureWritableOutputDir,
+  resolveFilenameTemplate,
+  resolveUniqueOutputPath,
+} from "./output-resolver.js";
 import type { SessionStore } from "./session-store.js";
 
 /** Placeholder until Phase 14 wires a real package-version read (manifest.json's `windowerVersion` field). */
@@ -107,6 +113,8 @@ export class SessionManager {
   private readonly activeTargetKeys = new Map<string, string>();
   private readonly eventWriters = new Map<string, EventTimelineWriter>();
   private readonly eventCapabilities = new Map<string, { keystrokes: boolean }>();
+  /** Final destination (in the configured output dir) planned at `start`, moved to at `stop` — see output-resolver.ts. */
+  private readonly plannedOutputPaths = new Map<string, string>();
 
   constructor(options: SessionManagerOptions) {
     this.store = options.store;
@@ -152,10 +160,35 @@ export class SessionManager {
       );
     }
 
-    const video = VideoSettingsSchema.parse({ ...DEFAULT_VIDEO_SETTINGS, ...params.video });
-    const audio = AudioSettingsSchema.parse({ ...DEFAULT_AUDIO_SETTINGS, ...params.audio });
+    const config = await readConfig();
+    const video = VideoSettingsSchema.parse({
+      ...DEFAULT_VIDEO_SETTINGS,
+      ...config.defaultVideo,
+      ...params.video,
+    });
+    const audio = AudioSettingsSchema.parse({
+      ...DEFAULT_AUDIO_SETTINGS,
+      ...config.defaultAudio,
+      ...params.audio,
+    });
 
     const sessionId = randomUUID();
+
+    // Pre-flight: resolve + validate the output location before any
+    // session/sidecar state exists, so a bad outputDir fails immediately at
+    // `start` (see phase-12 exit criteria) rather than after the recording
+    // completes.
+    const outputDir = params.outputDir ?? config.outputDir;
+    await ensureWritableOutputDir(outputDir);
+    const baseFilename = resolveFilenameTemplate(config.filenameTemplate, {
+      target,
+      sessionId,
+      timestamp: new Date(),
+    });
+    const ext = `.${video.container}`;
+    const plannedOutputPath = await resolveUniqueOutputPath(outputDir, baseFilename, ext);
+    this.plannedOutputPaths.set(sessionId, plannedOutputPath);
+
     let session: RecordingSession = {
       id: sessionId,
       state: "pending",
@@ -202,6 +235,7 @@ export class SessionManager {
       this.activeTargetKeys.delete(key);
       await handle.terminate().catch(() => {});
       await this.discardEventWriter(sessionId);
+      this.plannedOutputPaths.delete(sessionId);
       const daemonErr = toDaemonError(err);
       session = {
         ...session,
@@ -235,6 +269,14 @@ export class SessionManager {
       );
     }
 
+    const plannedOutputPath = this.plannedOutputPaths.get(session.id);
+    if (!plannedOutputPath) {
+      throw new DaemonError(
+        "INTERNAL_ERROR",
+        `No planned output path for session "${session.id}" — startRecording invariant violated`,
+      );
+    }
+
     if (params.narration) {
       // Fail fast, before touching capture state: an invalid narration file
       // must leave the session exactly as it was (still "recording"), not
@@ -257,9 +299,21 @@ export class SessionManager {
     } finally {
       await handle.terminate().catch(() => {});
       this.cleanupActive(session.id, session.target);
+      this.plannedOutputPaths.delete(session.id);
     }
 
-    const outputPath = result.outputFilePath;
+    // The sidecar always writes to its own temp location (never told the
+    // final output path — contracts/sidecar-protocol.md); moving it into the
+    // configured output dir under the resolved filename is the daemon's job.
+    try {
+      await rename(result.outputFilePath, plannedOutputPath);
+    } catch (err) {
+      const daemonErr = toDaemonError(err);
+      await this.failSession(session.id, daemonErr);
+      throw daemonErr;
+    }
+
+    const outputPath = plannedOutputPath;
     const manifestPath = manifestPathFor(outputPath);
 
     const writer = this.eventWriters.get(session.id);
@@ -378,6 +432,7 @@ export class SessionManager {
     }
     this.cleanupActive(session.id, session.target);
     await this.discardEventWriter(session.id);
+    this.plannedOutputPaths.delete(session.id);
 
     await this.store.save({ ...session, state: "canceled", stoppedAt: nowIso() });
     return { canceled: true };
@@ -405,6 +460,7 @@ export class SessionManager {
     this.cleanupActive(sessionId, session.target);
     await handle?.terminate().catch(() => {});
     await this.discardEventWriter(sessionId);
+    this.plannedOutputPaths.delete(sessionId);
     await this.failSession(
       sessionId,
       new DaemonError("CAPTURE_FAILED", `Sidecar-initiated stop: ${reason}`),
@@ -419,6 +475,7 @@ export class SessionManager {
     if (!session || session.state !== "recording") return; // expected exit from our own terminate()
     this.cleanupActive(sessionId, session.target);
     await this.discardEventWriter(sessionId);
+    this.plannedOutputPaths.delete(sessionId);
     await this.failSession(
       sessionId,
       new DaemonError(
