@@ -1,0 +1,25 @@
+{
+  "name": "@windower/cli",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "windower": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --build --emitDeclarationOnly false --noEmit",
+    "clean": "tsc --build --clean"
+  },
+  "dependencies": {
+    "@windower/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

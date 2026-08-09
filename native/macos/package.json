@@ -1,0 +1,11 @@
+{
+  "name": "@windower/sidecar-macos",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Swift Package wrapper so turbo can drive swift build/swift test for the macOS sidecar.",
+  "scripts": {
+    "build": "swift build",
+    "test": "swift test"
+  }
+}

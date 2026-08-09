@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build-lint-test:
+    # macOS runner required: native/macos is a Swift Package Manager target
+    # that must be compiled on macOS, and it's wired into the same
+    # `turbo run build`/`turbo run test` pipeline as the TS workspace.
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm turbo run lint
+
+      - name: Typecheck
+        run: pnpm turbo run typecheck
+
+      - name: Build (TS workspace + swift build)
+        run: pnpm turbo run build
+
+      - name: Test (Vitest + swift test)
+        run: pnpm turbo run test

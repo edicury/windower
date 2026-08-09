@@ -1,0 +1,24 @@
+# Node / TS
+node_modules/
+dist/
+*.tsbuildinfo
+.turbo/
+pnpm-lock.yaml.bak
+
+# Swift
+.build/
+*.swiftpm
+.swiftpm/
+DerivedData/
+
+# macOS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*

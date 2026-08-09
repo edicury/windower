@@ -1,0 +1,11 @@
+{
+  "name": "@windower/plugin-claude-code",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "description": "Claude Code plugin manifest + SKILL.md packaging the windower CLI/MCP server for the record-a-demo workflow.",
+  "scripts": {
+    "build": "echo '[plugins/claude-code] no build step yet (manifest + SKILL.md only)'",
+    "test": "echo '[plugins/claude-code] no tests yet'"
+  }
+}

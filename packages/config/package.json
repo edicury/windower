@@ -1,0 +1,10 @@
+{
+  "name": "@windower/config",
+  "version": "0.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "files": [
+    "biome.json",
+    "tsconfig.base.json"
+  ]
+}
