@@ -144,6 +144,13 @@ export interface EnsureDaemonRunningOptions {
    * MCP's `run_operator` do. Never logged.
    */
   env?: DaemonHelloEnv;
+  /**
+   * Test-only hook, invoked with the `ChildProcess` right after a spawn
+   * happens (if one happens) — lets tests capture the pid for cleanup since
+   * `ensureDaemonRunning`/`restartDaemon` only ever return the connected
+   * `DaemonClient`, not the spawned process. Never used by real callers.
+   */
+  onSpawn?: (child: ChildProcess) => void;
 }
 
 interface SafetyCheck {
@@ -325,7 +332,8 @@ async function spawnAndConnect(
 
     await maybeUnlinkStaleSocket(socketPath);
 
-    spawnDaemonDetached(options.entryPath);
+    const child = spawnDaemonDetached(options.entryPath);
+    options.onSpawn?.(child);
     return await pollForSocket(socketPath, deadline);
   } finally {
     await lock.release();

@@ -8,6 +8,7 @@ Every native backend (`native/macos`, future `native/windows`, `native/linux`) i
 - Requests/responses/notifications are **JSON-RPC 2.0**, one JSON object per line (newline-delimited), on the sidecar's stdin (daemon → sidecar) and stdout (sidecar → daemon).
 - stderr is free-form human-readable logs only — never protocol data.
 - The daemon owns the sidecar's lifecycle: one sidecar process per active `RecordingSession`, spawned on `startCapture`, terminated after `stopCapture`/`cancelCapture` completes.
+- Responses correlate to requests by JSON-RPC `id` alone. A caller MUST NOT assume requests are answered in the order they were sent, and a backend MAY service requests concurrently (e.g. handling a `stopCapture` while an earlier `captureFrame`/`enumerateTargets` call is still in flight or blocked on a slow OS completion handler) rather than strictly one-at-a-time. `packages/core/src/protocol/sidecar-client.ts`'s `SidecarClient` already implements the caller side this way (a `Map<id, PendingCall>`, no ordering assumption) — this line makes that existing behavior an explicit contract requirement rather than an implementation detail, so every backend (including future Windows/Linux ones) can rely on being allowed to answer out of order instead of serializing all RPC handling on one blockable thread. See `native/macos`'s `main.swift` for the reference implementation (`rpcQueue`, a concurrent `DispatchQueue` fed by the stdin read loop).
 
 ## Handshake
 

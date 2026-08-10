@@ -116,6 +116,7 @@ describe("connectToDaemon / ensureDaemonRunning / restartDaemon", () => {
       socketPath: daemonSocketPath(),
       entryPath: FIXTURE_PATH,
       spawnTimeoutMs: 5000,
+      onSpawn: (child) => spawned.push(child),
     });
     expect(client).toBeDefined();
     client.dispose();
@@ -133,6 +134,7 @@ describe("connectToDaemon / ensureDaemonRunning / restartDaemon", () => {
       socketPath: daemonSocketPath(),
       entryPath: FIXTURE_PATH,
       spawnTimeoutMs: 5000,
+      onSpawn: (child) => spawned.push(child),
     });
     expect(client).toBeDefined();
     const info = await client.daemonInfo();
@@ -148,6 +150,7 @@ describe("connectToDaemon / ensureDaemonRunning / restartDaemon", () => {
       socketPath: daemonSocketPath(),
       entryPath: FIXTURE_PATH,
       spawnTimeoutMs: 5000,
+      onSpawn: (child) => spawned.push(child),
     });
     expect(client).toBeDefined();
     const info = await client.daemonInfo();
@@ -283,6 +286,7 @@ describe("connectToDaemon / ensureDaemonRunning / restartDaemon", () => {
       socketPath,
       entryPath: FIXTURE_PATH,
       spawnTimeoutMs: 5000,
+      onSpawn: (child) => spawned.push(child),
     });
     expect(client).toBeDefined();
     const info = await client.daemonInfo();
@@ -331,6 +335,7 @@ describe("connectToDaemon / ensureDaemonRunning / restartDaemon", () => {
         socketPath: daemonSocketPath(),
         entryPath: FIXTURE_PATH,
         spawnTimeoutMs: 5000,
+        onSpawn: (child) => spawned.push(child),
       });
       expect(client).toBeDefined();
       client.dispose();
@@ -350,6 +355,7 @@ describe("connectToDaemon / ensureDaemonRunning / restartDaemon", () => {
         entryPath: FIXTURE_PATH,
         spawnTimeoutMs: 5000,
         force: true,
+        onSpawn: (child) => spawned.push(child),
       });
       expect(client).toBeDefined();
       client.dispose();

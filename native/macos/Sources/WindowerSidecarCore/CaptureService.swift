@@ -308,12 +308,22 @@ final class CaptureSessionContext {
     /// is retained; `nil` when tap creation failed entirely (non-fatal, see
     /// `startCapture`'s doc comment on this field).
     let eventTapSource: EventTapSource?
+    /// Bug #6 wall-clock liveness watchdog (~CaptureSessionManager.
+    /// startLivenessTimer doc comment) — a repeating `DispatchSourceTimer`
+    /// that must be retained for the session's lifetime (a `DispatchSource`
+    /// with no other strong reference is eligible for deallocation, which
+    /// silently stops it firing, same caveat as every other per-session
+    /// resource in this struct) and explicitly canceled on every teardown
+    /// path (stop/cancel/unexpected-stop) so it doesn't keep firing — and
+    /// keep the process alive — after the session ends.
+    let livenessTimer: DispatchSourceTimer
 
     init(
         sessionId: String, stream: SCStream, writer: VideoAssetWriter,
         output: CaptureStreamOutput, delegate: CaptureStreamDelegate,
         sampleQueue: DispatchQueue, outputURL: URL, resolvedWidth: Int, resolvedHeight: Int,
-        startedAt: Date, systemAudioOutput: CaptureSystemAudioOutput? = nil,
+        startedAt: Date, livenessTimer: DispatchSourceTimer,
+        systemAudioOutput: CaptureSystemAudioOutput? = nil,
         microphoneSource: MicrophoneCaptureSource? = nil,
         eventTapSource: EventTapSource? = nil
     ) {
@@ -327,6 +337,7 @@ final class CaptureSessionContext {
         self.resolvedWidth = resolvedWidth
         self.resolvedHeight = resolvedHeight
         self.startedAt = startedAt
+        self.livenessTimer = livenessTimer
         self.systemAudioOutput = systemAudioOutput
         self.microphoneSource = microphoneSource
         self.eventTapSource = eventTapSource
@@ -703,10 +714,69 @@ public final class CaptureSessionManager {
             })
         eventTapSource.start()
 
+        // Bug #6 wall-clock liveness watchdog: a repeating timer, independent
+        // of `VideoAssetWriter`'s PTS-gap "stall" detector, which can only
+        // fire on a subsequent accepted frame and therefore structurally
+        // cannot catch `SCStream` stopping delivery ENTIRELY (see
+        // `VideoAssetWriter.checkLiveness(now:)`'s doc comment and
+        // bugs.spec.md #6's "Reproduced — Phase 20" entry, which found
+        // exactly that shape: zero drops/stalls reported for a session that
+        // silently stopped recording after ~9s of a ~201s capture). Polls at
+        // 1/3 of the liveness threshold so a real stall is caught within one
+        // threshold window, not two-to-three.
+        let livenessThresholdMs = VideoAssetWriter.livenessThresholdMs(forFps: video.fps)
+        let livenessQueue = DispatchQueue(label: "windower.capture.liveness.\(params.sessionId)")
+        let livenessTimer = DispatchSource.makeTimerSource(queue: livenessQueue)
+        livenessTimer.schedule(
+            deadline: .now() + .milliseconds(Int(livenessThresholdMs)),
+            repeating: .milliseconds(max(1, Int(livenessThresholdMs / 3))))
+        // Bug #6 follow-up (post-passthrough-fix session): the PTS-gap
+        // "stall" detector (`VideoAssetWriter.stallEventCount`/
+        // `maxStallGapMs`) previously only surfaced as a rolled-up count in
+        // `diagnosticsSummary()` at `stopCapture` time — e.g. "37 PTS-gap
+        // stall events" reported only after the whole session ended, with no
+        // way to know WHEN during the session any individual stall happened.
+        // That made it impossible to correlate a stall against what the
+        // operator loop was doing at that moment (a `captureFrame`/
+        // `enumerateTargets` RPC, a `performInput` burst, plain UI-driven
+        // encoder load, ...) without re-running the whole investigation with
+        // custom instrumentation each time. Piggybacking on this same poll
+        // timer (already running at 1/3 of the liveness threshold, so a new
+        // stall is surfaced within a few hundred ms of when it actually
+        // happened, not just at session end) closes that gap for the next
+        // real repro: every new stall since the last tick now gets its own
+        // real-time `warn` `log` notification with a timestamp a caller can
+        // line up against `.events.json`/the operator's own step log.
+        var lastLoggedStallEventCount = 0
+        livenessTimer.setEventHandler { [weak self] in
+            guard let self else { return }
+            let stallEventCount = writer.stallEventCount
+            if stallEventCount > lastLoggedStallEventCount {
+                let newStalls = stallEventCount - lastLoggedStallEventCount
+                lastLoggedStallEventCount = stallEventCount
+                self.emitLog(
+                    sessionId: params.sessionId, level: "warn",
+                    message:
+                        "capture PTS-gap stall detected for session \(params.sessionId): \(newStalls) new stall event(s) (cumulative \(stallEventCount), longest gap so far \(Int(writer.maxStallGapMs.rounded()))ms) — frame delivery resumed after exceeding the stall threshold"
+                )
+            }
+            guard writer.checkLiveness() else { return }
+            // `checkLiveness` only returns `true` on the transition into a
+            // stalled state, so this fires once per session, not on every
+            // tick after the first failure.
+            self.emitLog(
+                sessionId: params.sessionId, level: "error",
+                message:
+                    "capture liveness check failed for session \(params.sessionId): no frame appended for over \(Int(livenessThresholdMs))ms — capture may have silently stopped delivering frames"
+            )
+        }
+        livenessTimer.resume()
+
         let context = CaptureSessionContext(
             sessionId: params.sessionId, stream: stream, writer: writer, output: output,
             delegate: delegate, sampleQueue: sampleQueue, outputURL: outputURL,
             resolvedWidth: resolved.width, resolvedHeight: resolved.height, startedAt: startedAt,
+            livenessTimer: livenessTimer,
             systemAudioOutput: systemAudioOutput, microphoneSource: microphoneSource,
             eventTapSource: eventTapSource)
 
@@ -730,6 +800,7 @@ public final class CaptureSessionManager {
         // session ends.
         context.microphoneSource?.stop()
         context.eventTapSource?.stop()
+        context.livenessTimer.cancel()
 
         // Best-effort: even if the stream errors on stop, the frames already
         // handed to the writer are still worth finalizing.
@@ -807,6 +878,7 @@ public final class CaptureSessionManager {
         }
         context.microphoneSource?.stop()
         context.eventTapSource?.stop()
+        context.livenessTimer.cancel()
         // Errors ignored deliberately — we're discarding the output anyway.
         _ = awaitCompletion { done in context.stream.stopCapture(completionHandler: done) }
         context.writer.cancel()
@@ -823,6 +895,7 @@ public final class CaptureSessionManager {
         guard let context = removeSession(sessionId) else { return }
         context.microphoneSource?.stop()
         context.eventTapSource?.stop()
+        context.livenessTimer.cancel()
         context.writer.cancel()
         emitCaptureEnded(sessionId: sessionId, reason: captureEndedReason(for: error))
     }

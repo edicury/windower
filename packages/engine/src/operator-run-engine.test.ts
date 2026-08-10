@@ -171,6 +171,39 @@ describe("OperatorRunEngine", () => {
     expect((await readRunFile(runId)).state).toBe("succeeded");
   });
 
+  it("routes list_targets/resize_window through the run's own sidecar instead of spawning a transient one (bugs.spec.md #6)", async () => {
+    // PassthroughService.listTargets/resizeWindow spawn a brand-new,
+    // separate sidecar process per call and terminate it right after — fine
+    // for a caller with no active session, but OS-level tracing showed that
+    // spawning a second ScreenCaptureKit-capable process while another
+    // process's SCStream is actively recording reliably kills that stream
+    // permanently (replayd logs `RPClientProxy stream:didStopWithError:` on
+    // the live session). createDeps must call `ctx.client` directly for
+    // both operations during a run, never `this.passthrough`, so no second
+    // sidecar is ever spawned while a recording is in progress.
+    const { manager, spawns } = makeManager({
+      impl: async (_options, deps) => {
+        const targets = await deps.listTargets(["display"]);
+        expect(targets).toEqual([DISPLAY_TARGET]);
+        await deps.resizeWindow("display-1", { x: 0, y: 0, width: 100, height: 100 });
+        return { state: "succeeded", steps: [] };
+      },
+    });
+
+    const { runId } = await manager.runOperator({ task: "list and resize", model: MODEL });
+    await manager.whenSettled(runId);
+
+    expect((await readRunFile(runId)).state).toBe("succeeded");
+    // Exactly two sidecars spawned for the whole run: one transient spawn
+    // from `resolveOperatorTarget()`'s pre-recording `passthrough.listTargets`
+    // call (no stream active yet, so spawning is safe there), and the
+    // recording's own long-lived sidecar. Critically, NOT a third — the
+    // in-loop `deps.listTargets`/`deps.resizeWindow` calls above must reuse
+    // the recording's sidecar (`ctx.client`), not spawn another transient one
+    // while its `SCStream` is live.
+    expect(spawns).toHaveLength(2);
+  });
+
   it("aborts a run, marks it aborted, and finalizes the recording", async () => {
     const { manager, sessionManager } = makeManager({
       impl: (options) =>

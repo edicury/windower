@@ -241,6 +241,17 @@ public enum FrameCaptureService {
         do {
             return try EnumerationService.fetchShareableContent()
         } catch {
+            if case .timedOut(let afterMs)? = error as? EnumerationError {
+                // bugs.spec.md #6: see `EnumerationError.timedOut` — same
+                // reasoning as `enumerateTargets`' handling of this case in
+                // main.swift, applied here since `captureFrame` also routes
+                // through `fetchShareableContent` for target resolution and
+                // is invoked repeatedly by the operator loop during a live
+                // capture.
+                throw SidecarRpcError.serverError(
+                    "captureFrame failed: SCShareableContent did not respond within \(Int(afterMs))ms",
+                    code: .captureFailed)
+            }
             let nsError = error as NSError
             if nsError.domain == "com.apple.ScreenCaptureKit.SCStreamErrorDomain"
                 && nsError.code == -3801
@@ -254,13 +265,34 @@ public enum FrameCaptureService {
         }
     }
 
+    /// Bound for `captureImage`'s blocking wait on `SCScreenshotManager` —
+    /// see the timeout handling below and `EnumerationError.timedOut`'s doc
+    /// on `fetchShareableContent` for the identical reasoning: this is one
+    /// of the few blocking-bridge call sites invoked repeatedly (once per
+    /// operator observe→decide→act step) while an `SCStream` recording may
+    /// be simultaneously live on the same process, over the sidecar's ONE
+    /// single-threaded stdio RPC loop. bugs.spec.md #6's most concrete
+    /// reproduction to date showed the operate loop go completely silent —
+    /// no further RPCs serviced at all — immediately after a `list_targets`
+    /// call during an active recording, with the capture's own liveness
+    /// watchdog firing around the same moment; a `captureFrame` step is the
+    /// next thing the operator loop does in that position. Whether or not
+    /// `SCScreenshotManager.captureImage`'s async task is the specific thing
+    /// that stopped completing, an unbounded wait here can never be
+    /// distinguished from — and can directly cause — exactly that symptom,
+    /// since this thread is the sidecar's only RPC dispatcher. Bounding it
+    /// converts a silent, permanent process-wide freeze into a reported,
+    /// catchable per-call error.
+    public static let captureImageTimeoutMs: Double = 10000
+
     @available(macOS 14.0, *)
     private static func captureImage(filter: SCContentFilter, configuration: SCStreamConfiguration)
         throws -> CGImage
     {
         // `SCScreenshotManager.captureImage` is async-only; the dispatch loop
         // in main.swift is synchronous, so this bridges with a semaphore —
-        // the same pattern `EnumerationService.fetchShareableContent` uses.
+        // the same pattern `EnumerationService.fetchShareableContent` uses,
+        // and bounded for the same reason (see `captureImageTimeoutMs`'s doc).
         var result: Result<CGImage, Error>?
         let semaphore = DispatchSemaphore(value: 0)
         Task {
@@ -273,7 +305,12 @@ public enum FrameCaptureService {
             }
             semaphore.signal()
         }
-        semaphore.wait()
+        let waitResult = semaphore.wait(timeout: .now() + .milliseconds(Int(captureImageTimeoutMs)))
+        if waitResult == .timedOut {
+            throw SidecarRpcError.serverError(
+                "captureFrame failed: SCScreenshotManager did not respond within \(Int(captureImageTimeoutMs))ms",
+                code: .captureFailed)
+        }
 
         switch result {
         case .success(let image):

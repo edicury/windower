@@ -423,9 +423,35 @@ export class OperatorRunEngine {
           throw toDaemonError(err);
         }
       },
+      // Deliberately NOT routed through `this.passthrough`: `PassthroughService`
+      // spawns a brand-new, separate `windower-sidecar-macos` process for each
+      // call and terminates it immediately after (by design, for callers with
+      // no active session — see passthrough.ts). But `list_targets`/
+      // `resize_window` here are called *during* an active operator run, i.e.
+      // while `ctx.client`'s sidecar process has a live `SCStream` recording.
+      // OS-level tracing (bugs.spec.md #6) showed that spawning ANY second
+      // ScreenCaptureKit-capable process on the same machine while a first
+      // process's `SCStream` is live — even briefly, even for an unrelated
+      // `SCShareableContent` enumeration in the transient process, followed by
+      // that transient process exiting — reliably kills the FIRST process's
+      // stream permanently (replayd logs `RPClientProxy stream:didStopWithError:`
+      // for the live session's stream at the exact moment the transient
+      // process's enumeration call lands). Calling `ctx.client.enumerateTargets`/
+      // `ctx.client.resizeWindow` directly reuses the SAME already-running
+      // sidecar process as the live capture, so no second process — and no
+      // stream-killing side effect — is ever introduced.
       listTargets: async (kinds) => {
         try {
-          const { targets } = await this.passthrough.listTargets(kinds ? { kinds } : {});
+          // "app" is a valid operator/CLI filter but the sidecar protocol
+          // only enumerates "display"|"window" (region has no independent
+          // ID) — same filtering `PassthroughService.listTargets` applies.
+          const sidecarKinds = kinds?.filter(
+            (kind): kind is "display" | "window" => kind === "display" || kind === "window",
+          );
+          if (kinds && sidecarKinds && sidecarKinds.length === 0) {
+            return [];
+          }
+          const { targets } = await ctx.client.enumerateTargets({ kinds: sidecarKinds });
           return targets;
         } catch (err) {
           throw toDaemonError(err);
@@ -433,7 +459,7 @@ export class OperatorRunEngine {
       },
       resizeWindow: async (targetId, bounds) => {
         try {
-          return await this.passthrough.resizeWindow({ targetId, bounds });
+          return await ctx.client.resizeWindow({ targetId, bounds });
         } catch (err) {
           throw toDaemonError(err);
         }

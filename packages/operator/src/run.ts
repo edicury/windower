@@ -282,7 +282,21 @@ export const runOperator: RunOperator = async (
 
       const stepBase = { index, observationRef, reasoning, tMs: deadline.elapsedMs() };
 
+      const seenToolCallIds = new Set<string>();
+
       for (const call of modelResult.toolCalls) {
+        if (seenToolCallIds.has(call.toolCallId)) {
+          // A well-behaved provider never repeats a toolCallId within one turn, but
+          // the Anthropic Messages API hard-rejects a tool message with two
+          // `tool-result` blocks sharing an id — skip the duplicate rather than crash.
+          logger.log("duplicate toolCallId in model turn, skipping", {
+            toolCallId: call.toolCallId,
+            toolName: call.toolName,
+          });
+          continue;
+        }
+        seenToolCallIds.add(call.toolCallId);
+
         const toolName = call.toolName as string;
         if (!isOperatorToolName(toolName)) {
           // Cannot happen with a well-behaved provider; refuse rather than guess.

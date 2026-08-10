@@ -486,4 +486,24 @@ describe("runOperator — model misbehavior", () => {
     expect(result.state).toBe("failed");
     expect(result.error?.code).toBe(OPERATOR_ERROR_CODES.INVALID_TOOL_INPUT);
   });
+
+  it("dedupes a duplicate toolCallId within one turn instead of emitting two tool-results", async () => {
+    const deps = createFakeDeps();
+    const model = createScriptedModel([
+      {
+        toolCalls: [
+          { name: "press_key", args: { key: "Escape" }, toolCallId: "dup-1" },
+          { name: "click", args: { x: 1, y: 1 }, toolCallId: "dup-1" },
+        ],
+      },
+      { toolCalls: [{ name: "done", args: { summary: "ok" } }] },
+    ]);
+
+    const result = await runOperator(makeOptions({ languageModel: model }), deps);
+
+    // Only the first tool call sharing the id was executed — the duplicate was skipped.
+    expect(deps.calls.performInput).toEqual([[{ kind: "key_press", key: "Escape" }]]);
+    expect(result.state).toBe("succeeded");
+    expect(result.steps[0]?.toolCalls).toHaveLength(1);
+  });
 });

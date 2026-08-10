@@ -77,7 +77,7 @@ export function createFakeDeps(
 export interface ScriptedTurn {
   /** Assistant text for this turn (also used as the step's `reasoning`). */
   text?: string;
-  toolCalls?: Array<{ name: string; args: unknown }>;
+  toolCalls?: Array<{ name: string; args: unknown; toolCallId?: string }>;
 }
 
 /**
@@ -103,7 +103,7 @@ export function createScriptedModel(
           ...(turn.text === undefined ? [] : [{ type: "text" as const, text: turn.text }]),
           ...toolCalls.map((call, i) => ({
             type: "tool-call" as const,
-            toolCallId: `call-${index}-${i}`,
+            toolCallId: call.toolCallId ?? `call-${index}-${i}`,
             toolName: call.name,
             input: JSON.stringify(call.args),
           })),

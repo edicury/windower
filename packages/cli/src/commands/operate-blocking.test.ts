@@ -174,6 +174,55 @@ describe("runOperatorBlocking (operate's local/blocking path)", () => {
     expect(recordingEngine.stopRecording).toHaveBeenCalledWith({ sessionId: "sess-1" });
   });
 
+  it("routes list_targets/resize_window through the run's own sidecar instead of spawning a transient one (bugs.spec.md #6)", async () => {
+    // Mirrors the identical regression test in
+    // packages/engine/src/operator-run-engine.test.ts: PassthroughService
+    // spawns a brand-new, separate sidecar process per call and terminates
+    // it right after — fine for a caller with no active session, but OS-level
+    // tracing showed that spawning a second ScreenCaptureKit-capable process
+    // while another process's SCStream is actively recording reliably kills
+    // that stream permanently. `createDeps` in this file must call
+    // `ctx.client` directly for both operations during a run, never
+    // `ctx.passthrough`, so no second sidecar is ever spawned while a
+    // recording is in progress.
+    mockedRunOperator.mockImplementation(
+      async (
+        _options: unknown,
+        deps: {
+          listTargets: (kinds?: ("display" | "window" | "app")[]) => Promise<unknown>;
+          resizeWindow: (
+            targetId: string,
+            bounds: { x: number; y: number; width: number; height: number },
+          ) => Promise<unknown>;
+        },
+      ) => {
+        await deps.listTargets(["display"]);
+        await deps.resizeWindow("d1", { x: 0, y: 0, width: 100, height: 100 });
+        return { state: "succeeded", steps: [], summary: "done" };
+      },
+    );
+    const recordingEngine = fakeRecordingEngine();
+    let spawnCount = 0;
+    const spawnSidecar = () => {
+      spawnCount += 1;
+      return fakeSidecarHandle();
+    };
+
+    const run = await runOperatorBlocking(baseParams, {
+      signal: new AbortController().signal,
+      recordingEngine,
+      spawnSidecar,
+    });
+
+    expect(run.state).toBe("succeeded");
+    // One spawn for `resolveOperatorTarget()`'s pre-recording
+    // `passthrough.listTargets` call (no stream active yet, so spawning is
+    // safe there) — NOT a second one for the in-loop
+    // `deps.listTargets`/`deps.resizeWindow` calls above, which must reuse
+    // the recording's own sidecar (`ctx.client`) instead.
+    expect(spawnCount).toBe(1);
+  });
+
   it("--no-record runs against a transient sidecar and never starts a session", async () => {
     mockedRunOperator.mockResolvedValue({ state: "succeeded", steps: [], summary: "done" });
     const recordingEngine = fakeRecordingEngine();

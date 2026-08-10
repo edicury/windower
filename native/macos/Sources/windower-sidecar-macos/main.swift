@@ -135,6 +135,15 @@ func handleRequest(id: JSONValue, method: String, params: JSONValue?) {
                 // callers get PERMISSION_DENIED (the taxonomy code the
                 // daemon actually branches on) instead of a generic
                 // INTERNAL_ERROR.
+                if case .timedOut(let afterMs)? = error as? EnumerationError {
+                    // bugs.spec.md #6: don't let a wedged SCShareableContent
+                    // completion handler hang this RPC (and therefore the
+                    // whole single-threaded sidecar) forever — see
+                    // `EnumerationError.timedOut`'s doc.
+                    throw SidecarRpcError.serverError(
+                        "enumerateTargets failed: SCShareableContent did not respond within \(Int(afterMs))ms",
+                        code: .captureFailed)
+                }
                 let nsError = error as NSError
                 if nsError.domain == "com.apple.ScreenCaptureKit.SCStreamErrorDomain" && nsError.code == -3801 {
                     throw SidecarRpcError.serverError(
@@ -222,6 +231,51 @@ func writeErrorResponse(id: JSONValue, error: SidecarRpcError) {
     }
 }
 
+// bugs.spec.md #6, "structural fix" session: `handleRequest` used to run
+// synchronously, inline, on this file's `readLine()` thread — the sidecar's
+// only thread servicing JSON-RPC. Two call sites reachable from it
+// (`EnumerationService.fetchShareableContent`, used by `enumerateTargets`
+// AND `captureFrame`; `FrameCaptureService`'s `SCScreenshotManager.captureImage`
+// bridge) can block for up to their configured timeout (8-10s) waiting on a
+// `SCShareableContent`/`SCScreenshotManager` completion handler that, per
+// field evidence, can itself hang far longer while an `SCStream` is
+// concurrently live. A prior session bounded those waits so they fail
+// instead of hanging forever, but as long as `handleRequest` ran inline here,
+// even a BOUNDED 8-10s stall meant `readLine()` could not read (let alone
+// service) any subsequent line for that whole window — e.g. a `stopCapture`
+// the caller sends specifically to abort a wedged session would itself queue
+// up behind the stalled call and be delayed by the same 8-10s, and the video
+// truncates for the full stall duration regardless.
+//
+// Fix: `readLine()` keeps synchronously reading and framing lines (cheap,
+// never blocks on anything but stdin itself), but each REQUEST's actual
+// handling is dispatched onto `rpcQueue`, a concurrent background queue, so
+// a stalled `captureFrame`/`enumerateTargets` call never prevents the next
+// line from being read, parsed, and (for an independent request) serviced
+// immediately. This is protocol-conformant, not a silent break of an
+// assumed request/response ordering: `packages/core/src/protocol/
+// sidecar-client.ts`'s `SidecarClient` already correlates every response to
+// its request purely by JSON-RPC `id` in a `Map` (`handleResponse`), with no
+// assumption that responses arrive in the order requests were sent — see
+// contracts/sidecar-protocol.md, which does not document (and per that
+// client's implementation, does not require) strict one-request-at-a-time
+// semantics. `CaptureSessionManager.shared`'s session dictionary is already
+// `NSLock`-protected (`CaptureService.swift`) specifically because SCStream's
+// own delegate callbacks already arrive concurrently with the RPC thread
+// today, so dispatching RPC handling concurrently introduces no new class of
+// hazard there; `VideoAssetWriter`'s diagnostic counters gained their own
+// lock in this same session for the same reason (see that file). `writeLine`
+// was already serialized via `stdoutLock` for exactly this kind of
+// multi-writer scenario (SCStream's `captureEnded` notification vs. this
+// loop), so concurrent responses interleave safely on stdout.
+let rpcQueue = DispatchQueue(
+    label: "windower.rpc.dispatch", qos: .userInitiated, attributes: .concurrent)
+
+/// Tracks requests dispatched to `rpcQueue` that haven't finished yet, so the
+/// process doesn't exit (falling off the end of this file after stdin EOF)
+/// while a response is still in flight and hasn't been written to stdout.
+let inFlightRequests = DispatchGroup()
+
 func handle(line: String) {
     guard let data = line.data(using: .utf8) else {
         logStderr("windower-sidecar-macos: received non-UTF8 line, ignoring")
@@ -237,8 +291,18 @@ func handle(line: String) {
 
     switch classify(parsedLine) {
     case .request:
-        // `id` and `method` are guaranteed non-nil by `classify`.
-        handleRequest(id: parsedLine.id!, method: parsedLine.method!, params: parsedLine.params)
+        // `id` and `method` are guaranteed non-nil by `classify`. Capture
+        // them by value before dispatching — `parsedLine` itself is a local
+        // that doesn't outlive this call, but its fields are simple value
+        // types so this is just an ordinary async closure capture.
+        let id = parsedLine.id!
+        let method = parsedLine.method!
+        let params = parsedLine.params
+        inFlightRequests.enter()
+        rpcQueue.async {
+            handleRequest(id: id, method: method, params: params)
+            inFlightRequests.leave()
+        }
     case .notification:
         // The sidecar currently receives no daemon→sidecar notifications
         // per contracts/sidecar-protocol.md; log and ignore unknown ones
@@ -261,7 +325,18 @@ CaptureSessionManager.shared.onNotification = { method, params in
 
 // Newline-delimited JSON-RPC 2.0 over stdio — contracts/sidecar-protocol.md
 // §Transport. stdout carries protocol data ONLY; all logs go to stderr.
+// This loop's ONLY job now is reading/framing lines and handing requests off
+// to `rpcQueue` (see the doc comment above `rpcQueue`) — it must never itself
+// call anything that can block on ScreenCaptureKit/AVFoundation completion
+// handlers.
 while let line = readLine(strippingNewline: true) {
     if line.isEmpty { continue }
     handle(line: line)
 }
+
+// stdin closed (EOF) — the daemon closes/kills the sidecar process itself
+// per contracts/sidecar-protocol.md's lifecycle, but if that ever happens
+// via stdin EOF while requests are still dispatched on `rpcQueue`, wait for
+// them to finish (and write their responses) rather than letting the process
+// fall off the end of this file mid-flight.
+inFlightRequests.wait()

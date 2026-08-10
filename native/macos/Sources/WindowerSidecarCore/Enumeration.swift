@@ -17,15 +17,43 @@ public struct EnumerateTargetsResult: Encodable {
 
 public enum EnumerationError: Error {
     case sckFailure(String)
+    /// bugs.spec.md #6: `SCShareableContent.getWithCompletionHandler`'s
+    /// completion handler is not guaranteed to fire promptly (or, per field
+    /// evidence, possibly at all) when called on the same process as an
+    /// active `SCStream` recording — `enumerateTargets`/`captureFrame` both
+    /// route through this call, and both are invoked repeatedly by the
+    /// operator loop *during* a live capture. Before this fix, an unbounded
+    /// `semaphore.wait()` here meant a hang in that completion handler
+    /// permanently wedged the sidecar's single-threaded stdio dispatch loop
+    /// (`main.swift`'s `while let line = readLine()`) — no more RPCs of ANY
+    /// kind could ever be serviced again, matching the observed symptom
+    /// exactly (the daemon-free `operate` CLI and sidecar process both sat
+    /// alive producing zero further output). Bounding the wait converts that
+    /// silent total freeze into a reported, catchable error the caller (the
+    /// operator loop, which already re-observes after every failed step) can
+    /// recover from instead of hanging forever.
+    case timedOut(afterMs: Double)
 }
 
 public enum EnumerationService {
+    /// Default bound for `fetchShareableContent`'s blocking wait — see
+    /// `EnumerationError.timedOut`'s doc. 8s is generous relative to the
+    /// sub-100ms latency this call shows in every observed healthy run
+    /// (raw-sidecar repros in bugs.spec.md #6 consistently logged <150ms),
+    /// while still short enough that an `operate` step waiting on it fails
+    /// fast rather than looking indistinguishable from a total hang.
+    public static let fetchShareableContentTimeoutMs: Double = 8000
+
     /// `SCShareableContent.current` is async-only on the ScreenCaptureKit
     /// API surface; this wraps it in a semaphore so it can be called from
     /// the synchronous per-line dispatch loop in main.swift. Enumeration is
-    /// fast (no frame capture involved) so a blocking wait here is fine —
-    /// startCapture (Phase 4/5) is where a proper async path matters.
-    public static func fetchShareableContent() throws -> SCShareableContent {
+    /// normally fast (no frame capture involved), but the wait is bounded
+    /// (see `EnumerationError.timedOut`) rather than unconditional — this is
+    /// the ONLY thread servicing the sidecar's JSON-RPC loop, so a call here
+    /// that never completes must not be allowed to wedge the whole process.
+    public static func fetchShareableContent(
+        timeoutMs: Double = fetchShareableContentTimeoutMs
+    ) throws -> SCShareableContent {
         var result: Result<SCShareableContent, Error>?
         let semaphore = DispatchSemaphore(value: 0)
         SCShareableContent.getWithCompletionHandler { content, error in
@@ -38,7 +66,10 @@ public enum EnumerationService {
             }
             semaphore.signal()
         }
-        semaphore.wait()
+        let waitResult = semaphore.wait(timeout: .now() + .milliseconds(Int(timeoutMs)))
+        if waitResult == .timedOut {
+            throw EnumerationError.timedOut(afterMs: timeoutMs)
+        }
         switch result {
         case .success(let content):
             return content
