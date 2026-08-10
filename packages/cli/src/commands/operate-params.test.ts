@@ -19,14 +19,19 @@ function withRemovedFlag(key: string, value: unknown): OperateOpts {
 }
 
 describe("buildRunOperatorParams — model", () => {
-  it("parses --model into a ModelConfig", () => {
+  it("parses --model into a ModelConfig for the planner tier, executor left undefined", () => {
     const params = buildRunOperatorParams("do a thing", opts());
-    expect(params.model).toEqual({ provider: "anthropic", model: "claude-sonnet-5" });
+    expect(params.models).toEqual({
+      planner: { provider: "anthropic", model: "claude-sonnet-5" },
+    });
   });
 
   it("splits --model on the first colon only, so model ids may contain colons", () => {
     const params = buildRunOperatorParams("t", opts({ model: "openai-compatible:llama3:8b" }));
-    expect(params.model).toEqual({ provider: "openai-compatible", model: "llama3:8b" });
+    expect((params.models as { planner: unknown }).planner).toEqual({
+      provider: "openai-compatible",
+      model: "llama3:8b",
+    });
   });
 
   it("attaches --base-url to the model config", () => {
@@ -34,7 +39,9 @@ describe("buildRunOperatorParams — model", () => {
       "t",
       opts({ model: "openai-compatible:llama3", baseUrl: "http://localhost:11434/v1" }),
     );
-    expect(params.model.baseUrl).toBe("http://localhost:11434/v1");
+    expect((params.models as { planner: { baseUrl?: string } }).planner.baseUrl).toBe(
+      "http://localhost:11434/v1",
+    );
   });
 
   it("falls back to the config operator block when --model is omitted", () => {
@@ -43,11 +50,13 @@ describe("buildRunOperatorParams — model", () => {
       baseUrl: "http://localhost:1234/v1",
       apiKeyEnvVar: "MY_KEY",
     });
-    expect(params.model).toEqual({
-      provider: "openai",
-      model: "gpt-5",
-      baseUrl: "http://localhost:1234/v1",
-      apiKeyEnvVar: "MY_KEY",
+    expect(params.models).toEqual({
+      planner: {
+        provider: "openai",
+        model: "gpt-5",
+        baseUrl: "http://localhost:1234/v1",
+        apiKeyEnvVar: "MY_KEY",
+      },
     });
   });
 
@@ -70,8 +79,62 @@ describe("buildRunOperatorParams — model", () => {
     // The flag surface has no `--api-key`; the only way a key reference gets
     // in is `apiKeyEnvVar` from config (a *name*, not a value).
     const params = buildRunOperatorParams("t", opts(), { apiKeyEnvVar: "ANTHROPIC_API_KEY" });
-    expect(params.model.apiKeyEnvVar).toBe("ANTHROPIC_API_KEY");
+    expect((params.models as { planner: { apiKeyEnvVar?: string } }).planner.apiKeyEnvVar).toBe(
+      "ANTHROPIC_API_KEY",
+    );
     expect(JSON.stringify(params)).not.toContain("sk-");
+  });
+});
+
+describe("buildRunOperatorParams — model tiers (Phase 22)", () => {
+  it("--planner-model and --executor-model resolve independently", () => {
+    const params = buildRunOperatorParams(
+      "t",
+      opts({
+        model: undefined,
+        plannerModel: "anthropic:claude-sonnet-5",
+        executorModel: "anthropic:claude-haiku",
+      }),
+    );
+    expect(params.models).toEqual({
+      planner: { provider: "anthropic", model: "claude-sonnet-5" },
+      executor: { provider: "anthropic", model: "claude-haiku" },
+    });
+  });
+
+  it("--planner-model/--executor-model take precedence over --model", () => {
+    const params = buildRunOperatorParams(
+      "t",
+      opts({ model: "anthropic:claude-sonnet-5", executorModel: "anthropic:claude-haiku" }),
+    );
+    expect(params.models).toEqual({
+      planner: { provider: "anthropic", model: "claude-sonnet-5" },
+      executor: { provider: "anthropic", model: "claude-haiku" },
+    });
+  });
+
+  it("falls back to config's defaultPlannerModel/defaultExecutorModel", () => {
+    const params = buildRunOperatorParams("t", opts({ model: undefined }), {
+      defaultPlannerModel: { provider: "anthropic", model: "claude-sonnet-5" },
+      defaultExecutorModel: { provider: "anthropic", model: "claude-haiku" },
+    });
+    expect(params.models).toEqual({
+      planner: { provider: "anthropic", model: "claude-sonnet-5" },
+      executor: { provider: "anthropic", model: "claude-haiku" },
+    });
+  });
+
+  it("--observe parses auto|ax|vision and rejects anything else", () => {
+    expect(buildRunOperatorParams("t", opts({ observe: "ax" })).observe).toBe("ax");
+    expect(buildRunOperatorParams("t", opts()).observe).toBeUndefined();
+    expect(() => buildRunOperatorParams("t", opts({ observe: "bogus" }))).toThrow(DaemonError);
+  });
+
+  it("--max-replans becomes guardrails.maxReplans", () => {
+    expect(buildRunOperatorParams("t", opts({ maxReplans: "5" })).guardrails).toEqual({
+      maxReplans: 5,
+    });
+    expect(() => buildRunOperatorParams("t", opts({ maxReplans: "0" }))).toThrow(DaemonError);
   });
 });
 

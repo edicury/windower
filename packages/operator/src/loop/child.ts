@@ -8,6 +8,7 @@ import type {
 } from "@windower/core";
 import {
   DEFAULT_OPERATOR_MAX_BATCH_ACTIONS,
+  DEFAULT_OPERATOR_MAX_REPLANS,
   LOOP_ABORT_REASON_TO_STATE,
   LOOP_PROTOCOL_VERSION,
 } from "@windower/core";
@@ -113,10 +114,12 @@ export async function runLoopChild(
   // batch and is the one that cannot be bypassed.
   const maxBatchActions = config.maxBatchActions ?? DEFAULT_OPERATOR_MAX_BATCH_ACTIONS;
 
+  const maxReplans = config.maxReplans ?? DEFAULT_OPERATOR_MAX_REPLANS;
+
   const runOptions: OperatorRunOptions & OperatorRunInternals = {
     runId: config.runId,
     task: config.task,
-    model: config.model,
+    models: config.models,
     // No resolved values ever reach this process. Placeholders cross the wire
     // verbatim and the daemon substitutes them inside its `performInput`
     // handler (contracts/operator-loop-protocol.md §Secrets).
@@ -124,6 +127,8 @@ export async function runLoopChild(
     maxSteps: config.maxSteps,
     timeoutMs: config.timeoutMs,
     maxBatchActions,
+    maxReplans,
+    observe: config.observe,
     unbounded: config.unbounded,
     bounds: config.bounds,
     // The daemon resolved the selector once, before the spawn, so the child

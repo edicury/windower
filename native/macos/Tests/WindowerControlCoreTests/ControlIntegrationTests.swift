@@ -63,7 +63,8 @@ final class ControlIntegrationTests: XCTestCase {
         XCTAssertNotNil(result["version"] as? String)
 
         let capabilities = try XCTUnwrap(result["capabilities"] as? [String])
-        XCTAssertEqual(Set(capabilities), ["input.mouse", "input.keyboard", "window-control"])
+        XCTAssertEqual(
+            Set(capabilities), ["input.mouse", "input.keyboard", "window-control", "ui.elements"])
     }
 
     /// The whole point of the split: every capture-surface method must be
@@ -118,6 +119,31 @@ final class ControlIntegrationTests: XCTestCase {
             let result = try XCTUnwrap(obj["result"] as? [String: Any])
             XCTAssertEqual(result["performed"] as? Int, 1)
         }
+    }
+
+    /// Phase 22: `enumerateElements` must be a recognized method on the
+    /// control binary (never `UNSUPPORTED_CAPABILITY`, since `ui.elements`
+    /// is now in the static capability list) and must fail fast with
+    /// `PERMISSION_DENIED` — never a generic/internal error — when the
+    /// Accessibility grant is missing, exactly like `performInput` above.
+    /// Tolerant of either TCC state so it runs headlessly in CI.
+    func testEnumerateElementsIsRecognizedAndPermissionGated() throws {
+        let responses = try roundTrip([
+            #"{"jsonrpc":"2.0","id":1,"method":"enumerateElements","params":{"target":{"kind":"window","id":"999999999"}}}"#
+        ])
+        let obj = try XCTUnwrap(responses.first)
+        let error = try XCTUnwrap(
+            obj["error"] as? [String: Any],
+            "a bogus window id should never succeed, with or without the Accessibility grant")
+        let data = try XCTUnwrap(error["data"] as? [String: Any])
+        let code = try XCTUnwrap(data["code"] as? String)
+        // PERMISSION_DENIED when the grant is missing (CI), TARGET_NOT_FOUND
+        // when it's present but the window id doesn't exist (some local
+        // dev setups) — either is correct; UNSUPPORTED_CAPABILITY would mean
+        // "ui.elements" never made it into the static capability list.
+        XCTAssertTrue(
+            code == "PERMISSION_DENIED" || code == "TARGET_NOT_FOUND",
+            "unexpected error code: \(code)")
     }
 
     /// contracts/sidecar-protocol.md §Transport: a backend MAY answer out of

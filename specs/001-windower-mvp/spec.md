@@ -87,7 +87,7 @@ The operator emits its own `plan`/`action`/`checkpoint`/`narration`/`result` eve
 
 ### 2.1.1 Goals (v1.2 — Operator, Phase 19)
 
-- **One-line instruction execution.** An agent (or a human) can hand Windower a single natural-language task plus a target; Windower **perceives the screen** (periodic screenshots via the sidecar's `captureFrame`) and **synthesizes mouse/keyboard input** (`performInput`) to drive the UI — all in a loop driven by an LLM the user chooses via a provider-swappable SDK (Vercel AI SDK), independent of whatever model is calling Windower in the first place. The run itself does **not** record anything; an orchestrator that wants video sequences `start_recording`/`stop_recording` around it (§1.2).
+- **One-line instruction execution.** An agent (or a human) can hand Windower a single natural-language task plus a target; Windower **perceives the screen** (the target's accessibility elements via the sidecar's `enumerateElements`, falling back to screenshots via `captureFrame` when that is insufficient — Phase 22; screenshots only, pre-Phase-22) and **synthesizes mouse/keyboard input** (`performInput`) to drive the UI — all in a loop driven by an LLM the user chooses via a provider-swappable SDK (Vercel AI SDK), independent of whatever model is calling Windower in the first place. The run itself does **not** record anything; an orchestrator that wants video sequences `start_recording`/`stop_recording` around it (§1.2).
 
 ### 2.2 Non-goals (MVP)
 
@@ -193,6 +193,9 @@ Traces to phase exit criteria in `tasks/`. All must be green for MVP to ship.
 - [ ] An in-progress operator run can be aborted via `windower operate abort <runId>` or `abort_operator_run`; the run reaches a terminal state promptly and no recording is stopped, canceled, or otherwise touched as a side effect. (Phase 19, revised Phase 21)
 - [ ] The operator's model/provider can be configured independently of the calling agent's own model (verified with at least two distinct providers). (Phase 19)
 - [ ] Operator-generated `TimelineEvent`s carry `source: "operator"` and are distinguishable from human-generated events in the same event timeline. (Phase 19)
+- [ ] The operator observes the screen through the accessibility surface by default and falls back to screenshots only when that surface is insufficient (accessibility-opaque target, or a visual checkpoint); the fallback is visible in the transcript as the observation's `kind`, and a run against a native app can complete with zero frames captured. (Phase 22)
+- [ ] The operator's planning and execution models are configurable independently, and a run configured with a single `--model` behaves identically to a pre-Phase-22 single-model run. (Phase 22)
+- [ ] Acting on an accessibility element still synthesizes real input at that element's rect — the recorded video shows cursor travel and typing, never UI mutating with no visible cause. (Phase 22)
 
 ## 6. Design references
 

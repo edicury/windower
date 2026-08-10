@@ -50,7 +50,7 @@ const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 5
 
 const STEP = (index: number): OperatorStep => ({
   index,
-  observationRef: `memory:${index + 1}:deadbeef`,
+  observations: [{ kind: "elements", ref: `memory:${index + 1}:deadbeef` }],
   toolCalls: [],
   tMs: index * 10,
 });
@@ -58,6 +58,7 @@ const STEP = (index: number): OperatorStep => ({
 interface HarnessOptions {
   maxSteps?: number;
   maxBatchActions?: number;
+  maxReplans?: number;
   timeoutMs?: number;
   unbounded?: boolean;
   bounds?: { x: number; y: number; width: number; height: number };
@@ -79,6 +80,7 @@ interface Harness {
   calls: string[];
   performed: unknown[][];
   framesDir: string;
+  observationsDir: string;
 }
 
 describe("OperatorLoopHost", () => {
@@ -109,6 +111,7 @@ describe("OperatorLoopHost", () => {
     const calls: string[] = [];
     const performed: unknown[][] = [];
     const framesDir = join(home, "operator-runs", "run-1", "frames");
+    const observationsDir = join(home, "operator-runs", "run-1", "observations");
 
     const deps: OperatorDeps = {
       captureFrame: async () => {
@@ -128,6 +131,10 @@ describe("OperatorLoopHost", () => {
         calls.push("resizeWindow");
         return { actualBounds: bounds, result: "success" as const };
       },
+      enumerateElements: async () => {
+        calls.push("enumerateElements");
+        return { elements: [], generation: "gen-1", truncated: false };
+      },
       ...options.deps,
     };
 
@@ -136,9 +143,10 @@ describe("OperatorLoopHost", () => {
         runId: "run-1",
         task: "do the thing",
         target: TARGET,
-        model: { provider: "anthropic", model: "claude-sonnet-5" },
+        models: { planner: { provider: "anthropic", model: "claude-sonnet-5" } },
         maxSteps: options.maxSteps ?? 10,
         maxBatchActions: options.maxBatchActions ?? 8,
+        maxReplans: options.maxReplans ?? 3,
         timeoutMs: options.timeoutMs ?? 60_000,
         unbounded: options.unbounded ?? false,
         bounds: options.bounds ?? TARGET.bounds,
@@ -150,6 +158,7 @@ describe("OperatorLoopHost", () => {
       deps,
       spawn,
       framesDir,
+      observationsDir,
       persistPlan: async (plan) => {
         plans.push(plan);
       },
@@ -169,7 +178,18 @@ describe("OperatorLoopHost", () => {
       },
     });
 
-    return { host, child, outcome: host.run(), plans, steps, events, calls, performed, framesDir };
+    return {
+      host,
+      child,
+      outcome: host.run(),
+      plans,
+      steps,
+      events,
+      calls,
+      performed,
+      framesDir,
+      observationsDir,
+    };
   }
 
   /** The shortest well-formed run after the handshake: one step, a result. */
@@ -246,6 +266,7 @@ describe("OperatorLoopHost", () => {
     for (const call of [
       () => h.child.request("captureFrame", { format: "png" }),
       () => h.child.request("enumerateTargets", {}),
+      () => h.child.request("enumerateElements", {}),
       () => h.child.request("performInput", { actions: [{ kind: "mouse_move", x: 5, y: 5 }] }),
       () => h.child.request("resizeWindow", { targetId: "w", bounds: TARGET.bounds }),
       () => h.child.request("reportPlan", { steps: ["a"] }),
@@ -295,6 +316,7 @@ describe("OperatorLoopHost", () => {
     // Observations are not actions and never count toward the batch ceiling.
     await h.child.request("captureFrame", { format: "png" });
     await h.child.request("enumerateTargets", {});
+    await h.child.request("enumerateElements", {});
 
     const state = await h.child.request("guardrailState", {});
     expect(state.stepsUsed).toBe(1);
@@ -531,6 +553,52 @@ describe("OperatorLoopHost", () => {
     expect(h.steps).toHaveLength(2);
   });
 
+  // Phase 22 — guardrails are daemon-authoritative; the loop-side replan
+  // count in packages/operator is deliberate duplication, not the source of
+  // truth (contracts/operator-loop-protocol.md).
+  it("enforces maxReplans daemon-side, refusing a reportPlan past the ceiling", async () => {
+    const h = harness({ maxReplans: 1 });
+    await h.child.handshake();
+
+    await h.child.request("beginStep", { index: 0 });
+    const initial = await h.child.request("reportPlan", { steps: ["a"] });
+    expect(initial.revision).toBe(0); // Revision 0 is free — not a replan.
+    await h.child.request("reportStep", { step: STEP(0) });
+
+    await h.child.request("beginStep", { index: 1 });
+    const replan = await h.child.request("reportPlan", { steps: ["b"] });
+    expect(replan.revision).toBe(1); // The one replan the budget allows.
+    const guardrail = await h.child.request("guardrailState", {});
+    expect(guardrail.replansUsed).toBe(1);
+    expect(guardrail.maxReplans).toBe(1);
+    await h.child.request("reportStep", { step: STEP(1) });
+
+    await h.child.request("beginStep", { index: 2 });
+    await expect(h.child.request("reportPlan", { steps: ["c"] })).rejects.toMatchObject({
+      code: "OPERATOR_MAX_REPLANS_EXCEEDED",
+    });
+
+    await h.child.request("reportResult", {
+      state: "failed",
+      error: { code: "OPERATOR_MAX_REPLANS_EXCEEDED", message: "budget" },
+    });
+    h.child.exit(0);
+    const outcome = await h.outcome;
+    expect(outcome.state).toBe("failed");
+    expect(outcome.error?.code).toBe("OPERATOR_MAX_REPLANS_EXCEEDED");
+  });
+
+  it("exposes replansUsed/maxReplans in guardrailState even before any plan", async () => {
+    const h = harness({ maxReplans: 3 });
+    await h.child.handshake();
+    const guardrail = await h.child.request("guardrailState", {});
+    expect(guardrail.replansUsed).toBe(0);
+    expect(guardrail.maxReplans).toBe(3);
+    await h.child.request("reportResult", { state: "succeeded" });
+    h.child.exit(0);
+    await h.outcome;
+  });
+
   it("derives the five event kinds from reported facts, with daemon-assigned seq", async () => {
     const h = harness();
     await h.child.handshake();
@@ -575,9 +643,57 @@ describe("OperatorLoopHost", () => {
     expect(files).toHaveLength(1);
     const hash = (files[0] as string).replace(/\.png$/, "");
     await h.child.request("reportStep", {
-      step: { ...STEP(0), observationRef: `memory:1:${hash}` },
+      step: { ...STEP(0), observations: [{ kind: "frame", ref: `memory:1:${hash}` }] },
     });
-    expect(h.steps[0]?.observationRef).toBe(`frames/${hash}.png`);
+    expect(h.steps[0]?.observations).toEqual([{ kind: "frame", ref: `frames/${hash}.png` }]);
+
+    await h.child.request("reportResult", { state: "succeeded" });
+    h.child.exit(0);
+    await h.outcome;
+  });
+
+  // Phase 22 — same convention, for `enumerateElements` snapshots
+  // (contracts/operator-loop-protocol.md: "The daemon persists the element
+  // snapshot under the run's `observations/` and returns it; the child
+  // writes nothing to disk.").
+  it("does not count enumerateElements toward maxBatchActions, and persists the snapshot under observations/", async () => {
+    const h = harness({
+      maxBatchActions: 1,
+      deps: {
+        enumerateElements: async () => ({
+          elements: [
+            {
+              ref: "gen-1:0",
+              role: "button",
+              label: "Create Incident",
+              bounds: { x: 10, y: 10, width: 100, height: 20 },
+              enabled: true,
+            },
+          ],
+          generation: "gen-1",
+          truncated: false,
+        }),
+      },
+    });
+    await h.child.handshake();
+    await h.child.request("beginStep", { index: 0 });
+    // One action already spends the whole (tiny) batch budget...
+    await h.child.request("performInput", { actions: [{ kind: "mouse_move", x: 5, y: 5 }] });
+    // ...yet enumerateElements is still servable: it is an observation.
+    const result = await h.child.request("enumerateElements", { filter: "interactable" });
+    expect(result.elements).toHaveLength(1);
+
+    const files = await readdir(h.observationsDir);
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/\.json$/);
+
+    const hash = (files[0] as string).replace(/\.json$/, "");
+    await h.child.request("reportStep", {
+      step: { ...STEP(0), observations: [{ kind: "elements", ref: `memory:1:${hash}` }] },
+    });
+    expect(h.steps[0]?.observations).toEqual([
+      { kind: "elements", ref: `observations/${hash}.json` },
+    ]);
 
     await h.child.request("reportResult", { state: "succeeded" });
     h.child.exit(0);

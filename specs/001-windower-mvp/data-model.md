@@ -131,7 +131,8 @@ type OperatorRun = {
                                //   persisted record holds the resolution. A persisted record MUST NOT hold
                                //   an unresolved selector — the bounds clamp is evaluated against this
                                //   target's own `Rect` (`contracts/operator.md` §Guardrails).
-  model: ModelConfig;
+  models: OperatorModels;      // (Phase 22) the resolved planner/executor tiers. A run configured with one
+                               //   model records the same ModelConfig in both slots.
   plan?: OperatorPlan;         // the CURRENT (highest-revision) plan; absent until the run's first `plan` tool call
   steps: OperatorStep[];
   startedAt: string;           // ISO 8601
@@ -178,7 +179,8 @@ One perceive/decide/act cycle within an `OperatorRun`. A step is one observation
 ```ts
 type OperatorStep = {
   index: number;
-  observationRef: string;      // reference to the captured frame (e.g. a path or in-memory handle) this step reasoned over
+  observations: ObservationRef[];  // (Phase 22) what this step actually reasoned over — an element list, a
+                                   //   frame, or both. Replaces Phase 19's `observationRef: string`.
   toolCalls: Array<{ name: string; args: unknown; result?: unknown }>;
   reasoning?: string;          // model's stated rationale, when the provider exposes one
   plan?: OperatorPlan;         // set only on a step whose turn called `plan`; the ordered step.plan values are the full history
@@ -192,6 +194,47 @@ type OperatorStep = {
 ```
 
 `toolCalls[].result` for an action the loop never issued because an earlier action in the same batch failed (or the batch hit `maxBatchActions`) is the literal `{ skipped: "BATCH_ABORTED" }` — a skipped action stays a row rather than a missing one, so "ran / failed / never ran" is stated, never inferred from array length.
+
+**Breaking change (Phase 22) — `observationRef: string` becomes `observations: ObservationRef[]`.** Phase 19 shipped a single string ref because a step's only possible percept was one screenshot. Phase 22 makes the accessibility element list the default percept and keeps frames as a fallback, so a step may have reasoned over an element list, a frame, or both, and a consumer must be able to tell which. This is documented as a breaking transcript-schema change rather than worked around with a parallel field, on the same reasoning Phase 21 used when it removed `OperatorRun.sessionId`: a second field whose only purpose is to avoid admitting the first one was wrong keeps both wrong forever. Transcripts written before Phase 22 are read-only artifacts and are **not** migrated.
+
+## ObservationRef (Phase 22)
+
+What one `OperatorStep` looked at. Refs are content-addressed and stored beside the transcript, never inlined.
+
+```ts
+type ObservationRef =
+  | { kind: "frame"; ref: string }      // PNG at ~/.windower/operator-runs/<runId>/frames/<sha256-prefix>.png
+  | { kind: "elements"; ref: string }   // JSON at ~/.windower/operator-runs/<runId>/observations/<sha256-prefix>.json
+```
+
+Counting `kind` across a transcript is how "did this run actually avoid capturing frames" is answered — it is a property of the record, not something derived from logs.
+
+## UIElement (Phase 22)
+
+One accessibility element of a target, as returned by the sidecar protocol's `enumerateElements` (`contracts/sidecar-protocol.md`). This is the operator's default percept.
+
+```ts
+type UIElement = {
+  ref: string;          // opaque, stable within one `generation`; never a raw memory address
+  role: string;         // NORMALIZED cross-platform role: "button" | "textfield" | "link" | "menuitem"
+                        //   | "row" | "checkbox" | "tab" | "image" | "text" | "group" | "other" | ...
+  subrole?: string;     // platform-native refinement when it disambiguates, e.g. macOS "AXSearchField".
+                        //   An unmapped native role surfaces as role "other" with the native role here.
+  label?: string;       // accessible name — title, label, or description, whichever the platform exposes
+  value?: string;       // current value for fields/toggles, truncated to a documented max length
+  bounds: Rect;         // PIXELS, global top-left-origin Quartz space — the same space InputAction uses,
+                        //   so this rect's center feeds straight into performInput with no conversion
+  enabled: boolean;
+  focused?: boolean;
+  actions?: string[];   // actions the platform advertises. INFORMATIONAL ONLY — Windower never invokes them.
+                        //   AX is a sensor here, never an actuator (tasks/phase-22-operator-ax-first.md)
+  parentRef?: string;   // flat list plus a parent pointer, deliberately NOT a nested tree
+}
+```
+
+**Why flat, not nested.** A flat list serializes smaller, and it truncates cleanly: a nested tree cut at a depth or count bound leaves orphaned subtrees and an ambiguous record of what was dropped. A consumer that needs hierarchy rebuilds it from `parentRef`; most never do.
+
+**Why roles are normalized.** `role` is Windower's vocabulary, not `AXRole`/`UIA_ControlType`/AT-SPI role strings. The mapping lives in each native backend, below the stdio line — a caller in `packages/core`/`apps/daemon`/`packages/operator` must never branch on a platform-native role name, for the same reason it never branches on `platform === "macos"`.
 
 ## InputAction
 
@@ -250,6 +293,21 @@ type ModelConfig = {
   apiKeyEnvVar?: string;      // env var to read the API key from; never the key itself
 }
 ```
+
+## OperatorModels (Phase 22)
+
+The two model tiers one operator run uses. Planning is the expensive judgement and is made once; executing a plan step against a labeled element list is nearly mechanical, and does not need the same model.
+
+```ts
+type OperatorModels = {
+  planner: ModelConfig;       // writes and revises the plan; re-enters only on escalation
+  executor: ModelConfig;      // drives each step; never has the `plan` tool
+}
+```
+
+`OperatorRunOptions` accepts `executor` as optional and defaults it to `planner`, so a run configured with a single `--model` **MUST** behave exactly as a pre-Phase-22 single-model run. The persisted `OperatorRun.models` always holds both slots resolved — a persisted record never holds an unresolved tier, for the same reason it never holds an unresolved target.
+
+Both tiers resolve through the one provider registry in `packages/operator/src/providers.ts`; the tiers may use different providers, and either may be `openai-compatible`, so a fully-local two-tier run is possible. Each tier's API key still comes only from an environment variable (`contracts/operator.md` §Model configuration) — a two-provider run requires both env vars.
 
 ## Permission state (`doctor` / `check_permissions`)
 
@@ -392,11 +450,23 @@ type WindowerConfig = {
   daemonIdleTimeoutMs?: number;                 // default 30min
   defaultVideo?: Partial<VideoSettings>;
   defaultAudio?: Partial<AudioSettings>;
-  operator?: {                                  // Phase 19
-    defaultModel?: ModelConfig;
+  operator?: {                                  // Phase 19, extended Phase 22
+    defaultModel?: ModelConfig;                 // used for any tier that has no more specific default
+    defaultPlannerModel?: ModelConfig;          // Phase 22
+    defaultExecutorModel?: ModelConfig;         // Phase 22
     apiKeyEnvVar?: string;
     baseUrl?: string;
-    guardrailDefaults?: { maxSteps?: number; timeoutSeconds?: number; unbounded?: boolean };
+    defaultObserve?: "auto" | "ax" | "vision";  // Phase 22, default "auto"
+    guardrailDefaults?: {
+      maxSteps?: number;
+      timeoutSeconds?: number;
+      maxBatchActions?: number;                 // Phase 22 — closes drift vs contracts/operator.md's
+                                                //   guardrail table, which has had it since Phase 21
+      maxReplans?: number;                      // Phase 22, default 3
+      unbounded?: boolean;
+    };
   };
 }
 ```
+
+Per-tier model resolution (Phase 22), highest precedence first: the explicit flag (`--planner-model`/`--executor-model`) → the tier's own config default → `--model` → `defaultModel` → error. The executor additionally falls back to the resolved planner, which is what makes a single `--model` run identical to a pre-Phase-22 run.

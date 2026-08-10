@@ -4,12 +4,15 @@ import { dirname, join } from "node:path";
 import {
   type CaptureTarget,
   DEFAULT_OPERATOR_MAX_BATCH_ACTIONS,
+  DEFAULT_OPERATOR_MAX_REPLANS,
   DEFAULT_OPERATOR_MAX_STEPS,
   DEFAULT_OPERATOR_TIMEOUT_MS,
   DaemonError,
   type DaemonMethodMap,
   type InputAction,
+  type ModelConfig,
   type OperatorDeps,
+  type OperatorModels,
   type OperatorPlan,
   type OperatorRun,
   OperatorRunSchema,
@@ -18,6 +21,7 @@ import {
   type ResolvedSecret,
   SidecarError,
   isTerminalOperatorRunState,
+  readRawConfig,
   requiredCapabilityForInputAction,
 } from "@windower/core";
 import { ControlEngine } from "./control-engine.js";
@@ -263,13 +267,17 @@ export class OperatorRunEngine {
     // target is not a representable value (data-model.md §OperatorRun), so a
     // selector that names nothing is a rejected call, not a persisted run.
     const target = await this.resolveOperatorTarget(params.target);
+    // Same treatment as the target selector: a `models` input that cannot be
+    // resolved into a planner tier (no explicit model, no config default) is
+    // a rejected call, not a persisted run.
+    const models = await this.resolveModels(params.models);
     const transcriptPath = transcriptPathFor(runId);
     let run: OperatorRun = {
       id: runId,
       state: "pending",
       task: params.task,
       target,
-      model: params.model,
+      models,
       steps: [],
       startedAt: nowIso(),
     };
@@ -320,13 +328,16 @@ export class OperatorRunEngine {
         runId,
         task: params.task,
         target,
-        model: params.model,
+        models,
         maxSteps: guardrails.maxSteps ?? DEFAULT_OPERATOR_MAX_STEPS,
         timeoutMs:
           guardrails.timeoutSeconds !== undefined
             ? Math.round(guardrails.timeoutSeconds * 1000)
             : DEFAULT_OPERATOR_TIMEOUT_MS,
         maxBatchActions: guardrails.maxBatchActions ?? DEFAULT_OPERATOR_MAX_BATCH_ACTIONS,
+        // Phase 22 — daemon-authoritative; see OperatorLoopHost.serveReportPlan.
+        maxReplans: guardrails.maxReplans ?? DEFAULT_OPERATOR_MAX_REPLANS,
+        observe: params.observe,
         unbounded: guardrails.unbounded ?? false,
         bounds: targetBounds(target),
         // Root fix for the bug that started phase-20
@@ -342,6 +353,7 @@ export class OperatorRunEngine {
       deps,
       spawn: this.spawnLoopChild,
       framesDir: join(dirname(transcriptPath), "frames"),
+      observationsDir: join(dirname(transcriptPath), "observations"),
       persistPlan: (plan) => this.savePlan(runId, plan),
       persistStep: (step) => this.appendStep(runId, step),
       ...(this.onOperatorEvent === undefined ? {} : { onEvent: this.onOperatorEvent }),
@@ -503,7 +515,55 @@ export class OperatorRunEngine {
           throw toDaemonError(err);
         }
       },
+      // Phase 22 — control-surface, capture-free: goes through `ControlEngine`
+      // exactly like `performInput`/`resizeWindow` above, NEVER `this.capture`,
+      // and takes no `~/.windower/capture.lock`. Gated the same way
+      // `performInput` gates each action: a structured `UNSUPPORTED_CAPABILITY`
+      // here is what lets the operator's observation policy fall back to a
+      // frame instead of crashing (`packages/operator`'s `run.ts`).
+      enumerateElements: async (elementsParams) => {
+        await this.control.requireCapability("ui.elements");
+        try {
+          return await this.control.enumerateElements({ target: ctx.target, ...elementsParams });
+        } catch (err) {
+          throw toDaemonError(err);
+        }
+      },
     };
+  }
+
+  /**
+   * Phase 22 — resolves `run_operator`'s `models` input into a concrete
+   * `OperatorModels` (planner mandatory, executor always populated — "one
+   * `--model` records the same config twice", `contracts/operator.md` §Model
+   * tiers). Per tier: explicit input → `~/.windower/config.json`'s
+   * `operator.defaultPlannerModel`/`defaultExecutorModel` → `defaultModel` →
+   * error (planner) / the resolved planner (executor).
+   *
+   * A caller that already resolved a full `models` (as `windower operate`
+   * does today, mirroring `buildModel` in `operate-params.ts`) sees the
+   * config file consulted for nothing — this is a daemon-side fallback for a
+   * caller (e.g. a future MCP flow) that wants config-file defaults applied
+   * without duplicating that resolution client-side, not a second source of
+   * truth for a caller that already resolved one.
+   */
+  private async resolveModels(
+    input: DaemonMethodMap["run_operator"]["params"]["models"],
+  ): Promise<OperatorModels> {
+    const explicit: { planner?: ModelConfig; executor?: ModelConfig } =
+      input === undefined ? {} : "planner" in input ? input : { planner: input };
+    const { operator: defaults } = await readRawConfig();
+    const planner = explicit.planner ?? defaults?.defaultPlannerModel ?? defaults?.defaultModel;
+    if (planner === undefined) {
+      throw new DaemonError(
+        "INVALID_ARGS",
+        "No planner model resolved: pass `models.planner` (or a bare `models`), or set " +
+          "`operator.defaultPlannerModel`/`operator.defaultModel` in ~/.windower/config.json",
+      );
+    }
+    const executor =
+      explicit.executor ?? defaults?.defaultExecutorModel ?? defaults?.defaultModel ?? planner;
+    return { planner, executor };
   }
 
   private async execute(ctx: {

@@ -1,6 +1,6 @@
 # Operator Contract
 
-`packages/operator` (Phase 19, revised in Phase 21). The operator is a bounded, tool-using agent loop that turns one natural-language instruction into a sequence of `performInput`/`captureFrame` calls against **one target**. It adds no capability the sidecar protocol doesn't already express — every tool below maps 1:1 onto an existing daemon or sidecar method.
+`packages/operator` (Phase 19, revised in Phase 21). The operator is a bounded, tool-using agent loop that turns one natural-language instruction into a sequence of `enumerateElements`/`captureFrame`/`performInput` calls against **one target** (Phase 22 made the element list the default percept and the frame the fallback). It adds no capability the sidecar protocol doesn't already express — every tool below maps 1:1 onto an existing daemon or sidecar method.
 
 The operator has **no relationship to recording of any kind** (Phase 21 — see "Recording independence"). It operates a target and emits its own events; whether anything is recording the screen while it does so is not expressible in this contract.
 
@@ -12,21 +12,23 @@ An operator run is fully specified by four things and nothing else:
 |---|---|---|
 | `task` | `string` | The natural-language instruction. |
 | `target` | `CaptureTarget \| { targetId: string }` | **The same target selector `start_recording` takes** (`contracts/mcp-tools.md`, `data-model.md`). Not a new type — the operator resolves it through `enumerateTargets` exactly as capture does, and its `Rect` is what the bounds clamp is evaluated against. |
-| model/provider config | `ModelConfig` (+ `baseUrl` for `openai-compatible`) | See "Model configuration". |
-| guardrails/planning config | `{ maxSteps?, timeoutSeconds?, maxBatchActions?, unbounded? }`, plus `secrets?: SecretRef[]` | See "Guardrails" and "Secret refs". |
+| model/provider config | `OperatorModels` — `{ planner: ModelConfig, executor?: ModelConfig }` (+ `baseUrl` per tier for `openai-compatible`) | See "Model tiers". `executor` defaults to `planner`. |
+| guardrails/planning config | `{ maxSteps?, timeoutSeconds?, maxBatchActions?, maxReplans?, unbounded?, observe? }`, plus `secrets?: SecretRef[]` | See "Guardrails", "Observation policy", and "Secret refs". |
 
 ```ts
 type OperatorRunOptions = {
   task: string;
   target: CaptureTarget | { targetId: string };
-  model: ModelConfig;
+  models: { planner: ModelConfig; executor?: ModelConfig };   // Phase 22; executor defaults to planner
   secrets?: SecretRef[];
   guardrails?: {
     maxSteps?: number;
     timeoutSeconds?: number;
     maxBatchActions?: number;
+    maxReplans?: number;                                       // Phase 22
     unbounded?: boolean;
   };
+  observe?: "auto" | "ax" | "vision";                          // Phase 22, default "auto"
 };
 ```
 
@@ -61,6 +63,11 @@ The model only ever sees this closed set of tools. No shell, filesystem, or raw 
 
 | Tool | Params | Maps to |
 |---|---|---|
+| `observe_elements` | `{ role?: string, labelContains?: string, maxElements?: number }` | shapes the **next** observation's `enumerateElements` call; returns no payload inline (same mechanism as `screenshot`) |
+| `click_element` | `{ ref: string, button?: "left"\|"right"\|"other" }` | sidecar `enumerateElements` (re-resolve) then `performInput` (`mouse_click`) at the element rect's center |
+| `double_click_element` | `{ ref: string }` | sidecar `enumerateElements` then `performInput` (two `mouse_click` actions) |
+| `type_into_element` | `{ ref: string, text: string }` — may contain `{{name}}` secret-ref placeholders | sidecar `enumerateElements` then `performInput` (`mouse_click` + `type_text`), after secret substitution |
+| `scroll_element` | `{ ref: string, deltaX: number, deltaY: number }` | sidecar `enumerateElements` then `performInput` (`scroll`) |
 | `screenshot` | `{ maxWidth?: number }` | sidecar `captureFrame` |
 | `move_mouse` | `{ x: number, y: number }` | sidecar `performInput` (`mouse_move`) |
 | `click` | `{ x: number, y: number, button?: "left"\|"right"\|"other" }` | sidecar `performInput` (`mouse_click`) |
@@ -73,11 +80,37 @@ The model only ever sees this closed set of tools. No shell, filesystem, or raw 
 | `list_targets` | `{ kinds?: ("display"\|"window"\|"app")[] }` | sidecar `enumerateTargets` (via daemon) |
 | `resize_window` | `{ targetId: string, bounds: Rect }` | sidecar `resizeWindow` (via daemon) |
 | `plan` | `{ steps: string[], rationale?: string }` | no RPC — records a new `OperatorPlan` revision on the run (see "Execution model") |
-| `checkpoint` | `{ expectation: string, outcome: "held"\|"failed-plan-sound"\|"failed-plan-invalid", detail?: string }` | no RPC — records the verification onto the current `OperatorStep` (see "Execution model") |
+| `checkpoint` | `{ expectation: string, outcome: "held"\|"failed-plan-sound"\|"failed-plan-invalid", detail?: string, visual?: boolean }` | no RPC — records the verification onto the current `OperatorStep` (see "Execution model"); `visual: true` declares that verifying this expectation needs a frame (see "Observation policy") |
 | `done` | `{ summary: string }` | ends the run, no RPC — `OperatorRun.state` → `"succeeded"` |
 | `fail` | `{ reason: string }` | ends the run, no RPC — `OperatorRun.state` → `"failed"` |
 
-There is no tool that spawns a process, reads/writes the filesystem, or makes an HTTP request. The model cannot escape the tool surface above; anything the operator does to the machine happens through `performInput`/`captureFrame`/`enumerateTargets`/`resizeWindow` — the same four sidecar-facing methods every other Windower interface (CLI, MCP, plugin) already uses.
+There is no tool that spawns a process, reads/writes the filesystem, or makes an HTTP request. The model cannot escape the tool surface above; anything the operator does to the machine happens through `performInput`/`captureFrame`/`enumerateTargets`/`resizeWindow`/`enumerateElements` — the same five sidecar-facing methods every other Windower interface (CLI, MCP, plugin) already uses.
+
+**Element tools resolve, they do not trust.** A `ref` is not a coordinate the runtime accepts on faith. Every element tool: re-resolves the ref via `enumerateElements({ refs: [ref] })` immediately before acting, takes the returned rect's center, runs that coordinate through the **same** target-bounds clamp every pixel tool goes through (see "Guardrails"), and only then issues `performInput`. There is no element-based exemption from any guardrail. `AX_ELEMENT_STALE` from the re-resolve is returned to the model as that action's tool result and is **not** run-terminating — the next observation re-enumerates. The re-resolve itself is an observation and does not count against `maxBatchActions`; the action it precedes does.
+
+**AX is a sensor, never an actuator.** Windower never invokes a platform accessibility *action* (`AXUIElementPerformAction`/`AXPress`/`AXSetValue` or their Windows/Linux equivalents), and `UIElement.actions` is informational only. Input is always synthesized — real cursor travel, real key events — because a recording of a UI that changes with no visible cause is not a demo. This is not a default that a flag may override: an operator whose input mechanism depended on whether someone wanted the run recorded would violate "Recording independence" directly.
+
+## Observation policy (Phase 22)
+
+The operator's default percept is the target's **accessibility element list** (`enumerateElements`), not a screenshot. Elements carry exact rects, so acting on one is a lookup rather than an estimate — and an estimated coordinate read off a downscaled PNG was the most common way a run wasted steps.
+
+A frame is captured for a step only when at least one of these holds:
+
+1. the model called `screenshot` on the previous turn;
+2. `enumerateElements` returned nothing, returned fewer than the documented minimum useful count (currently 1 — i.e. an empty list), or returned `UNSUPPORTED_CAPABILITY` — i.e. the target is canvas, WebGL, custom-drawn, or otherwise accessibility-opaque;
+3. the model declared its checkpoint `visual: true` on the previous step — "the badge turned green" is not an accessibility fact and no element list can answer it — which forces a frame on the *next* step (a checkpoint is verified against the observation that follows it, not the one that produced it);
+4. the step is a **planner** turn — the initial plan and every escalation always ground in one frame alongside the element list, per "Model tiers" below, regardless of `observe`;
+5. the run was started with `observe: "vision"`.
+
+`observe: "ax"` is a hard override, not a reweighting of 1–4: none of them apply, ever, including the planner-turn grounding frame and a model-issued `screenshot` call (the tool still returns success — "attached to next observation" — but the request is silently dropped by the observation stage, since the whole point of `"ax"` is a run with a *provable* zero-frame transcript). A target with no usable elements and no `ui.elements` support under `"ax"` gets an explicit "no observation available this step" text message instead of the frame that `"auto"` would substitute — the one case where `"ax"` trades correctness for its no-capture guarantee, and why it is not the default.
+
+The two percepts are not exclusive: a step may reason over both, and `OperatorStep.observations` records what it actually got. `observe` has three values — `"auto"` (the policy above, the default), `"ax"` (never capture a frame), and `"vision"` (always capture, i.e. pre-Phase-22 behavior).
+
+Normatively:
+
+- The choice of percept **MUST NOT** depend on whether anything is recording. An AX-observed step makes zero capture calls in both cases; a vision-observed step makes the same `captureFrame(target)` call in both cases (see "Recording independence").
+- An element `ref` is valid only for the observation that produced it. The operator **MUST NOT** carry refs across steps as if they were stable identifiers, and **MUST NOT** cache an element list between steps — a stale list is a misclick with extra steps.
+- A backend without `ui.elements` degrades to vision-only. That degradation surfaces exactly like every other capability gap — an `UNSUPPORTED_CAPABILITY` result the runtime reacts to — and **never** as a platform branch above the stdio line.
 
 ## Execution model — plan → execute → verify
 
@@ -123,6 +156,8 @@ A checkpoint verifies **a meaningful plan step or action batch, after the result
 
 **Provider independence.** This model **MUST NOT** depend on any single vendor's features. The plan is carried by the `plan` tool call — an ordinary tool in the closed surface above — precisely because tool calling is the one capability every supported provider (`anthropic`, `openai`, `openai-compatible`) exposes identically. Extended-thinking blocks, provider-native "planning" modes, structured-output modes, and prompt-caching behavior **MUST NOT** be load-bearing for planning: `OperatorStep.reasoning` stays exactly what it already is, an optional best-effort capture of whatever rationale the provider happens to expose, and a provider that exposes none must still produce identical plan records.
 
+**Prompt caching (Phase 22) is a pure optimization.** The runtime **MAY** mark the run-stable prefix as cacheable for providers that support it. As shipped, that means `cache_control` on the system prompt (built once before the loop and byte-identical every turn), and only for the `anthropic` provider — `promptCacheProviderOptions` (`providers.ts`) returns `undefined` for every other provider, which `run.ts` treats as "attach nothing." Tool-schema caching is not wired up: this package builds tool entries as plain `{ description, inputSchema }` records with no per-tool `providerOptions` hook in the installed AI SDK version, and the system prompt (~1.5 KB) is the larger, more clearly stable target, so it's what's cached now — extending the same mechanism to tool schemas and to other providers' cache-control shapes is a follow-up, not a correctness gap. Whatever the scope, the rule is unconditional: it **MUST** be skipped silently for a provider with no known mechanism, and loop behavior **MUST** be identical whether the cache hits, misses, or is ignored entirely. This amends the sentence above rather than excepting it: caching may reduce what a run costs, and may never change what a run does.
+
 **Where the plan lives.** `OperatorRun.plan` is the current (highest-revision) `OperatorPlan`; the revision that a `plan` call produced is also recorded on the `OperatorStep` whose turn produced it, as `OperatorStep.plan`. The full plan history is therefore the ordered `step.plan` values in the transcript — there is no second history array to keep in sync. See "Transcript format" for both shapes.
 
 ## Action batching
@@ -165,9 +200,25 @@ Actions execute in order. When action *k* of *n* fails:
 
 Exceeding `maxBatchActions` is `OPERATOR_BATCH_LIMIT_EXCEEDED`: the over-limit action and everything after it are skipped as above, the step closes, and the run continues — an over-long batch is a model mistake worth correcting, not worth ending the run over.
 
+## Model tiers (Phase 22)
+
+A run uses **two** model tiers, `OperatorModels = { planner, executor }` (`data-model.md`). Planning is the expensive judgement and happens once; executing "click the element labeled Create Incident, whose rect you were just handed" is nearly mechanical and does not need the same model.
+
+| Stage | Model | Percept | Tools |
+|---|---|---|---|
+| Plan | `planner` | element list **and** one grounding frame — the plan is written once and is worth an image | full surface, including `plan` |
+| Execute | `executor` | the step's observation per "Observation policy" | full surface **minus `plan`** |
+| Escalate | `planner` | compact run summary plus a fresh frame | full surface, emits a new plan revision |
+
+- Only the planner may create or revise a plan. Removing `plan` from the executor's surface is what makes that structural rather than a prompt request.
+- **Escalation edges**, exhaustively: a `failed-plan-invalid` checkpoint; or a second consecutive `failed-plan-sound` on the same plan step (one retry within the plan is the executor's, the second is an admission it is not converging). Nothing else escalates.
+- Escalations are bounded by `maxReplans` (see "Guardrails"). Exhausting it ends the run with `OPERATOR_MAX_REPLANS_EXCEEDED` rather than letting a non-converging run quietly consume the whole step budget, which is what happens today.
+- `executor` defaults to `planner`. **A run configured with a single `--model` MUST behave exactly as a pre-Phase-22 single-model run** — same percept policy aside, same plan, same tools per stage resolving to one model. This is a test assertion, not an intention.
+- Tiers are independent `ModelConfig`s over the one provider registry: they may use different providers, and either may be `openai-compatible`, so a fully-local two-tier run is possible.
+
 ## Model configuration
 
-`--model <provider>:<model>`, e.g.:
+`--model <provider>:<model>` sets both tiers; `--planner-model` / `--executor-model` set one each. E.g.:
 
 - `anthropic:claude-sonnet-5`
 - `openai:gpt-5`
@@ -175,7 +226,7 @@ Exceeding `maxBatchActions` is `OPERATOR_BATCH_LIMIT_EXCEEDED`: the over-limit a
 
 Provider selection is a thin dispatch over the Vercel AI SDK (`ai` + `@ai-sdk/anthropic` / `@ai-sdk/openai` / `@ai-sdk/openai-compatible`) — swapping the config string swaps the model with zero code change in `packages/operator`.
 
-API keys are resolved from an environment variable named per-provider in config (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`), **never** accepted as a CLI flag — a key typed on the command line ends up in shell history and process listings, which this contract explicitly avoids.
+API keys are resolved from an environment variable named per-provider in config (e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`), **never** accepted as a CLI flag — and this holds per tier, so a run whose tiers use two providers requires both env vars present — a key typed on the command line ends up in shell history and process listings, which this contract explicitly avoids.
 
 Defaults (provider, model, base URL, guardrail values) live in a new `operator` block of `WindowerConfig` (`~/.windower/config.json`), read/written via the existing `windower config get|set` command — no separate config file.
 
@@ -202,11 +253,14 @@ All guardrails are enforced by the `packages/operator` runtime, not requested vi
 | `maxSteps` | 40 | `--max-steps <n>` |
 | `timeoutMs` (wall-clock) | 300000 (5 min) | `--timeout <s>` |
 | `maxBatchActions` | 8 | `--max-batch <n>` |
-| Target-bounds clamp | every coordinate in every input tool call is checked against the recorded target's `Rect` before any RPC is issued; an out-of-bounds coordinate ends the run rather than being silently moved | `--unbounded` disables the check |
+| `maxReplans` (Phase 22) | 3 | `--max-replans <n>` |
+| Target-bounds clamp | every coordinate in every input tool call is checked against the recorded target's `Rect` before any RPC is issued — including a coordinate derived from a resolved element rect, which gets no exemption; an out-of-bounds coordinate ends the run rather than being silently moved | `--unbounded` disables the check |
 | Kill switch | `windower operate abort <runId>` (CLI) / `abort_operator_run` (daemon RPC / MCP) | — |
 | Tool surface | fixed at the table above — no filesystem, process-spawn, or network tool is ever offered to the model, in any configuration | not overridable |
 
 Exceeding `maxSteps`, or an out-of-bounds coordinate under a non-`--unbounded` run, ends the run with `state: "failed"` and a structured error (`INPUT_OUT_OF_BOUNDS` for the bounds case), the same error taxonomy used by the sidecar protocol. Exceeding `timeoutMs` ends it with `state: "timed_out"` — a distinct terminal state in `data-model.md`'s `OperatorRunState`, so a wall-clock stop is distinguishable from a genuine failure.
+
+`maxReplans` bounds how many times the planner may re-enter and emit a new plan revision (see "Model tiers"); exceeding it ends the run with `state: "failed"` and `OPERATOR_MAX_REPLANS_EXCEEDED`. It is deliberately terminal: a run on its fifth plan is not converging, and the failure mode it replaces — silently exhausting `maxSteps` — costs the caller the full step budget to learn the same thing.
 
 `maxBatchActions` bounds how many action tool calls one turn may execute (see "Action batching"); exceeding it is `OPERATOR_BATCH_LIMIT_EXCEEDED` and is **not** run-terminating. Like every other guardrail here, it is enforced by the runtime — the prompt describes it so the model can plan around it, and the runtime is what actually stops it.
 
@@ -292,7 +346,7 @@ type OperatorRun = {
   state: OperatorRunState;
   task: string;                // the natural-language instruction
   target: CaptureTarget;       // the resolved target this run operates — same selector shape start_recording takes
-  model: ModelConfig;          // parsed from the configured "provider:model" string
+  models: OperatorModels;      // resolved planner/executor tiers; one --model records the same config twice
   plan?: OperatorPlan;         // the CURRENT plan revision; absent until the first `plan` call
   steps: OperatorStep[];
   startedAt: string;           // ISO 8601
@@ -312,10 +366,10 @@ type OperatorPlan = {
 
 type OperatorStep = {
   index: number;
-  observationRef: string;      // ref to a stored frame, never inlined base64
+  observations: ObservationRef[];  // what this step reasoned over — elements, a frame, or both; never inlined
   toolCalls: Array<{ name: string; args: unknown; result?: unknown }>; // secrets already redacted to {{name}}
   plan?: OperatorPlan;         // set only on a step whose turn called `plan`; the ordered step.plan values are the full history
-  checkpoint?: { expectation: string; outcome: "held" | "failed-plan-sound" | "failed-plan-invalid"; detail?: string };
+  checkpoint?: { expectation: string; outcome: "held" | "failed-plan-sound" | "failed-plan-invalid"; detail?: string; visual?: boolean };
   reasoning?: string;          // model's stated rationale for this step, if the provider exposes it
   tMs: number;                 // ms since run start
 };
@@ -325,4 +379,4 @@ type OperatorStep = {
 
 `toolCalls[].result` for an action skipped by a batch abort is the literal `{ skipped: "BATCH_ABORTED" }` (see "Batch failure semantics"), which is why a skipped action is still a row rather than a missing one.
 
-`observationRef` points at a frame captured via `captureFrame`, stored alongside the transcript rather than inlined as base64 — keeps `transcript.json` small and diffable. Frames are content-addressed (`<sha256-prefix>.png` in the run's `frames/` directory), so the ref carries the frame's hash as well as its location. `toolCalls[].args` reflects exactly what the model saw and sent, i.e. secret placeholders (`{{name}}`), never resolved values — this is the same document the redaction filter (see "Secret refs" above) has already run over before it's written.
+`observations` points at what the step looked at, stored alongside the transcript rather than inlined — keeps `transcript.json` small and diffable. Both kinds are content-addressed: frames as `<sha256-prefix>.png` under the run's `frames/`, element snapshots as `<sha256-prefix>.json` under `observations/`, so a ref carries the content's hash as well as its location. Counting `kind` across a transcript is how "did this run avoid capturing frames" is answered — from the record, not from logs. It replaces Phase 19's single `observationRef: string`; see `data-model.md` for the full breaking-change note. Stated here too since it's a wire-format break, not an additive one: a transcript written before Phase 22 has a bare `observationRef: string` on each step, not an `observations` array, and it is **not** migrated — it is a read-only artifact under the shape it was written in, the same treatment Phase 21 gave pre-Phase-21 `OperatorRun` records when `target` became required. `toolCalls[].args` reflects exactly what the model saw and sent, i.e. secret placeholders (`{{name}}`), never resolved values — this is the same document the redaction filter (see "Secret refs" above) has already run over before it's written.

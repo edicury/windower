@@ -5,6 +5,7 @@ import { TimelineEventSchema } from "../schemas/event-timeline.js";
 import { type InputActionKind, InputActionSchema } from "../schemas/input-action.js";
 import { PermissionReportSchema, PermissionStatusSchema } from "../schemas/permissions.js";
 import { RectSchema } from "../schemas/rect.js";
+import { UIElementSchema } from "../schemas/ui-element.js";
 import { VideoSettingsSchema } from "../schemas/video-settings.js";
 
 /**
@@ -32,6 +33,12 @@ export const CapabilitySchema = z.enum([
   "input.mouse",
   "input.keyboard",
   "screenshot",
+  /**
+   * Phase 22 — `enumerateElements`. Control-surface capability, same shape as
+   * `window-control`: absent on any backend that cannot walk a UI tree (e.g.
+   * native Wayland without AT-SPI reachability — research.md §2).
+   */
+  "ui.elements",
 ]);
 export type Capability = z.infer<typeof CapabilitySchema>;
 
@@ -217,6 +224,30 @@ export const CaptureFrameResultSchema = z.object({
 });
 export type CaptureFrameResult = z.infer<typeof CaptureFrameResultSchema>;
 
+// ---- enumerateElements ----
+// Phase 22 — control-surface, capture-free (contracts/sidecar-protocol.md
+// §Methods). Requires `ui.elements`. `refs` is the freshness path: passing it
+// re-reads exactly those elements' current attributes/bounds instead of
+// walking the tree, so `click_element` can re-resolve a ref immediately
+// before acting in one round trip — no separate `resolveElement` method.
+export const EnumerateElementsParamsSchema = z.object({
+  target: CaptureTargetSchema,
+  refs: z.array(z.string()).optional(),
+  filter: z.enum(["interactable", "all"]).optional(),
+  maxDepth: z.number().int().positive().optional(),
+  maxElements: z.number().int().positive().optional(),
+});
+export type EnumerateElementsParams = z.infer<typeof EnumerateElementsParamsSchema>;
+
+export const EnumerateElementsResultSchema = z.object({
+  elements: z.array(UIElementSchema),
+  /** Minted per full walk; refs are `<generation>:<index>`, valid only within it. */
+  generation: z.string(),
+  /** True when `maxDepth`/`maxElements` cut the walk — never truncated silently. */
+  truncated: z.boolean(),
+});
+export type EnumerateElementsResult = z.infer<typeof EnumerateElementsResultSchema>;
+
 // ---- Method table ----
 
 export const SIDECAR_METHODS = [
@@ -230,6 +261,7 @@ export const SIDECAR_METHODS = [
   "cancelCapture",
   "performInput",
   "captureFrame",
+  "enumerateElements",
 ] as const;
 export type SidecarMethod = (typeof SIDECAR_METHODS)[number];
 
@@ -245,6 +277,7 @@ export interface SidecarMethodMap {
   cancelCapture: { params: CancelCaptureParams; result: CancelCaptureResult };
   performInput: { params: PerformInputParams; result: PerformInputResult };
   captureFrame: { params: CaptureFrameParams; result: CaptureFrameResult };
+  enumerateElements: { params: EnumerateElementsParams; result: EnumerateElementsResult };
 }
 
 export const SIDECAR_METHOD_SCHEMAS: {
@@ -266,6 +299,10 @@ export const SIDECAR_METHOD_SCHEMAS: {
   cancelCapture: { params: CancelCaptureParamsSchema, result: CancelCaptureResultSchema },
   performInput: { params: PerformInputParamsSchema, result: PerformInputResultSchema },
   captureFrame: { params: CaptureFrameParamsSchema, result: CaptureFrameResultSchema },
+  enumerateElements: {
+    params: EnumerateElementsParamsSchema,
+    result: EnumerateElementsResultSchema,
+  },
 };
 
 // ---- Notifications (sidecar → daemon) ----

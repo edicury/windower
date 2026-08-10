@@ -191,7 +191,7 @@ describe("ModelConfig", () => {
 describe("OperatorStep / OperatorRun", () => {
   const validStep = {
     index: 0,
-    observationRef: "/tmp/run-1/frame-0.png",
+    observations: [{ kind: "frame", ref: "/tmp/run-1/frame-0.png" }],
     toolCalls: [
       { name: "click", args: { x: 10, y: 20 } },
       { name: "type_text", args: { text: "{{password}}" }, result: { performed: 1 } },
@@ -205,7 +205,12 @@ describe("OperatorStep / OperatorRun", () => {
   });
 
   it("round-trips a step with no reasoning and no tool results", () => {
-    const minimal = { index: 1, observationRef: "handle:2", toolCalls: [], tMs: 0 };
+    const minimal = {
+      index: 1,
+      observations: [{ kind: "elements" as const, ref: "handle:2" }],
+      toolCalls: [],
+      tMs: 0,
+    };
     expect(OperatorStepSchema.parse(minimal)).toEqual(minimal);
   });
 
@@ -218,7 +223,7 @@ describe("OperatorStep / OperatorRun", () => {
       id: "11111111-1111-1111-1111-111111111111",
       state: "running",
       task: "Open waroom.co and create an incident",
-      model: { provider: "anthropic", model: "claude-sonnet-5" },
+      models: { planner: { provider: "anthropic", model: "claude-sonnet-5" } },
       target: validTarget,
       steps: [validStep],
       startedAt: "2026-08-09T12:00:00.000Z",
@@ -240,7 +245,7 @@ describe("OperatorStep / OperatorRun", () => {
         id: "11111111-1111-1111-1111-111111111111",
         state: "succeeded",
         task: "Open waroom.co and create an incident",
-        model: { provider: "anthropic", model: "claude-sonnet-5" },
+        models: { planner: { provider: "anthropic", model: "claude-sonnet-5" } },
         target: validTarget,
         steps: [],
         startedAt: "2026-08-09T12:00:00.000Z",
@@ -262,7 +267,7 @@ describe("OperatorStep / OperatorRun", () => {
       id: "11111111-1111-1111-1111-111111111111",
       state: "succeeded" as const,
       task: "Open waroom.co and create an incident",
-      model: { provider: "anthropic", model: "claude-sonnet-5" },
+      models: { planner: { provider: "anthropic", model: "claude-sonnet-5" } },
       target: validTarget,
       steps: [],
       startedAt: "2026-08-09T12:00:00.000Z",
@@ -280,7 +285,7 @@ describe("OperatorStep / OperatorRun", () => {
         id: "11111111-1111-1111-1111-111111111111",
         state: "failed",
         task: "Open waroom.co",
-        model: { provider: "anthropic", model: "claude-sonnet-5" },
+        models: { planner: { provider: "anthropic", model: "claude-sonnet-5" } },
         target: validTarget,
         steps: [],
         startedAt: "2026-08-09T12:00:00.000Z",
@@ -307,7 +312,7 @@ describe("OperatorStep / OperatorRun", () => {
       id: "run-2",
       state: "failed",
       task: "do the thing",
-      model: { provider: "openai", model: "gpt-5" },
+      models: { planner: { provider: "openai", model: "gpt-5" } },
       target: validTarget,
       steps: [],
       startedAt: "2026-08-09T12:00:00.000Z",
@@ -400,13 +405,30 @@ describe("OperatorPlan", () => {
       id: "run-3",
       state: "running",
       task: "create an incident",
-      model: { provider: "anthropic", model: "claude-sonnet-5" },
+      models: { planner: { provider: "anthropic", model: "claude-sonnet-5" } },
       target: validTarget,
       plan: rev1,
       steps: [
-        { index: 0, observationRef: "f0.png", toolCalls: [], plan: rev0, tMs: 812 },
-        { index: 1, observationRef: "f1.png", toolCalls: [], tMs: 4000 },
-        { index: 3, observationRef: "f3.png", toolCalls: [], plan: rev1, tMs: 20_000 },
+        {
+          index: 0,
+          observations: [{ kind: "frame", ref: "f0.png" }],
+          toolCalls: [],
+          plan: rev0,
+          tMs: 812,
+        },
+        {
+          index: 1,
+          observations: [{ kind: "frame", ref: "f1.png" }],
+          toolCalls: [],
+          tMs: 4000,
+        },
+        {
+          index: 3,
+          observations: [{ kind: "frame", ref: "f3.png" }],
+          toolCalls: [],
+          plan: rev1,
+          tMs: 20_000,
+        },
       ],
       startedAt: "2026-08-09T12:00:00.000Z",
     });
@@ -419,9 +441,11 @@ describe("OperatorPlan", () => {
       id: "run-4",
       state: "pending",
       task: "do the thing",
-      model: { provider: "openai", model: "gpt-5" },
+      models: { planner: { provider: "openai", model: "gpt-5" } },
       target: validTarget,
-      steps: [{ index: 0, observationRef: "f0.png", toolCalls: [], tMs: 0 }],
+      steps: [
+        { index: 0, observations: [{ kind: "frame", ref: "f0.png" }], toolCalls: [], tMs: 0 },
+      ],
       startedAt: "2026-08-09T12:00:00.000Z",
     });
     expect(run.plan).toBeUndefined();
@@ -439,7 +463,7 @@ describe("BATCH_ABORTED_RESULT", () => {
   it("records skipped actions as rows, never as missing entries", () => {
     const step = OperatorStepSchema.parse({
       index: 4,
-      observationRef: "f4.png",
+      observations: [{ kind: "frame", ref: "f4.png" }],
       toolCalls: [
         { name: "press_key", args: { key: "l", modifiers: ["cmd"] }, result: { performed: 1 } },
         {

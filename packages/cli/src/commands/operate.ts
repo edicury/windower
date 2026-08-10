@@ -24,9 +24,10 @@ import {
 
 /**
  * `windower operate "<task>" --target <id> [--kind window|display|region]
- * [--region x,y,w,h] [--model p:m] [--base-url u] [--secret name=source:ref]...
- * [--max-steps n] [--timeout s] [--max-batch n] [--unbounded] [--detach]
- * [--json]` plus `operate status|abort|list` — contracts/cli.md.
+ * [--region x,y,w,h] [--model p:m] [--planner-model p:m] [--executor-model p:m]
+ * [--base-url u] [--secret name=source:ref]... [--max-steps n] [--timeout s]
+ * [--max-batch n] [--observe auto|ax|vision] [--max-replans n] [--unbounded]
+ * [--detach] [--json]` plus `operate status|abort|list` — contracts/cli.md.
  *
  * **The operator records nothing.** It is a peer capability alongside
  * capture: it drives `--target` and emits its own run record, and behaves
@@ -105,7 +106,7 @@ export function registerOperateCommand(program: Command): void {
         // run fails `OPERATOR_MISSING_API_KEY` even though this shell has the
         // key. Same helper the MCP server's `run_operator` uses.
         const forcedMode = resolveForcedMode(cmd.optsWithGlobals());
-        const env = buildOperatorHelloEnv({ model: params.model, secrets: params.secrets });
+        const env = buildOperatorHelloEnv({ models: params.models, secrets: params.secrets });
         await withBackend(
           "operate",
           json,
@@ -248,13 +249,26 @@ function formatElapsed(startedAt: string, endedAt: string): string {
   return parts.map((p) => String(p).padStart(2, "0")).join(":");
 }
 
+/**
+ * Renders both model tiers (Phase 22) as a single display string — just the
+ * planner when the executor is absent/identical (the single-`--model`
+ * parity case), `planner: x, executor: y` when they diverge, so the common
+ * case reads exactly like the pre-Phase-22 single-model display.
+ */
+export function formatOperatorModels(models: OperatorRun["models"]): string {
+  const planner = formatModelConfig(models.planner);
+  if (models.executor === undefined) return planner;
+  const executor = formatModelConfig(models.executor);
+  return executor === planner ? planner : `planner: ${planner}, executor: ${executor}`;
+}
+
 /** Mirrors `status`'s `renderStatus` layout, for an `OperatorRun` instead of a `RecordingSession`. */
 export function renderOperatorRun(run: OperatorRun): string {
   const elapsed = formatElapsed(run.startedAt, run.endedAt ?? new Date().toISOString());
   const lines = [
     `Operator run ${run.id}: ${run.state}`,
     `  Task: ${run.task}`,
-    `  Model: ${formatModelConfig(run.model)}`,
+    `  Model: ${formatOperatorModels(run.models)}`,
     `  Steps: ${run.steps.length}`,
     `  Elapsed: ${elapsed}`,
   ];
@@ -278,7 +292,7 @@ export function renderOperatorRunsTable(result: ListOperatorRunsResult): string 
   const rows = result.runs.map((r) => [
     r.id,
     r.state,
-    formatModelConfig(r.model),
+    formatOperatorModels(r.models),
     String(r.steps.length),
     truncate(r.task, 40),
     r.startedAt,

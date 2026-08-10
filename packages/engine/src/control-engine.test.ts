@@ -77,6 +77,10 @@ function createStubControlFactory(options?: {
         if (dead) throw new SidecarError("INTERNAL_ERROR", "Sidecar stream closed", -32000);
         return { bounds: { x: 0, y: 0, width: 10, height: 10 } };
       },
+      enumerateElements: async () => {
+        if (dead) throw new SidecarError("INTERNAL_ERROR", "Sidecar stream closed", -32000);
+        return { elements: [], generation: "gen-1", truncated: false };
+      },
     } as unknown as SidecarClient;
     record.handle = {
       client,
@@ -174,6 +178,24 @@ describe("ControlEngine", () => {
     expect(spawned).toHaveLength(2);
     expect(spawned[1]?.performInputCalls).toHaveLength(1);
     expect(control.isRunning).toBe(true);
+  });
+
+  it("proxies enumerateElements through the control client, same process as performInput/resizeWindow", async () => {
+    const { spawnControl, spawned } = createStubControlFactory();
+    const control = new ControlEngine({ spawnControl });
+
+    const target = {
+      kind: "display" as const,
+      id: "display-1",
+      name: "Built-in",
+      bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+      isPrimary: true,
+      scaleFactor: 1,
+    };
+    const result = await control.enumerateElements({ target });
+
+    expect(result).toEqual({ elements: [], generation: "gen-1", truncated: false });
+    expect(spawned).toHaveLength(1);
   });
 
   it("gates on describe().capabilities, never on a platform string", async () => {

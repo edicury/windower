@@ -13,6 +13,7 @@ import {
 } from "../schemas/input-action.js";
 import type { PermissionReport } from "../schemas/permissions.js";
 import type { Rect } from "../schemas/rect.js";
+import type { UIElement } from "../schemas/ui-element.js";
 import type { SidecarErrorCode } from "./errors.js";
 import { type JsonRpcId, JsonRpcLineSchema, classifyJsonRpcLine } from "./jsonrpc.js";
 import {
@@ -86,6 +87,13 @@ export interface FakeSidecarOptions {
    * `UNSUPPORTED_CAPABILITY`.)
    */
   unsupportedInputKinds?: InputActionKind[];
+  /**
+   * Phase 22: the fixture `enumerateElements` serves for a fresh walk (no
+   * `refs`). Seeds the fake's first "generation" — see `setElements` to
+   * simulate a subsequent walk (e.g. after the target window moved), which
+   * is what exercises `AX_ELEMENT_STALE` recovery in tests.
+   */
+  elements?: UIElement[];
 }
 
 interface FakeSession {
@@ -111,6 +119,7 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   "input.mouse",
   "input.keyboard",
   "screenshot",
+  "ui.elements",
 ];
 
 const DEFAULT_DISPLAY_BOUNDS: Rect[] = [{ x: 0, y: 0, width: 1920, height: 1080 }];
@@ -135,6 +144,17 @@ export class FakeSidecar {
   private readonly unsupportedInputKinds: Set<InputActionKind>;
   private readonly performedInputs: InputAction[] = [];
   private readonly capturedFrames: SidecarMethodMap["captureFrame"]["params"][] = [];
+  /**
+   * Phase 22 — `enumerateElements` fixture state. Mirrors the native backend's
+   * "retain at most the two most recent generations" rule
+   * (`ElementQuery.swift`): `elements`/`generation` are the current walk,
+   * `previousElements`/`previousGeneration` the one before it. A `refs`
+   * lookup against a ref that resolves in neither is `AX_ELEMENT_STALE`.
+   */
+  private elements: UIElement[];
+  private generation: string;
+  private previousElements: UIElement[] = [];
+  private nextGeneration = 1;
 
   constructor(stream: Duplex, options: FakeSidecarOptions = {}) {
     this.stream = stream;
@@ -151,6 +171,8 @@ export class FakeSidecar {
     };
     this.displayBounds = options.displayBounds ?? DEFAULT_DISPLAY_BOUNDS;
     this.unsupportedInputKinds = new Set(options.unsupportedInputKinds ?? []);
+    this.elements = options.elements ?? [];
+    this.generation = `gen-${this.nextGeneration++}`;
 
     const rl = createInterface({ input: stream, terminal: false });
     rl.on("line", (line) => this.handleLine(line));
@@ -182,6 +204,23 @@ export class FakeSidecar {
   clearRecordedCalls(): void {
     this.performedInputs.length = 0;
     this.capturedFrames.length = 0;
+  }
+
+  /**
+   * Test hook (Phase 22): replaces the `enumerateElements` fixture, minting a
+   * new generation and retaining the previous one — simulates a target window
+   * moving/resizing/re-rendering between an observation and a later `refs`
+   * re-resolve, which is what makes `AX_ELEMENT_STALE` recovery testable.
+   */
+  setElements(elements: UIElement[]): void {
+    this.previousElements = this.elements;
+    this.elements = elements;
+    this.generation = `gen-${this.nextGeneration++}`;
+  }
+
+  /** Test hook: the current `enumerateElements` generation id. */
+  get elementGeneration(): string {
+    return this.generation;
   }
 
   emitLog(payload: SidecarNotificationMap["log"]): void {
@@ -264,6 +303,8 @@ export class FakeSidecar {
         return this.performInput(params as SidecarMethodMap["performInput"]["params"]);
       case "captureFrame":
         return this.captureFrame(params as SidecarMethodMap["captureFrame"]["params"]);
+      case "enumerateElements":
+        return this.enumerateElements(params as SidecarMethodMap["enumerateElements"]["params"]);
       default:
         throw new FakeSidecarError("UNSUPPORTED_CAPABILITY", `Unhandled method "${method}"`);
     }
@@ -466,6 +507,58 @@ export class FakeSidecar {
 
     this.capturedFrames.push(params);
     return { imageBase64: TINY_PNG_BASE64, width, height, scale };
+  }
+
+  /**
+   * `enumerateElements` (Phase 22) — control-surface, capture-free. Serves
+   * the injected fixture (`FakeSidecarOptions.elements` / `setElements`).
+   * Gated on Accessibility, same as `performInput`/`resizeWindow`
+   * (contracts/sidecar-protocol.md §Platform notes: same TCC grant,
+   * no new permission kind).
+   */
+  private enumerateElements(
+    params: SidecarMethodMap["enumerateElements"]["params"],
+  ): SidecarMethodMap["enumerateElements"]["result"] {
+    if (this.permissions.accessibility === "denied") {
+      throw new FakeSidecarError("PERMISSION_DENIED", "Accessibility permission not granted");
+    }
+    if (!this.hasCapability("ui.elements")) {
+      throw new FakeSidecarError("UNSUPPORTED_CAPABILITY", "Backend does not support ui.elements");
+    }
+
+    if (params.refs !== undefined) {
+      const resolved: UIElement[] = [];
+      for (const ref of params.refs) {
+        const found =
+          this.elements.find((e) => e.ref === ref) ??
+          this.previousElements.find((e) => e.ref === ref);
+        if (!found) {
+          throw new FakeSidecarError(
+            "AX_ELEMENT_STALE",
+            `Element ref "${ref}" no longer resolves to a live element`,
+          );
+        }
+        resolved.push(found);
+      }
+      return { elements: resolved, generation: this.generation, truncated: false };
+    }
+
+    const filter = params.filter ?? "interactable";
+    let filtered =
+      filter === "all"
+        ? this.elements
+        : this.elements.filter(
+            (e) => (e.actions !== undefined && e.actions.length > 0) || Boolean(e.label),
+          );
+
+    const maxElements = params.maxElements ?? 200;
+    let truncated = false;
+    if (filtered.length > maxElements) {
+      filtered = filtered.slice(0, maxElements);
+      truncated = true;
+    }
+
+    return { elements: filtered, generation: this.generation, truncated };
   }
 
   private sendResult(id: JsonRpcId, method: SidecarMethod, result: unknown): void {

@@ -29,11 +29,11 @@ const validRun: OperatorRun = {
     bounds: { x: 0, y: 0, width: 1920, height: 1080 },
     scaleFactor: 2,
   },
-  model: { provider: "anthropic", model: "claude-sonnet-5" },
+  models: { planner: { provider: "anthropic", model: "claude-sonnet-5" } },
   steps: [
     {
       index: 0,
-      observationRef: "frames/0.png",
+      observations: [{ kind: "frame", ref: "frames/0.png" }],
       toolCalls: [{ name: "type_text", args: { text: "{{password}}" } }],
       tMs: 1200,
     },
@@ -102,7 +102,7 @@ describe("registerOperatorTools (round-trip via an in-memory MCP client)", () =>
       arguments: {
         task: "Open the app and create an incident",
         target: { targetId: "d1" },
-        model: { provider: "anthropic", model: "claude-sonnet-5" },
+        models: { provider: "anthropic", model: "claude-sonnet-5" },
       },
     });
     const elapsedMs = Date.now() - startedAt;
@@ -126,7 +126,7 @@ describe("registerOperatorTools (round-trip via an in-memory MCP client)", () =>
     const args = {
       task: "Open waroom.co, log in as {{user}}/{{password}}, create an incident",
       target: { targetId: "window-3" },
-      model: {
+      models: {
         provider: "openai-compatible",
         model: "llama3:8b",
         baseUrl: "http://localhost:11434/v1",
@@ -152,7 +152,7 @@ describe("registerOperatorTools (round-trip via an in-memory MCP client)", () =>
       arguments: {
         task: "t",
         target: { targetId: "d1" },
-        model: { provider: "anthropic", model: "claude-sonnet-5" },
+        models: { provider: "anthropic", model: "claude-sonnet-5" },
         secrets: [{ name: "p", source: "vault", ref: "x" }],
       },
     });
@@ -227,7 +227,7 @@ describe("registerOperatorTools error path", () => {
       arguments: {
         task: "t",
         target: { targetId: "d1" },
-        model: { provider: "anthropic", model: "claude-sonnet-5" },
+        models: { provider: "anthropic", model: "claude-sonnet-5" },
       },
     });
 
@@ -263,7 +263,7 @@ describe("registerOperatorTools backend routing (Phase 20)", () => {
       arguments: {
         task: "t",
         target: { targetId: "d1" },
-        model: { provider: "anthropic", model: "claude-sonnet-5" },
+        models: { provider: "anthropic", model: "claude-sonnet-5" },
       },
     });
 
@@ -305,7 +305,7 @@ describe("registerOperatorTools backend routing (Phase 20)", () => {
         arguments: {
           task: "t",
           target: { targetId: "d1" },
-          model: { provider: "anthropic", model: "claude-sonnet-5" },
+          models: { provider: "anthropic", model: "claude-sonnet-5" },
         },
       });
 
@@ -333,7 +333,7 @@ describe("registerOperatorTools backend routing (Phase 20)", () => {
       arguments: {
         task: "t",
         target: { targetId: "d1" },
-        model: { provider: "anthropic", model: "claude-sonnet-5" },
+        models: { provider: "anthropic", model: "claude-sonnet-5" },
       },
     });
     expect(disposed).toBe(1);
@@ -350,7 +350,7 @@ describe("registerOperatorTools backend routing (Phase 20)", () => {
       arguments: {
         task: "t",
         target: { targetId: "d1" },
-        model: { provider: "anthropic", model: "claude-sonnet-5" },
+        models: { provider: "anthropic", model: "claude-sonnet-5" },
       },
     });
     expect(disposed).toBe(2);

@@ -16,6 +16,7 @@ import {
   type LoopAbortReason,
   LoopBeginStepParamsSchema,
   LoopCaptureFrameParamsSchema,
+  LoopEnumerateElementsParamsSchema,
   LoopEnumerateTargetsParamsSchema,
   LoopLogParamsSchema,
   LoopPerformInputParamsSchema,
@@ -24,15 +25,17 @@ import {
   LoopReportResultParamsSchema,
   LoopReportStepParamsSchema,
   LoopResizeWindowParamsSchema,
-  type ModelConfig,
+  type ObservationRef,
   type OperatorCheckpoint,
   type OperatorDeps,
+  type OperatorModels,
   type OperatorPlan,
   type OperatorRunState,
   type OperatorStep,
   type OperatorToolCall,
   type Rect,
   type ResolvedSecret,
+  type UIElement,
   SidecarError,
   inputActionCoordinates,
 } from "@windower/core";
@@ -178,9 +181,14 @@ export interface OperatorLoopRunConfig {
   task: string;
   /** The RESOLVED target — the daemon resolves the caller's selector before the spawn. */
   target: CaptureTarget;
-  model: ModelConfig;
+  /** Phase 22 — resolved planner/executor tiers; see `OperatorModelsSchema`. */
+  models: OperatorModels;
   maxSteps: number;
   maxBatchActions: number;
+  /** Phase 22 guardrail — planner-escalation ceiling; daemon-authoritative (see `serveReportPlan`). */
+  maxReplans: number;
+  /** Phase 22 — `"auto"` (default) | `"ax"` | `"vision"`; forwarded verbatim in `ready`. */
+  observe?: "auto" | "ax" | "vision";
   timeoutMs: number;
   unbounded: boolean;
   bounds?: Rect;
@@ -208,9 +216,15 @@ export interface OperatorLoopHostOptions {
   spawn?: LoopChildFactory;
   /** `~/.windower/operator-runs/<runId>/frames` — the daemon owns every disk write. */
   framesDir: string;
+  /**
+   * Phase 22 — `~/.windower/operator-runs/<runId>/observations`, sibling to
+   * `framesDir`. Where `enumerateElements` snapshots are persisted, exactly
+   * as `framesDir` is for `captureFrame` — the child writes nothing to disk.
+   */
+  observationsDir: string;
   /** Called with an accepted, daemon-stamped plan revision. */
   persistPlan: (plan: OperatorPlan) => Promise<void>;
-  /** Called with a closed, redacted step whose `observationRef` names a real frame. */
+  /** Called with a closed, redacted step whose `observations` name real frames/element snapshots. */
   persistStep: (step: OperatorStep) => Promise<void>;
   onEvent?: (event: OperatorEvent) => void;
   /** Redacted stderr / `log` sink. Defaults to `console.error`. */
@@ -261,6 +275,10 @@ const TERMINAL_GUARDRAIL_CODES = new Set([
   "OPERATOR_TIMEOUT",
   "OPERATOR_ABORTED",
   "OPERATOR_MAX_STEPS_EXCEEDED",
+  // Phase 22 — like `INPUT_OUT_OF_BOUNDS`, this ends the run through the
+  // child's own loop (which reports `failed`), not a daemon-pushed `abort`;
+  // `beginFinalizationFor`'s default case is what "nothing to signal" means.
+  "OPERATOR_MAX_REPLANS_EXCEEDED",
 ]);
 
 export function isTerminalGuardrailCode(code: string): boolean {
@@ -275,6 +293,7 @@ export class OperatorLoopHost {
   private readonly deps: OperatorDeps;
   private readonly spawn: LoopChildFactory;
   private readonly framesDir: string;
+  private readonly observationsDir: string;
   private readonly persistPlan: (plan: OperatorPlan) => Promise<void>;
   private readonly persistStep: (step: OperatorStep) => Promise<void>;
   private readonly onEvent: (event: OperatorEvent) => void;
@@ -289,6 +308,8 @@ export class OperatorLoopHost {
   private openStep: number | undefined;
   private actionsInStep = 0;
   private planRevision: number | undefined;
+  /** Phase 22 — planner escalations *accepted* so far; daemon-authoritative (see `serveReportPlan`). */
+  private replansUsed = 0;
   private planForOpenStep: OperatorPlan | undefined;
   private abortReason: LoopAbortReason | undefined;
 
@@ -304,6 +325,8 @@ export class OperatorLoopHost {
   private reported: OperatorLoopOutcome | undefined;
   /** Content hash → the ref the daemon wrote the frame under. */
   private readonly frames = new Map<string, string>();
+  /** Phase 22 — content hash → the ref the daemon wrote the element snapshot under. */
+  private readonly elementObservations = new Map<string, string>();
   private settle: ((outcome: OperatorLoopOutcome) => void) | undefined;
   private readonly timers = new Set<NodeJS.Timeout>();
   /** Serializes disk writes so a step never overtakes the plan that preceded it. */
@@ -315,6 +338,7 @@ export class OperatorLoopHost {
     this.deps = options.deps;
     this.spawn = options.spawn ?? spawnLoopChildProcess;
     this.framesDir = options.framesDir;
+    this.observationsDir = options.observationsDir;
     this.persistPlan = options.persistPlan;
     this.persistStep = options.persistStep;
     this.onEvent = options.onEvent ?? (() => {});
@@ -515,6 +539,8 @@ export class OperatorLoopHost {
         return await this.serveCaptureFrame(params);
       case "enumerateTargets":
         return await this.serveEnumerateTargets(params);
+      case "enumerateElements":
+        return await this.serveEnumerateElements(params);
       case "performInput":
         return await this.servePerformInput(params);
       case "resizeWindow":
@@ -552,12 +578,14 @@ export class OperatorLoopHost {
       runId: this.config.runId,
       task: this.config.task,
       target: this.config.target,
-      model: this.config.model,
+      models: this.config.models,
       // Names only. The child never receives a resolved secret value, so no
       // bug in the process running provider SDK code can leak one.
       secretNames: this.secrets.map((secret) => secret.name),
       maxSteps: this.config.maxSteps,
       maxBatchActions: this.config.maxBatchActions,
+      maxReplans: this.config.maxReplans,
+      observe: this.config.observe,
       timeoutMs: this.config.timeoutMs,
       unbounded: this.config.unbounded,
       bounds: this.config.bounds,
@@ -624,6 +652,25 @@ export class OperatorLoopHost {
     return { targets: [...targets] };
   }
 
+  /**
+   * Phase 22 — the fifth proxied method. An observation, not an action: like
+   * `captureFrame`, it does not count toward `maxBatchActions` (including the
+   * `refs`-only re-resolve an element tool performs immediately before
+   * acting). No `target` param — the daemon always resolves against the
+   * run's own target, so the child cannot widen its reach.
+   */
+  private async serveEnumerateElements(rawParams: unknown): Promise<unknown> {
+    const params = parse(LoopEnumerateElementsParamsSchema, rawParams);
+    this.requireOpenStep("enumerateElements");
+    this.assertRunnable();
+    const result = await this.proxy(() => this.deps.enumerateElements(params));
+    // Same rule as `serveCaptureFrame`: the daemon already holds the
+    // elements, because they came from its own proxy — it persists the
+    // snapshot and the child only ever sends a ref back up.
+    await this.rememberElements(result.elements);
+    return result;
+  }
+
   private async servePerformInput(rawParams: unknown): Promise<{ performed: number }> {
     const params = parse(LoopPerformInputParamsSchema, rawParams);
     this.requireOpenStep("performInput");
@@ -650,10 +697,23 @@ export class OperatorLoopHost {
     if (this.planForOpenStep !== undefined) {
       throw new LoopError("LOOP_PROTOCOL_VIOLATION", "A second `reportPlan` in one step.");
     }
+    // Phase 22 — `maxReplans` is enforced HERE, not just in the child's own
+    // copy (contracts/operator-loop-protocol.md: guardrails are
+    // daemon-authoritative; the loop-side count in packages/operator is
+    // deliberate duplication, not the source of truth). Revision 0 is the
+    // initial plan and is free; every revision after it is a replan.
+    const isReplan = this.planRevision !== undefined;
+    if (isReplan && this.replansUsed >= this.config.maxReplans) {
+      throw new LoopError(
+        "OPERATOR_MAX_REPLANS_EXCEEDED",
+        `Operator run exceeded its ${this.config.maxReplans}-replan budget without converging.`,
+      );
+    }
     // The child carries a plan's *content*; the daemon owns its *identity*. A
     // child cannot renumber, backdate, or overwrite a revision.
     const revision = this.planRevision === undefined ? 0 : this.planRevision + 1;
     this.planRevision = revision;
+    if (isReplan) this.replansUsed += 1;
     const plan: OperatorPlan = {
       revision,
       steps: params.steps,
@@ -690,7 +750,7 @@ export class OperatorLoopHost {
         ...params.step,
         // The child does not repeat the plan; if it does, the daemon's copy wins.
         ...(this.planForOpenStep === undefined ? {} : { plan: this.planForOpenStep }),
-        observationRef: this.resolveObservationRef(params.step.observationRef),
+        observations: params.step.observations.map((entry) => this.resolveObservation(entry)),
       },
       this.secrets,
     );
@@ -747,6 +807,8 @@ export class OperatorLoopHost {
       unbounded: this.config.unbounded,
       ...(this.config.bounds === undefined ? {} : { bounds: this.config.bounds }),
       ...(this.planRevision === undefined ? {} : { planRevision: this.planRevision }),
+      replansUsed: this.replansUsed,
+      maxReplans: this.config.maxReplans,
     };
   }
 
@@ -875,12 +937,37 @@ export class OperatorLoopHost {
   }
 
   /**
-   * The child names a frame by its content hash; the daemon holds the bytes,
-   * so it maps the ref onto the file it already wrote.
+   * Phase 22 — same convention as `rememberFrame`, for `enumerateElements`
+   * snapshots: content-addressed under `observations/`, hashed on the exact
+   * same serialization the child's (null) transcript writer used to mint its
+   * in-memory ref (`JSON.stringify(elements)`, no formatting), so the two
+   * hashes agree.
    */
-  private resolveObservationRef(ref: string): string {
-    const hash = ref.split(":").pop() ?? ref;
-    return this.frames.get(hash) ?? ref;
+  private async rememberElements(elements: readonly UIElement[]): Promise<void> {
+    const json = JSON.stringify(elements);
+    const hash = createHash("sha256").update(json, "utf8").digest("hex").slice(0, 16);
+    if (this.elementObservations.has(hash)) return;
+    const filename = `${hash}.json`;
+    this.elementObservations.set(hash, `observations/${filename}`);
+    try {
+      await mkdir(this.observationsDir, { recursive: true });
+      await writeFile(join(this.observationsDir, filename), `${JSON.stringify(elements, null, 2)}\n`, "utf8");
+    } catch (err) {
+      this.log(`[operator-loop] could not persist element observation: ${message_(err)}`);
+    }
+  }
+
+  /**
+   * The child names a frame or element snapshot by its content hash; the
+   * daemon holds the bytes in either case, so it maps the ref onto the file
+   * it already wrote — refs flow up, results flow down.
+   */
+  private resolveObservation(entry: ObservationRef): ObservationRef {
+    const hash = entry.ref.split(":").pop() ?? entry.ref;
+    if (entry.kind === "frame") {
+      return { kind: "frame", ref: this.frames.get(hash) ?? entry.ref };
+    }
+    return { kind: "elements", ref: this.elementObservations.get(hash) ?? entry.ref };
   }
 
   private enqueueWrite(write: () => Promise<void>): void {
@@ -983,8 +1070,9 @@ export class OperatorLoopHost {
         this.abort("timeout");
         return;
       default:
-        // `INPUT_OUT_OF_BOUNDS` ends the run through the child's own loop,
-        // which reports `failed`; nothing to signal.
+        // `INPUT_OUT_OF_BOUNDS` and (Phase 22) `OPERATOR_MAX_REPLANS_EXCEEDED`
+        // end the run through the child's own loop, which reports `failed`;
+        // nothing to signal.
         return;
     }
   }

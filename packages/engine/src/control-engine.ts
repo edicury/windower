@@ -111,6 +111,20 @@ export class ControlEngine {
   }
 
   /**
+   * Phase 22 — `enumerateElements`. Control-surface, capture-free, same
+   * capability-gating pattern as every other call here: this method does not
+   * gate itself (mirroring `resizeWindow`) — callers that need a structured
+   * `UNSUPPORTED_CAPABILITY` before making the call (the operator's deps, so
+   * it can fall back to a frame) call `requireCapability("ui.elements")`
+   * first, exactly as `performInput`'s caller does per input-action kind.
+   */
+  async enumerateElements(
+    params: Parameters<SidecarClient["enumerateElements"]>[0],
+  ): Promise<Awaited<ReturnType<SidecarClient["enumerateElements"]>>> {
+    return this.call((client) => client.enumerateElements(params));
+  }
+
+  /**
    * Throws `UNSUPPORTED_CAPABILITY` unless the control surface advertises
    * `capability`. Capability strings, never a platform check — CLAUDE.md.
    */

@@ -50,7 +50,7 @@ function run(overrides: Partial<OperatorRun> = {}): OperatorRun {
       bounds: { x: 0, y: 0, width: 1920, height: 1080 },
       scaleFactor: 2,
     },
-    model: { provider: "anthropic", model: "claude-sonnet-5" },
+    models: { planner: { provider: "anthropic", model: "claude-sonnet-5" } },
     steps: [],
     startedAt: "2026-08-09T10:00:00.000Z",
     ...overrides,
@@ -197,7 +197,9 @@ describe("renderOperatorRun", () => {
   it("renders state, task, model, step count and elapsed time", () => {
     const output = renderOperatorRun(
       run({
-        steps: [{ index: 0, observationRef: "frame-0.png", toolCalls: [], tMs: 10 }],
+        steps: [
+          { index: 0, observations: [{ kind: "frame", ref: "frame-0.png" }], toolCalls: [], tMs: 10 },
+        ],
         endedAt: "2026-08-09T10:01:05.000Z",
         state: "succeeded",
       }),
@@ -372,7 +374,7 @@ describe("runBlocking (operate's default local/blocking path)", () => {
   const params = {
     task: "t",
     target: { targetId: "d1" },
-    model: { provider: "anthropic" as const, model: "claude-sonnet-5" },
+    models: { planner: { provider: "anthropic" as const, model: "claude-sonnet-5" } },
   };
 
   it("prints the terminal OperatorRun as JSON on stdout and exits 0 on success", async () => {

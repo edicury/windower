@@ -73,6 +73,31 @@ export const ModelConfigSchema = z.object({
 export type ModelConfig = z.infer<typeof ModelConfigSchema>;
 
 /**
+ * Phase 22 — two model tiers, planner and executor (contracts/operator.md
+ * §Model tiers). `executor` defaults to `planner` wherever it is resolved
+ * (packages/operator's model-tier resolution), which is what makes a run
+ * configured with a single `--model`/`defaultModel` behave identically to a
+ * pre-Phase-22 single-model run.
+ */
+export const OperatorModelsSchema = z.object({
+  planner: ModelConfigSchema,
+  executor: ModelConfigSchema.optional(),
+});
+export type OperatorModels = z.infer<typeof OperatorModelsSchema>;
+
+/**
+ * Normalizes the CLI/MCP boundary's accepted shapes — a bare `ModelConfig`
+ * (single `--model`) or an already-tiered `OperatorModels`
+ * (`--planner-model`/`--executor-model`) — into `OperatorModels`. Callers at
+ * that boundary (packages/cli, packages/mcp-server) are expected to call this
+ * so `packages/operator` itself only ever sees the tiered shape
+ * (contracts/operator.md §Inputs).
+ */
+export function normalizeOperatorModels(input: ModelConfig | OperatorModels): OperatorModels {
+  return "planner" in input ? input : { planner: input };
+}
+
+/**
  * Parses the `--model <provider>:<model>` string form
  * (e.g. `anthropic:claude-sonnet-5`, `openai-compatible:llama-3.3`).
  *
@@ -175,14 +200,47 @@ export const OperatorCheckpointSchema = z.object({
   outcome: OperatorCheckpointOutcomeSchema,
   /** Optional elaboration — what was observed instead, typically. */
   detail: z.string().optional(),
+  /**
+   * Phase 22 — the model declaring that verifying this expectation needed to
+   * *see* the screen ("the badge turned green" is not an accessibility fact).
+   * Model-stated, like `outcome`; the runtime never infers it
+   * (contracts/operator.md §Execution model). Reaching this true is what makes
+   * the observation policy's visual branch reachable.
+   */
+  visual: z.boolean().optional(),
 });
 export type OperatorCheckpoint = z.infer<typeof OperatorCheckpointSchema>;
+
+// ---- ObservationRef ----
+
+/**
+ * What one `OperatorStep` looked at (Phase 22, data-model.md §ObservationRef).
+ * Refs are content-addressed and stored beside the transcript, never inlined:
+ * `"frame"` → `~/.windower/operator-runs/<runId>/frames/<sha256-prefix>.png`;
+ * `"elements"` → `~/.windower/operator-runs/<runId>/observations/<sha256-prefix>.json`.
+ *
+ * Counting `kind` across a transcript is how "did this run actually avoid
+ * capturing frames" is answered — a property of the record, not something
+ * derived from logs.
+ */
+export const ObservationRefSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("frame"), ref: z.string() }),
+  z.object({ kind: z.literal("elements"), ref: z.string() }),
+]);
+export type ObservationRef = z.infer<typeof ObservationRefSchema>;
 
 /** One perceive → decide → act cycle within an `OperatorRun`. */
 export const OperatorStepSchema = z.object({
   index: z.number().int().nonnegative(),
-  /** Reference to the captured frame this step reasoned over (path or handle). */
-  observationRef: z.string(),
+  /**
+   * What this step actually reasoned over — an element list, a frame, or
+   * both (Phase 22). **Breaking change**: replaces Phase 19's
+   * `observationRef: string`, documented deliberately rather than worked
+   * around with a parallel field (data-model.md §OperatorStep "Breaking
+   * change"). Transcripts written before Phase 22 are read-only artifacts
+   * and are NOT migrated.
+   */
+  observations: z.array(ObservationRefSchema),
   toolCalls: z.array(OperatorToolCallSchema),
   /** Model's stated rationale, when the provider exposes one. */
   reasoning: z.string().optional(),
@@ -236,7 +294,13 @@ export const OperatorRunSchema = z.object({
   state: OperatorRunStateSchema,
   /** The natural-language instruction. */
   task: z.string(),
-  model: ModelConfigSchema,
+  /**
+   * Phase 22 — **breaking change**: replaces the single `model: ModelConfig`
+   * field. See `OperatorModelsSchema`. Older on-disk runs carrying a bare
+   * `model` are read-only artifacts and are NOT migrated, the same treatment
+   * `OperatorStep.observations` gives the old `observationRef: string`.
+   */
+  models: OperatorModelsSchema,
   /**
    * The resolved target this run operates — the same selector shape
    * `start_recording` takes (`CaptureTarget`), resolved through
@@ -290,12 +354,23 @@ export const DEFAULT_OPERATOR_TIMEOUT_MS = 300_000;
  * run-terminating.
  */
 export const DEFAULT_OPERATOR_MAX_BATCH_ACTIONS = 8;
+/**
+ * contracts/operator.md §Guardrails (Phase 22) — bounds how many times the
+ * planner may re-enter and emit a new plan revision per run. Exceeding it is
+ * `OPERATOR_MAX_REPLANS_EXCEEDED` and IS run-terminating (`state: "failed"`):
+ * a run on its fifth plan is not converging, and the failure mode it
+ * replaces — silently exhausting `maxSteps` — costs the caller the whole
+ * step budget to learn the same thing.
+ */
+export const DEFAULT_OPERATOR_MAX_REPLANS = 3;
 
 export const OperatorGuardrailsSchema = z.object({
   maxSteps: z.number().int().positive().optional(),
   timeoutSeconds: z.number().positive().optional(),
   /** `--max-batch <n>`; `DEFAULT_OPERATOR_MAX_BATCH_ACTIONS` when omitted. */
   maxBatchActions: z.number().int().positive().optional(),
+  /** `--max-replans <n>`; `DEFAULT_OPERATOR_MAX_REPLANS` (3) when omitted. */
+  maxReplans: z.number().int().positive().optional(),
   unbounded: z.boolean().optional(),
 });
 export type OperatorGuardrails = z.infer<typeof OperatorGuardrailsSchema>;

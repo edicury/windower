@@ -198,7 +198,7 @@ describe("buildDoctorReport", () => {
         bounds: { x: 0, y: 0, width: 1920, height: 1080 },
         scaleFactor: 2,
       },
-      model: { provider: "anthropic", model: "claude-sonnet-5" },
+      models: { planner: { provider: "anthropic", model: "claude-sonnet-5" } },
       steps: [],
       startedAt: new Date().toISOString(),
     };

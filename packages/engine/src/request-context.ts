@@ -25,9 +25,10 @@ import type { DaemonHelloRequest, ResolvedSecret } from "@windower/core";
  */
 export interface RequestContext {
   /**
-   * Scoped env-var snapshot from `hello`'s `env.apiKeyEnvVar`/`apiKeyValue` —
-   * at most one entry today, keyed by the model API-key var name. Never the
-   * daemon's own `process.env`, and never logged.
+   * Scoped env-var snapshot from `hello`'s `env.apiKeyEnvVar`/`apiKeyValue`
+   * (planner) and `env.executorApiKeyEnvVar`/`executorApiKeyValue` (executor,
+   * only when it differs from the planner's — Phase 22 two-tier models). At
+   * most two entries. Never the daemon's own `process.env`, and never logged.
    */
   env: NodeJS.ProcessEnv;
   /**
@@ -48,6 +49,9 @@ export function buildRequestContext(request: DaemonHelloRequest): RequestContext
   const env: NodeJS.ProcessEnv = {};
   if (request.env?.apiKeyEnvVar && request.env.apiKeyValue !== undefined) {
     env[request.env.apiKeyEnvVar] = request.env.apiKeyValue;
+  }
+  if (request.env?.executorApiKeyEnvVar && request.env.executorApiKeyValue !== undefined) {
+    env[request.env.executorApiKeyEnvVar] = request.env.executorApiKeyValue;
   }
   return {
     env,

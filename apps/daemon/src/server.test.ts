@@ -222,7 +222,7 @@ describe("DaemonServer", () => {
       await child.request("captureFrame", { format: "png" });
       await child.request("enumerateTargets", {});
       await child.request("reportStep", {
-        step: { index: 0, observationRef: "memory:1:deadbeef", toolCalls: [], tMs: 1 },
+        step: { index: 0, observations: [{ kind: "elements", ref: "memory:1:deadbeef" }], toolCalls: [], tMs: 1 },
       });
       await child.request("reportResult", { state: "succeeded" });
     };
@@ -237,7 +237,7 @@ describe("DaemonServer", () => {
       client.listTargets({}),
       client.checkPermissions(),
       client.listTargets({ kinds: ["display"] }),
-      client.runOperator({ task: "look at the screen", target: DISPLAY_TARGET, model: MODEL }),
+      client.runOperator({ task: "look at the screen", target: DISPLAY_TARGET, models: { planner: MODEL } }),
     ]);
     // `run_operator` returns as soon as the run is registered; let the loop finish.
     await new Promise((resolve) => setTimeout(resolve, 50));
@@ -251,7 +251,7 @@ describe("DaemonServer", () => {
       await child.request("beginStep", { index: 0 });
       await child.request("performInput", { actions: [{ kind: "mouse_move", x: 5, y: 5 }] });
       await child.request("reportStep", {
-        step: { index: 0, observationRef: "memory:1:deadbeef", toolCalls: [], tMs: 1 },
+        step: { index: 0, observations: [{ kind: "elements", ref: "memory:1:deadbeef" }], toolCalls: [], tMs: 1 },
       });
       await child.request("reportResult", { state: "succeeded" });
     };
@@ -263,7 +263,7 @@ describe("DaemonServer", () => {
       targetId: DISPLAY_TARGET.id,
       bounds: { x: 0, y: 0, width: 100, height: 100 },
     });
-    await client.runOperator({ task: "click something", target: DISPLAY_TARGET, model: MODEL });
+    await client.runOperator({ task: "click something", target: DISPLAY_TARGET, models: { planner: MODEL } });
     await new Promise((resolve) => setTimeout(resolve, 50));
 
     // Still one capture process; the control work went to a separate,
@@ -392,7 +392,7 @@ describe("DaemonServer", () => {
     const { runId } = await client.runOperator({
       task: "do a thing",
       target: DISPLAY_TARGET,
-      model: MODEL,
+      models: { planner: MODEL },
     });
 
     await new Promise((resolve) => setTimeout(resolve, 200));
@@ -476,7 +476,7 @@ describe("DaemonServer", () => {
     // test can't distinguish "passed through" from "already there".
     expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
 
-    await client.runOperator({ task: "do a thing", target: DISPLAY_TARGET, model: MODEL });
+    await client.runOperator({ task: "do a thing", target: DISPLAY_TARGET, models: { planner: MODEL } });
     await new Promise((resolve) => setTimeout(resolve, 30)); // let the loop child handshake
     expect(seenEnv?.ANTHROPIC_API_KEY).toBe("caller-key-not-in-daemon-env");
     client.dispose();

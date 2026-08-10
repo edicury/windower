@@ -17,7 +17,7 @@ describe("buildOperatorHelloEnv", () => {
   it("returns undefined when nothing relevant is present in process.env", () => {
     clearEnv();
     const env = buildOperatorHelloEnv({
-      model: { provider: "anthropic", model: "claude-sonnet-5" },
+      models: { provider: "anthropic", model: "claude-sonnet-5" },
     });
     expect(env).toBeUndefined();
   });
@@ -25,7 +25,7 @@ describe("buildOperatorHelloEnv", () => {
   it("resolves the provider's default API key env var when present", () => {
     process.env.ANTHROPIC_API_KEY = "sk-abc";
     const env = buildOperatorHelloEnv({
-      model: { provider: "anthropic", model: "claude-sonnet-5" },
+      models: { provider: "anthropic", model: "claude-sonnet-5" },
     });
     expect(env).toEqual({
       apiKeyEnvVar: "ANTHROPIC_API_KEY",
@@ -37,7 +37,7 @@ describe("buildOperatorHelloEnv", () => {
   it("prefers an explicit model.apiKeyEnvVar over the provider default", () => {
     process.env.MY_CUSTOM_KEY = "sk-custom";
     const env = buildOperatorHelloEnv({
-      model: { provider: "anthropic", model: "claude-sonnet-5", apiKeyEnvVar: "MY_CUSTOM_KEY" },
+      models: { provider: "anthropic", model: "claude-sonnet-5", apiKeyEnvVar: "MY_CUSTOM_KEY" },
     });
     expect(env?.apiKeyEnvVar).toBe("MY_CUSTOM_KEY");
     expect(env?.apiKeyValue).toBe("sk-custom");
@@ -45,13 +45,13 @@ describe("buildOperatorHelloEnv", () => {
 
   it("leaves apiKeyEnvVar/apiKeyValue unset when the configured var isn't present in process.env", () => {
     const env = buildOperatorHelloEnv({
-      model: { provider: "anthropic", model: "claude-sonnet-5" },
+      models: { provider: "anthropic", model: "claude-sonnet-5" },
       secrets: [{ name: "user", source: "env", ref: "DEMO_USER" }],
     });
     process.env.DEMO_USER = "alice";
     // Re-derive after setting DEMO_USER so this call only carries the secret ref.
     const envWithSecretOnly = buildOperatorHelloEnv({
-      model: { provider: "anthropic", model: "claude-sonnet-5" },
+      models: { provider: "anthropic", model: "claude-sonnet-5" },
       secrets: [{ name: "user", source: "env", ref: "DEMO_USER" }],
     });
     expect(env).toBeUndefined(); // ANTHROPIC_API_KEY unset, DEMO_USER unset at first call
@@ -65,7 +65,7 @@ describe("buildOperatorHelloEnv", () => {
   it("forwards only source:'env' secrets, resolved by value, never keychain/literal refs", () => {
     process.env.DEMO_USER = "alice";
     const env = buildOperatorHelloEnv({
-      model: { provider: "openai-compatible", model: "llama3:8b" },
+      models: { provider: "openai-compatible", model: "llama3:8b" },
       secrets: [
         { name: "user", source: "env", ref: "DEMO_USER" },
         { name: "password", source: "keychain", ref: "waroom" },
@@ -77,7 +77,7 @@ describe("buildOperatorHelloEnv", () => {
 
   it("skips an env-sourced secret whose ref isn't present in process.env (daemon falls back to its own)", () => {
     const env = buildOperatorHelloEnv({
-      model: { provider: "anthropic", model: "claude-sonnet-5" },
+      models: { provider: "anthropic", model: "claude-sonnet-5" },
       secrets: [{ name: "missing", source: "env", ref: "NOT_SET_ANYWHERE" }],
     });
     expect(env).toBeUndefined();
@@ -86,8 +86,41 @@ describe("buildOperatorHelloEnv", () => {
   it("never touches unrelated env vars (only the resolved API-key var and named secret refs)", () => {
     process.env.OPENAI_API_KEY = "unrelated-should-not-appear";
     const env = buildOperatorHelloEnv({
-      model: { provider: "anthropic", model: "claude-sonnet-5" },
+      models: { provider: "anthropic", model: "claude-sonnet-5" },
     });
     expect(env).toBeUndefined();
+  });
+
+  it("forwards only the planner's key when planner and executor share a provider (tiered, same env var)", () => {
+    process.env.ANTHROPIC_API_KEY = "sk-shared";
+    const env = buildOperatorHelloEnv({
+      models: {
+        planner: { provider: "anthropic", model: "claude-sonnet-5" },
+        executor: { provider: "anthropic", model: "claude-haiku" },
+      },
+    });
+    expect(env).toEqual({
+      apiKeyEnvVar: "ANTHROPIC_API_KEY",
+      apiKeyValue: "sk-shared",
+      secretRefs: undefined,
+    });
+  });
+
+  it("also forwards the executor's key when the two tiers use different providers", () => {
+    process.env.ANTHROPIC_API_KEY = "sk-planner";
+    process.env.OPENAI_API_KEY = "sk-executor";
+    const env = buildOperatorHelloEnv({
+      models: {
+        planner: { provider: "anthropic", model: "claude-sonnet-5" },
+        executor: { provider: "openai", model: "gpt-5-mini" },
+      },
+    });
+    expect(env).toEqual({
+      apiKeyEnvVar: "ANTHROPIC_API_KEY",
+      apiKeyValue: "sk-planner",
+      executorApiKeyEnvVar: "OPENAI_API_KEY",
+      executorApiKeyValue: "sk-executor",
+      secretRefs: undefined,
+    });
   });
 });

@@ -26,6 +26,7 @@ describe("operator loop protocol — method tables", () => {
       "performInput",
       "enumerateTargets",
       "resizeWindow",
+      "enumerateElements",
       "reportPlan",
       "reportStep",
       "reportResult",
@@ -36,12 +37,13 @@ describe("operator loop protocol — method tables", () => {
     );
   });
 
-  it("proxies exactly OperatorDeps' four screen-facing members", () => {
+  it("proxies exactly OperatorDeps' five screen-facing members", () => {
     expect([...OPERATOR_LOOP_PROXIED_METHODS]).toEqual([
       "captureFrame",
       "performInput",
       "enumerateTargets",
       "resizeWindow",
+      "enumerateElements",
     ]);
   });
 
@@ -78,10 +80,11 @@ describe("operator loop protocol — ready", () => {
         isFocused: true,
         resizable: true,
       },
-      model: { provider: "anthropic", model: "claude-sonnet-5" },
+      models: { planner: { provider: "anthropic", model: "claude-sonnet-5" } },
       secretNames: ["password"],
       maxSteps: 40,
       maxBatchActions: 8,
+      maxReplans: 3,
       timeoutMs: 300_000,
       unbounded: false,
       bounds: { x: 0, y: 0, width: 3024, height: 1964 },
@@ -107,10 +110,11 @@ describe("operator loop protocol — ready", () => {
         isFocused: true,
         resizable: true,
       },
-      model: { provider: "anthropic", model: "claude-sonnet-5" },
+      models: { planner: { provider: "anthropic", model: "claude-sonnet-5" } },
       secretNames: [],
       maxSteps: 40,
       maxBatchActions: 8,
+      maxReplans: 3,
       timeoutMs: 300_000,
       unbounded: false,
       startedAtMs: 1786000931000,
@@ -142,6 +146,8 @@ describe("operator loop protocol — GuardrailState", () => {
       unbounded: false,
       bounds: { x: 0, y: 0, width: 1920, height: 1080 },
       planRevision: 1,
+      replansUsed: 1,
+      maxReplans: 3,
     };
     expect(GuardrailStateSchema.parse(state)).toEqual(state);
   });
@@ -156,6 +162,8 @@ describe("operator loop protocol — GuardrailState", () => {
         remainingMs: 300_000,
         aborted: false,
         unbounded: true,
+        replansUsed: 0,
+        maxReplans: 3,
       }).bounds,
     ).toBeUndefined();
   });
@@ -170,6 +178,8 @@ describe("operator loop protocol — GuardrailState", () => {
         remainingMs: 300_000,
         aborted: false,
         unbounded: false,
+        replansUsed: 0,
+        maxReplans: 3,
       }).planRevision,
     ).toBeUndefined();
   });
@@ -182,6 +192,8 @@ describe("operator loop protocol — GuardrailState", () => {
         remainingMs: 300_000,
         aborted: false,
         unbounded: false,
+        replansUsed: 0,
+        maxReplans: 3,
       }).success,
     ).toBe(false);
   });
@@ -278,6 +290,7 @@ describe("operator loop protocol — error taxonomy", () => {
         "NO_OPEN_STEP",
         "OPERATOR_ABORTED",
         "OPERATOR_BATCH_LIMIT_EXCEEDED",
+        "OPERATOR_MAX_REPLANS_EXCEEDED",
         "OPERATOR_MAX_STEPS_EXCEEDED",
         "OPERATOR_TIMEOUT",
         "STEP_INDEX_MISMATCH",

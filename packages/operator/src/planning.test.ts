@@ -23,11 +23,13 @@ function makeOptions(
   return {
     runId: "run-1",
     task: "Open Safari and create an incident",
-    model: parseModelConfig("anthropic:claude-sonnet-5"),
+    models: { planner: parseModelConfig("anthropic:claude-sonnet-5") },
     secrets: [],
     maxSteps: 10,
     timeoutMs: 60_000,
     maxBatchActions: DEFAULT_OPERATOR_MAX_BATCH_ACTIONS,
+    maxReplans: 3,
+    observe: "vision",
     unbounded: false,
     bounds: BOUNDS,
     target: FAKE_TARGET,
@@ -128,9 +130,21 @@ describe("plan → execute → verify", () => {
   });
 
   it("replans in place, keeping every revision in the transcript", async () => {
+    // Phase 22: only the planner may call `plan` (contracts/operator.md
+    // §Model tiers), so a replan is reached via a `checkpoint` call with
+    // outcome `failed-plan-invalid` — the escalation edge — rather than a
+    // bare second `plan` call from whatever turn happens to be executing.
     const model = createScriptedModel([
       { toolCalls: [{ name: "plan", args: { steps: ["Open the app"] } }] },
       { toolCalls: [{ name: "click", args: { x: 1, y: 1 } }] },
+      {
+        toolCalls: [
+          {
+            name: "checkpoint",
+            args: { expectation: "The app opened", outcome: "failed-plan-invalid" },
+          },
+        ],
+      },
       {
         toolCalls: [
           {
@@ -150,7 +164,7 @@ describe("plan → execute → verify", () => {
     // The ordered step.plan values ARE the history — no second array.
     const history = result.steps.flatMap((s) => (s.plan === undefined ? [] : [s.plan]));
     expect(history.map((p) => p.revision)).toEqual([0, 1]);
-    expect(history[1]?.atStepIndex).toBe(2);
+    expect(history[1]?.atStepIndex).toBe(3);
     expect(history[1]?.rationale).toBe("A login wall appeared.");
   });
 
@@ -158,6 +172,11 @@ describe("plan → execute → verify", () => {
     const assigned: Array<{ steps: string[]; atStepIndex: number }> = [];
     const model = createScriptedModel([
       { toolCalls: [{ name: "plan", args: { steps: ["A"] } }] },
+      {
+        toolCalls: [
+          { name: "checkpoint", args: { expectation: "A landed", outcome: "failed-plan-invalid" } },
+        ],
+      },
       { toolCalls: [{ name: "plan", args: { steps: ["B"] } }] },
       { toolCalls: [{ name: "done", args: { summary: "ok" } }] },
     ]);
@@ -175,7 +194,7 @@ describe("plan → execute → verify", () => {
 
     expect(assigned).toEqual([
       { steps: ["A"], atStepIndex: 0 },
-      { steps: ["B"], atStepIndex: 1 },
+      { steps: ["B"], atStepIndex: 2 },
     ]);
     // The loop wears the assigned numbers rather than its own counter.
     expect(result.steps.flatMap((s) => (s.plan ? [s.plan.revision] : []))).toEqual([101, 102]);
@@ -207,6 +226,10 @@ describe("plan → execute → verify", () => {
     const turns = [
       { name: "plan", args: { steps: ["Open the app", "Verify it opened"] } },
       { name: "click", args: { x: 5, y: 5 } },
+      {
+        name: "checkpoint",
+        args: { expectation: "The app opened", outcome: "failed-plan-invalid" },
+      },
       { name: "plan", args: { steps: ["Dismiss the wall"], rationale: "A login wall appeared." } },
       { name: "done", args: { summary: "ok" } },
     ];

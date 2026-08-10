@@ -49,7 +49,7 @@ const MODEL = { provider: "anthropic", model: "claude-sonnet-5" };
 
 const STEP = (index: number): OperatorStep => ({
   index,
-  observationRef: `memory:${index + 1}:deadbeef`,
+  observations: [{ kind: "elements", ref: `memory:${index + 1}:deadbeef` }],
   toolCalls: [],
   tMs: index,
 });
@@ -179,7 +179,7 @@ describe("OperatorRunEngine", () => {
         await child.request("reportStep", {
           step: {
             index: 0,
-            observationRef: "memory:1:deadbeef",
+            observations: [{ kind: "elements", ref: "memory:1:deadbeef" }],
             toolCalls: [{ name: "click", args: { x: 10, y: 10 } }],
             tMs: 5,
           },
@@ -192,7 +192,7 @@ describe("OperatorRunEngine", () => {
     const { runId } = await manager.runOperator({
       task: "do a thing",
       target: DISPLAY_TARGET,
-      model: MODEL,
+      models: { planner: MODEL },
     });
     // Non-blocking: the loop is still mid-flight when run_operator returns.
     expect((await readRunFile(runId)).state).toBe("running");
@@ -221,7 +221,7 @@ describe("OperatorRunEngine", () => {
     const { runId } = await manager.runOperator({
       task: "demo",
       target: DISPLAY_TARGET,
-      model: MODEL,
+      models: { planner: MODEL },
     });
     await manager.whenSettled(runId);
 
@@ -241,7 +241,7 @@ describe("OperatorRunEngine", () => {
     const { runId } = await manager.runOperator({
       task: "log in with {{password}}",
       target: DISPLAY_TARGET,
-      model: MODEL,
+      models: { planner: MODEL },
       secrets: [{ name: "password", source: "env", ref: "MY_PASSWORD" }],
     });
     await manager.whenSettled(runId);
@@ -259,7 +259,7 @@ describe("OperatorRunEngine", () => {
     const { runId } = await manager.runOperator({
       task: "drive the window",
       target: { targetId: "window-7" },
-      model: MODEL,
+      models: { planner: MODEL },
     });
     await manager.whenSettled(runId);
 
@@ -274,7 +274,7 @@ describe("OperatorRunEngine", () => {
   it("rejects an unresolvable target selector without persisting a run", async () => {
     const { manager, store } = makeManager();
     await expect(
-      manager.runOperator({ task: "nope", target: { targetId: "ghost" }, model: MODEL }),
+      manager.runOperator({ task: "nope", target: { targetId: "ghost" }, models: { planner: MODEL } }),
     ).rejects.toMatchObject({ code: "TARGET_NOT_FOUND" });
     expect(store.list()).toHaveLength(0);
   });
@@ -291,7 +291,7 @@ describe("OperatorRunEngine", () => {
     const { runId } = await manager.runOperator({
       task: "long task",
       target: DISPLAY_TARGET,
-      model: MODEL,
+      models: { planner: MODEL },
     });
 
     await expect(manager.abortOperatorRun({ runId })).resolves.toEqual({ aborted: true });
@@ -312,7 +312,7 @@ describe("OperatorRunEngine", () => {
       state: "running",
       task: "was in flight",
       target: DISPLAY_TARGET,
-      model: MODEL,
+      models: { planner: MODEL },
       steps: [],
       startedAt: new Date().toISOString(),
     });
@@ -321,7 +321,7 @@ describe("OperatorRunEngine", () => {
       state: "succeeded",
       task: "already done",
       target: DISPLAY_TARGET,
-      model: MODEL,
+      models: { planner: MODEL },
       steps: [],
       startedAt: new Date().toISOString(),
       endedAt: new Date().toISOString(),
@@ -346,7 +346,7 @@ describe("OperatorRunEngine", () => {
       manager.runOperator({
         task: "log in",
         target: DISPLAY_TARGET,
-        model: MODEL,
+        models: { planner: MODEL },
         secrets: [{ name: "password", source: "env", ref: "MISSING_VAR" }],
       }),
     ).rejects.toMatchObject({ code: "INVALID_ARGS" });
@@ -370,7 +370,7 @@ describe("OperatorRunEngine", () => {
         await c.request("reportStep", {
           step: {
             index: 0,
-            observationRef: "memory:1:deadbeef",
+            observations: [{ kind: "elements", ref: "memory:1:deadbeef" }],
             toolCalls: [{ name: "type_text", args: { text: "sup3r-s3cret" } }],
             tMs: 1,
           },
@@ -385,7 +385,7 @@ describe("OperatorRunEngine", () => {
     const { runId } = await manager.runOperator({
       task: "log in with {{password}}",
       target: DISPLAY_TARGET,
-      model: MODEL,
+      models: { planner: MODEL },
       secrets: [{ name: "password", source: "env", ref: "MY_PASSWORD" }],
     });
     await manager.whenSettled(runId);
@@ -411,7 +411,7 @@ describe("OperatorRunEngine", () => {
     };
 
     const { runId } = await manager.runOperator(
-      { task: "do a thing", target: DISPLAY_TARGET, model: MODEL },
+      { task: "do a thing", target: DISPLAY_TARGET, models: { planner: MODEL } },
       context,
     );
     await manager.whenSettled(runId);
@@ -441,7 +441,7 @@ describe("OperatorRunEngine", () => {
     };
 
     const { runId } = await manager.runOperator(
-      { task: "do a thing", target: DISPLAY_TARGET, model: MODEL },
+      { task: "do a thing", target: DISPLAY_TARGET, models: { planner: MODEL } },
       context,
     );
     // Simulates the connection disconnecting and its context object being
@@ -469,7 +469,7 @@ describe("OperatorRunEngine", () => {
     };
 
     const { runId } = await manager.runOperator(
-      { task: "do a thing", target: DISPLAY_TARGET, model: MODEL },
+      { task: "do a thing", target: DISPLAY_TARGET, models: { planner: MODEL } },
       context,
     );
     await manager.whenSettled(runId);
@@ -504,7 +504,7 @@ describe("OperatorRunEngine", () => {
       {
         task: "log in with {{password}}",
         target: DISPLAY_TARGET,
-        model: MODEL,
+        models: { planner: MODEL },
         secrets: [{ name: "password", source: "env", ref: "MY_PASSWORD" }],
       },
       context,
@@ -547,7 +547,7 @@ describe("OperatorRunEngine", () => {
     const { runId } = await manager.runOperator({
       task: "screenshot me",
       target: DISPLAY_TARGET,
-      model: MODEL,
+      models: { planner: MODEL },
     });
     await manager.whenSettled(runId);
 
@@ -575,7 +575,7 @@ describe("OperatorRunEngine", () => {
     const { runId } = await manager.runOperator({
       task: "click far away",
       target: DISPLAY_TARGET,
-      model: MODEL,
+      models: { planner: MODEL },
     });
     await manager.whenSettled(runId);
     expect(code).toBe("INPUT_OUT_OF_BOUNDS");
@@ -590,7 +590,7 @@ describe("OperatorRunEngine", () => {
     const { runId } = await manager.runOperator({
       task: "boom",
       target: DISPLAY_TARGET,
-      model: MODEL,
+      models: { planner: MODEL },
     });
     await manager.whenSettled(runId);
     const run = await readRunFile(runId);
@@ -615,7 +615,7 @@ describe("OperatorRunEngine", () => {
     const { runId } = await manager.runOperator({
       task: "open the docs",
       target: DISPLAY_TARGET,
-      model: MODEL,
+      models: { planner: MODEL },
     });
     await manager.whenSettled(runId);
 
@@ -644,7 +644,7 @@ describe("OperatorRunEngine", () => {
     const { runId } = await manager.runOperator({
       task: "log in",
       target: DISPLAY_TARGET,
-      model: MODEL,
+      models: { planner: MODEL },
     });
     await manager.whenSettled(runId);
 
@@ -665,7 +665,7 @@ describe("OperatorRunEngine", () => {
     const { runId } = await manager.runOperator({
       task: "boom",
       target: DISPLAY_TARGET,
-      model: MODEL,
+      models: { planner: MODEL },
     });
     await manager.whenSettled(runId);
 
@@ -692,7 +692,7 @@ describe("OperatorRunEngine", () => {
     const { runId } = await manager.runOperator({
       task: "log in with {{password}}",
       target: DISPLAY_TARGET,
-      model: MODEL,
+      models: { planner: MODEL },
       secrets: [{ name: "password", source: "env", ref: "MY_PASSWORD" }],
     });
     await manager.whenSettled(runId);
@@ -714,7 +714,7 @@ describe("OperatorRunEngine", () => {
     const { runId } = await manager.runOperator({
       task: "bounded",
       target: DISPLAY_TARGET,
-      model: MODEL,
+      models: { planner: MODEL },
       guardrails: { timeoutSeconds: 12 },
     });
     await manager.whenSettled(runId);
@@ -732,7 +732,7 @@ describe("OperatorRunEngine", () => {
     const { runId } = await manager.runOperator({
       task: "one",
       target: DISPLAY_TARGET,
-      model: MODEL,
+      models: { planner: MODEL },
     });
     await manager.whenSettled(runId);
     expect(manager.listOperatorRuns({}).runs).toHaveLength(1);
@@ -780,7 +780,7 @@ describe("OperatorRunEngine", () => {
         const { runId } = await manager.runOperator({
           task: "identical configuration",
           target: DISPLAY_TARGET,
-          model: MODEL,
+          models: { planner: MODEL },
           guardrails: { maxSteps: 7, timeoutSeconds: 11, maxBatchActions: 3, unbounded: false },
         });
         await manager.whenSettled(runId);
@@ -875,7 +875,7 @@ describe("OperatorRunEngine", () => {
         const { runId } = await manager.runOperator({
           task: `end up ${outcome.name}`,
           target: DISPLAY_TARGET,
-          model: MODEL,
+          models: { planner: MODEL },
         });
         if (outcome.abort) await manager.abortOperatorRun({ runId });
         await manager.whenSettled(runId);
@@ -913,7 +913,7 @@ describe("OperatorRunEngine", () => {
       const { runId } = await manager.runOperator({
         task: "crash beside a recording",
         target: DISPLAY_TARGET,
-        model: MODEL,
+        models: { planner: MODEL },
       });
       await manager.whenSettled(runId);
 
@@ -937,7 +937,7 @@ describe("OperatorRunEngine", () => {
       const { runId } = await manager.runOperator({
         task: "drive it",
         target: DISPLAY_TARGET,
-        model: MODEL,
+        models: { planner: MODEL },
       });
       await manager.whenSettled(runId);
       const operatorSession = await recordingEngine.stopRecording({
@@ -979,7 +979,7 @@ describe("OperatorRunEngine", () => {
       const { runId } = await manager.runOperator({
         task: "still running at shutdown",
         target: DISPLAY_TARGET,
-        model: MODEL,
+        models: { planner: MODEL },
       });
       manager.signalDaemonShutdown();
       await manager.whenSettled(runId);

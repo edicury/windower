@@ -33,6 +33,20 @@ export const OPERATOR_ERROR_CODES = {
    * correcting, not worth ending the run over.
    */
   BATCH_LIMIT_EXCEEDED: "OPERATOR_BATCH_LIMIT_EXCEEDED",
+  /**
+   * Phase 22 — a supplied element `ref` no longer resolves to a live element
+   * (contracts/sidecar-protocol.md). **Non-terminal**: caught by the same
+   * generic batch-failure handling every other non-terminal code already
+   * gets in `run.ts` — the rest of the batch is skipped, the step closes, and
+   * the next step re-observes.
+   */
+  AX_ELEMENT_STALE: "AX_ELEMENT_STALE",
+  /**
+   * Phase 22 — the planner has re-entered more times than `maxReplans`
+   * allows. Terminal: a run on its Nth+1 plan is not converging
+   * (contracts/operator.md §Guardrails).
+   */
+  MAX_REPLANS_EXCEEDED: "OPERATOR_MAX_REPLANS_EXCEEDED",
 } as const;
 
 export type OperatorErrorCode = (typeof OPERATOR_ERROR_CODES)[keyof typeof OPERATOR_ERROR_CODES];
@@ -55,6 +69,7 @@ export const NON_TERMINAL_OPERATOR_ERROR_CODES: readonly string[] = [
   "UNSUPPORTED_CAPABILITY",
   "INPUT_UNSUPPORTED",
   OPERATOR_ERROR_CODES.BATCH_LIMIT_EXCEEDED,
+  OPERATOR_ERROR_CODES.AX_ELEMENT_STALE,
 ];
 
 /** True when an error code ends the run (as opposed to just the batch). */

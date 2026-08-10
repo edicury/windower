@@ -30,10 +30,10 @@ describe("RunOperatorParamsSchema — recording-unaware inputs (Phase 21)", () =
   const base = {
     task: "open waroom.co in Safari",
     target: { targetId: "window:42" },
-    model: { provider: "anthropic", model: "claude-sonnet-5" },
+    models: { planner: { provider: "anthropic", model: "claude-sonnet-5" } },
   };
 
-  it("accepts exactly { task, target, model, secrets?, guardrails? }", () => {
+  it("accepts exactly { task, target, models?, secrets?, guardrails?, observe? }", () => {
     // contracts/operator.md §Inputs — a run is fully specified by these and
     // nothing else.
     const params = {
@@ -44,11 +44,23 @@ describe("RunOperatorParamsSchema — recording-unaware inputs (Phase 21)", () =
     expect(RunOperatorParamsSchema.parse(params)).toEqual(params);
     expect(Object.keys(RunOperatorParamsSchema.shape).sort()).toEqual([
       "guardrails",
-      "model",
+      "models",
+      "observe",
       "secrets",
       "target",
       "task",
     ]);
+  });
+
+  it("accepts a bare ModelConfig for `models`, one --model setting both tiers", () => {
+    const params = { ...base, models: { provider: "anthropic", model: "claude-sonnet-5" } };
+    expect(RunOperatorParamsSchema.parse(params)).toEqual(params);
+  });
+
+  it("accepts an omitted `models`, relying on daemon-side config-file resolution", () => {
+    const { models, ...noModels } = base;
+    expect(RunOperatorParamsSchema.parse(noModels)).toEqual(noModels);
+    void models;
   });
 
   it("takes the same target selector `start_recording` takes", () => {

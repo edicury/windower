@@ -4,8 +4,11 @@ import { AudioSettingsSchema } from "../schemas/audio-settings.js";
 import { CaptureTargetSchema } from "../schemas/capture-target.js";
 import { OutputManifestSchema } from "../schemas/manifest.js";
 import {
+  type ModelConfig,
   ModelConfigSchema,
+  type OperatorModels,
   OperatorGuardrailsSchema,
+  OperatorModelsSchema,
   OperatorRunSchema,
   OperatorRunStateSchema,
   SecretRefSchema,
@@ -183,11 +186,30 @@ export const RunOperatorParamsSchema = z.strictObject({
    * clamp. Not a parallel operator-only type.
    */
   target: z.union([CaptureTargetSchema, z.object({ targetId: z.string() })]),
-  model: ModelConfigSchema,
+  /**
+   * Phase 22 — accepts either a bare `ModelConfig` (one `--model`, both tiers
+   * resolve to it) or an already-tiered `OperatorModels`
+   * (`--planner-model`/`--executor-model`), mirroring
+   * `normalizeOperatorModels`'s accepted shapes at the CLI/MCP boundary.
+   * Optional: a caller may omit it entirely and rely on
+   * `~/.windower/config.json`'s `operator.defaultPlannerModel` /
+   * `defaultExecutorModel` / `defaultModel` — the same file the daemon
+   * already reads for every other operator default, resolved daemon-side in
+   * `OperatorRunEngine.resolveModels` (explicit → tier-specific config
+   * default → `defaultModel` → error; executor additionally falls back to
+   * the resolved planner). A caller that supplies a fully resolved `models`
+   * (as `windower operate` does today) sees the config file consulted for
+   * nothing — this is a fallback, not a second source of truth.
+   */
+  models: z.union([ModelConfigSchema, OperatorModelsSchema]).optional(),
   secrets: z.array(SecretRefSchema).optional(),
   guardrails: OperatorGuardrailsSchema.optional(),
+  /** Phase 22 — `"auto"` (default) | `"ax"` | `"vision"`; see `contracts/operator.md` §Observation policy. */
+  observe: z.enum(["auto", "ax", "vision"]).optional(),
 });
 export type RunOperatorParams = z.infer<typeof RunOperatorParamsSchema>;
+/** The pre-normalization shape `RunOperatorParams.models` accepts. */
+export type RunOperatorModelsInput = ModelConfig | OperatorModels;
 
 export const RunOperatorResultSchema = z.object({
   runId: z.string(),

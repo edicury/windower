@@ -1,4 +1,5 @@
 import type {
+  ObservationRef,
   OperatorCheckpoint,
   OperatorDeps,
   OperatorPlan,
@@ -9,9 +10,10 @@ import type {
   OperatorStep,
   OperatorToolCall,
   RunOperator,
+  UIElement,
 } from "@windower/core";
 import { BATCH_ABORTED_RESULT, formatModelConfig } from "@windower/core";
-import type { LanguageModel, ModelMessage } from "ai";
+import type { Instructions, LanguageModel, ModelMessage } from "ai";
 import { generateText } from "ai";
 import {
   OPERATOR_ERROR_CODES,
@@ -21,8 +23,14 @@ import {
 } from "./errors.js";
 import { type ExecutionContext, executeToolCall } from "./executor.js";
 import { Deadline } from "./guardrails.js";
-import { buildSystemPrompt, formatPlanReminder } from "./prompt.js";
-import { resolveModel } from "./providers.js";
+import { ELEMENTS_OBSERVATION_MARKER, renderElementsAsText } from "./observation.js";
+import {
+  MIN_USEFUL_ELEMENT_COUNT,
+  buildExecutorSystemPrompt,
+  buildSystemPrompt,
+  formatPlanReminder,
+} from "./prompt.js";
+import { promptCacheProviderOptions, resolveModel } from "./providers.js";
 import { type LogSink, createRedactedLogger, createRedactor } from "./redaction.js";
 import { isActionToolName, isOperatorToolName } from "./tools.js";
 import { buildToolSet } from "./tools.js";
@@ -39,15 +47,27 @@ import {
  * function owns the loop and nothing else. It is OS-agnostic by construction —
  * it only ever touches `OperatorDeps`, which is expressed purely in sidecar
  * protocol terms (CLAUDE.md §protocol before platform).
+ *
+ * Phase 22 folds two things into this one loop: the observation policy
+ * (elements by default, a frame on the conditions in "Observe" below) and the
+ * planner/executor model-tier split with escalation (contracts/operator.md
+ * §Model tiers). Both are pure additions over the Phase 21 shape — a run
+ * started with `observe: "vision"` and a single `--model` exercises neither
+ * and is the parity baseline tests compare against.
  */
 
 /** How many observation frames stay in the model's context window. */
 const MAX_RETAINED_IMAGES = 3;
 
+/** How many rendered element-list observations stay in the model's context window. */
+const MAX_RETAINED_ELEMENT_OBSERVATIONS = 3;
+
 /** Downscale target for observation frames when the model doesn't ask for one. */
 const DEFAULT_FRAME_MAX_WIDTH = 1280;
 
 const OBSERVATION_FORMAT = "png" as const;
+
+type Tier = "planner" | "executor";
 
 /**
  * Test/daemon-only extension points. `RunOperator`'s public signature is fixed
@@ -55,8 +75,10 @@ const OBSERVATION_FORMAT = "png" as const;
  * structurally — production callers never set them.
  */
 export interface OperatorRunInternals {
-  /** Injected language model, bypassing the provider registry (tests). */
+  /** Injected language model, bypassing the provider registry (tests). Applies to BOTH tiers when `languageModels` is absent — this is what makes single-`--model` parity mechanical to test. */
   languageModel?: LanguageModel;
+  /** Injected per-tier language models (tests). Takes precedence over `languageModel` per tier. */
+  languageModels?: { planner?: LanguageModel; executor?: LanguageModel };
   /** Redacted log sink. Defaults to stderr when WINDOWER_OPERATOR_DEBUG is set. */
   logSink?: LogSink;
   /** Injected clock, for deterministic `tMs` in tests. */
@@ -144,6 +166,69 @@ function pruneObservationImages(messages: ModelMessage[]): void {
   }
 }
 
+/**
+ * Phase 22 — the same pruning, generalized to the element-list observation
+ * text. An element list from six steps ago is exactly as stale and useless as
+ * a screenshot from six steps ago (contracts/operator.md §Observation
+ * policy: "MUST NOT cache an element list between steps"). Elements messages
+ * are tagged by content (`ELEMENTS_OBSERVATION_MARKER`) rather than tracked
+ * by index, the same style `pruneObservationImages` already uses (scanning
+ * for a `file` content part).
+ */
+function pruneObservationElements(messages: ModelMessage[]): void {
+  const elementMessageIndexes: number[] = [];
+  for (let i = 0; i < messages.length; i++) {
+    const message = messages[i];
+    if (message?.role !== "user" || !Array.isArray(message.content)) continue;
+    const first = message.content[0];
+    if (first?.type === "text" && first.text.startsWith(ELEMENTS_OBSERVATION_MARKER)) {
+      elementMessageIndexes.push(i);
+    }
+  }
+  const stale = elementMessageIndexes.slice(0, -MAX_RETAINED_ELEMENT_OBSERVATIONS);
+  for (const index of stale) {
+    messages[index] = {
+      role: "user",
+      content: [{ type: "text", text: "[earlier element list omitted from context]" }],
+    };
+  }
+}
+
+/** Wraps a system prompt string in an `Instructions` value carrying `cache_control` when the tier's provider supports it (`providers.ts`). Pure optimization — see `providers.ts`'s `promptCacheProviderOptions`. */
+function buildInstructions(systemText: string, provider: string): Instructions {
+  const providerOptions = promptCacheProviderOptions(provider);
+  return providerOptions === undefined
+    ? systemText
+    : { role: "system", content: systemText, providerOptions };
+}
+
+/** A compact summary handed to the planner on escalation (contracts/operator.md §Model tiers: "compact run summary plus a fresh frame"). */
+function buildEscalationSummary(params: {
+  stepsUsed: number;
+  plan?: OperatorPlan;
+  checkpoint?: OperatorCheckpoint;
+}): string {
+  const lines = [
+    "ESCALATION: the executor could not make the current plan work and control has returned to you, the planner.",
+    `Steps used so far: ${params.stepsUsed}.`,
+  ];
+  if (params.plan !== undefined) {
+    lines.push(
+      `Current plan (revision ${params.plan.revision}):`,
+      params.plan.steps.map((s, i) => `${i + 1}. ${s}`).join("\n"),
+    );
+  } else {
+    lines.push("No plan has been recorded yet.");
+  }
+  if (params.checkpoint !== undefined) {
+    lines.push(
+      `Triggering checkpoint — expectation: "${params.checkpoint.expectation}", outcome: ${params.checkpoint.outcome}${params.checkpoint.detail === undefined ? "" : `, detail: "${params.checkpoint.detail}"`}`,
+    );
+  }
+  lines.push("Revise the plan by calling `plan` again with a new plan that accounts for this.");
+  return lines.join("\n");
+}
+
 export const runOperator: RunOperator = async (
   options: OperatorRunOptions,
   deps: OperatorDeps,
@@ -159,6 +244,8 @@ export const runOperator: RunOperator = async (
       ? createNullTranscriptWriter()
       : createTranscriptWriter(options.transcriptPath, redactor);
 
+  const observeMode = options.observe ?? "auto";
+
   const steps: OperatorStep[] = [];
   const run: OperatorRun = {
     id: options.runId,
@@ -168,7 +255,7 @@ export const runOperator: RunOperator = async (
     // it is operating. There is no session or recording identifier to carry
     // alongside it (contracts/operator.md §Recording independence).
     target: options.target,
-    model: options.model,
+    models: options.models,
     steps,
     startedAt: new Date(deadline.startedAtMs).toISOString(),
     transcriptPath: options.transcriptPath,
@@ -201,20 +288,70 @@ export const runOperator: RunOperator = async (
 
   const messages: ModelMessage[] = [];
   let nextFrameMaxWidth: number | undefined;
+  /**
+   * Distinct from `nextFrameMaxWidth`'s own value: a `screenshot` call with no
+   * `maxWidth` arg sets the width override to `undefined`, which must not be
+   * confused with "no screenshot was requested" — that would silently drop
+   * the request under the observation policy's `auto` mode.
+   */
+  let screenshotRequested = false;
+  let nextObserveElementsParams:
+    | { role?: string; labelContains?: string; maxElements?: number }
+    | undefined;
+  /** Set by a `checkpoint` call with `visual: true` — forces a frame on the NEXT step. */
+  let forceFrameNextStep = false;
   /** Local fallback when no authority (the daemon) is assigning revisions. */
   let nextLocalPlanRevision = 0;
 
+  // Phase 22 model tiers/escalation state (contracts/operator.md §Model tiers).
+  let currentTier: Tier = "planner";
+  /**
+   * Run-level sticky flag (bug fix): `enumerateElements` returning
+   * `UNSUPPORTED_CAPABILITY`, or the target not being a window, are both
+   * run-invariant conditions — a capability a sidecar doesn't advertise
+   * doesn't start advertising it mid-run, and a target's kind doesn't change.
+   * Once true, it stays true for the rest of the run: the five element tools
+   * are removed from both tiers' surfaces (`buildToolSet`) for every
+   * remaining step, rather than staying present-but-unusable and inviting a
+   * real model to fabricate a ref. Distinct from the per-step
+   * `elementsInsufficient` below, which is legitimately transient and does
+   * NOT gate the tool surface.
+   */
+  let elementsUnsupportedForRun = false;
+  /** Consecutive `failed-plan-sound` checkpoints since the current plan was (re)issued — the runtime's proxy for "same plan step", since plan steps are natural language and never tracked mechanically (YAGNI: no deterministic plan compiler). Two in a row escalates. */
+  let consecutiveFailedPlanSound = 0;
+  let replansUsed = 0;
+
   try {
-    const model = internals.languageModel ?? resolveModel(options.model, options.env);
-    const tools = buildToolSet();
-    const system = buildSystemPrompt({
+    const plannerModelConfig = options.models.planner;
+    const executorModelConfig = options.models.executor ?? options.models.planner;
+
+    const plannerModel: LanguageModel =
+      internals.languageModels?.planner ??
+      internals.languageModel ??
+      resolveModel(plannerModelConfig, options.env);
+    const executorModel: LanguageModel =
+      internals.languageModels?.executor ??
+      internals.languageModel ??
+      resolveModel(executorModelConfig, options.env);
+
+    const secretNames =
+      options.secrets.length > 0
+        ? options.secrets.map((s) => s.name)
+        : (internals.secretNames ?? []);
+
+    const plannerSystem = buildSystemPrompt({
       task: options.task,
-      secretNames:
-        options.secrets.length > 0
-          ? options.secrets.map((s) => s.name)
-          : (internals.secretNames ?? []),
+      secretNames,
       maxSteps: options.maxSteps,
       timeoutMs: options.timeoutMs,
+      maxBatchActions: options.maxBatchActions,
+      unbounded: options.unbounded,
+      bounds: options.bounds,
+    });
+    const executorSystem = buildExecutorSystemPrompt({
+      task: options.task,
+      secretNames,
       maxBatchActions: options.maxBatchActions,
       unbounded: options.unbounded,
       bounds: options.bounds,
@@ -228,13 +365,19 @@ export const runOperator: RunOperator = async (
       deadline,
       logger,
       onScreenshotRequest: (maxWidth) => {
+        screenshotRequested = true;
         nextFrameMaxWidth = maxWidth;
+      },
+      onObserveElementsRequest: (params) => {
+        nextObserveElementsParams = params;
       },
     };
 
     logger.log("run started", {
       runId: options.runId,
-      model: formatModelConfig(options.model),
+      planner: formatModelConfig(plannerModelConfig),
+      executor: formatModelConfig(executorModelConfig),
+      observe: observeMode,
       maxSteps: options.maxSteps,
       timeoutMs: options.timeoutMs,
       unbounded: options.unbounded,
@@ -270,41 +413,152 @@ export const runOperator: RunOperator = async (
         }
       }
 
+      const tier: Tier = currentTier;
+
       // ── Observe ──────────────────────────────────────────────────────────
-      let frame: Awaited<ReturnType<OperatorDeps["captureFrame"]>>;
-      try {
-        frame = await deps.captureFrame({
-          format: OBSERVATION_FORMAT,
-          maxWidth: nextFrameMaxWidth ?? DEFAULT_FRAME_MAX_WIDTH,
+      const observations: ObservationRef[] = [];
+      let elements: UIElement[] | undefined;
+      let elementsTruncated = false;
+      let elementsUnsupported = false;
+
+      // display/region targets have no AX tree of their own — enumerateElements
+      // would fail TARGET_NOT_FOUND on every step, so treat that the same as a
+      // capability-absent sidecar (elementsUnsupported) rather than calling an
+      // RPC known to fail and rethrowing a terminal error.
+      if (observeMode !== "vision" && options.target.kind !== "window") {
+        elementsUnsupported = true;
+      } else if (observeMode !== "vision") {
+        try {
+          const result = await deps.enumerateElements({
+            filter: "interactable",
+            maxElements: nextObserveElementsParams?.maxElements,
+          });
+          let filtered = result.elements;
+          const role = nextObserveElementsParams?.role;
+          const labelContains = nextObserveElementsParams?.labelContains?.toLowerCase();
+          if (role !== undefined) filtered = filtered.filter((e) => e.role === role);
+          if (labelContains !== undefined) {
+            filtered = filtered.filter((e) => e.label?.toLowerCase().includes(labelContains));
+          }
+          elements = filtered;
+          elementsTruncated = result.truncated;
+        } catch (err) {
+          const opErr = toOperatorError(err, OPERATOR_ERROR_CODES.DEPENDENCY_ERROR);
+          if (opErr.code === "UNSUPPORTED_CAPABILITY") {
+            elementsUnsupported = true;
+          } else {
+            throw opErr;
+          }
+        }
+      }
+      nextObserveElementsParams = undefined;
+
+      // Sticky for the rest of the run (bug fix, see `elementsUnsupportedForRun`'s
+      // declaration): capability-absent and non-window-target are both
+      // run-invariant, so once true this step it can never become false on a
+      // later one.
+      elementsUnsupportedForRun = elementsUnsupportedForRun || elementsUnsupported;
+
+      const elementsInsufficient =
+        elements !== undefined && elements.length < MIN_USEFUL_ELEMENT_COUNT;
+      const wantsFrame =
+        observeMode === "vision" ||
+        (observeMode === "auto" &&
+          (elementsUnsupported ||
+            screenshotRequested ||
+            elementsInsufficient ||
+            tier === "planner" ||
+            forceFrameNextStep));
+      forceFrameNextStep = false;
+
+      if (elements !== undefined) {
+        const elementsRef = await writer.writeElements(elements);
+        observations.push({ kind: "elements", ref: elementsRef });
+        messages.push({
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: renderElementsAsText(elements, { truncatedByServer: elementsTruncated }),
+            },
+          ],
         });
-      } catch (err) {
-        throw toOperatorError(err, OPERATOR_ERROR_CODES.DEPENDENCY_ERROR);
+      }
+
+      if (wantsFrame) {
+        let frame: Awaited<ReturnType<OperatorDeps["captureFrame"]>>;
+        try {
+          frame = await deps.captureFrame({
+            format: OBSERVATION_FORMAT,
+            maxWidth: nextFrameMaxWidth ?? DEFAULT_FRAME_MAX_WIDTH,
+          });
+        } catch (err) {
+          throw toOperatorError(err, OPERATOR_ERROR_CODES.DEPENDENCY_ERROR);
+        }
+        const frameRef = await writer.writeFrame(frame.imageBase64, OBSERVATION_FORMAT);
+        observations.push({ kind: "frame", ref: frameRef });
+        const frameText = `Observation ${index + 1}/${options.maxSteps} — ${frame.width}x${frame.height} px (scale ${frame.scale}).`;
+        // Bug fix: tell the model outright that element tools are gone this
+        // run, rather than leaving it to infer that from a missing element
+        // list. `elementsUnsupportedForRun` is sticky, so this note appears on
+        // every frame observation for the rest of the run once it's true.
+        const unavailableNote = elementsUnsupportedForRun
+          ? " Accessibility elements are unavailable for this run — click_element/double_click_element/type_into_element/scroll_element/observe_elements are not offered; use the pixel-based click/double_click/drag/scroll/type_text/move_mouse tools against this image instead."
+          : "";
+        messages.push({
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: frameText + unavailableNote,
+            },
+            { type: "file", data: frame.imageBase64, mediaType: "image/png" },
+          ],
+        });
       }
       nextFrameMaxWidth = undefined;
-      const observationRef = await writer.writeFrame(frame.imageBase64, OBSERVATION_FORMAT);
+      screenshotRequested = false;
 
-      messages.push({
-        role: "user",
-        content: [
-          {
-            type: "text",
-            text: `Observation ${index + 1}/${options.maxSteps} — ${frame.width}x${frame.height} px (scale ${frame.scale}).`,
-          },
-          { type: "file", data: frame.imageBase64, mediaType: "image/png" },
-        ],
-      });
+      if (observations.length === 0) {
+        // Only reachable with `--observe ax` against a backend that doesn't
+        // advertise `ui.elements` at all — a caller misconfiguration, not the
+        // normal degradation path (that's `elementsUnsupported` under
+        // `"auto"`, which forces a frame above). There is no percept to give
+        // the model; say so rather than sending an empty turn.
+        messages.push({
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "No observation is available this step: accessibility elements are unsupported on this target and --observe ax does not fall back to a screenshot.",
+            },
+          ],
+        });
+      }
+
       pruneObservationImages(messages);
+      pruneObservationElements(messages);
 
       // ── Decide ───────────────────────────────────────────────────────────
       if (options.signal.aborted) {
         throw new OperatorError(OPERATOR_ERROR_CODES.ABORTED, "Operator run aborted.");
       }
+      const model = tier === "planner" ? plannerModel : executorModel;
+      const system = tier === "planner" ? plannerSystem : executorSystem;
+      // Built per step rather than once up front: `elementsUnsupportedForRun`
+      // is only known after the first observation, and once it flips true the
+      // five element tools drop out of both tiers' surfaces for the rest of
+      // the run (bug fix — see the flag's declaration above).
+      const tools = buildToolSet(tier, !elementsUnsupportedForRun);
+      const provider =
+        tier === "planner" ? plannerModelConfig.provider : executorModelConfig.provider;
+
       const combined = combineSignals(options.signal, deadline.remainingMs());
       let modelResult: Awaited<ReturnType<typeof generateText>>;
       try {
         modelResult = await generateText({
           model,
-          system,
+          instructions: buildInstructions(system, provider),
           messages,
           tools,
           abortSignal: combined.signal,
@@ -356,7 +610,7 @@ export const runOperator: RunOperator = async (
        */
       let stepCheckpoint: OperatorCheckpoint | undefined;
 
-      const stepBase = { index, observationRef, reasoning, tMs: deadline.elapsedMs() };
+      const stepBase = { index, observations, reasoning, tMs: deadline.elapsedMs() };
 
       const seenToolCallIds = new Set<string>();
 
@@ -374,8 +628,11 @@ export const runOperator: RunOperator = async (
         seenToolCallIds.add(call.toolCallId);
 
         const toolName = call.toolName as string;
-        if (!isOperatorToolName(toolName)) {
+        if (!isOperatorToolName(toolName) || (tier === "executor" && toolName === "plan")) {
           // Cannot happen with a well-behaved provider; refuse rather than guess.
+          // The `plan` case covers a provider that ignores the executor's
+          // narrower tool list and emits it anyway — the runtime is what
+          // makes "executor never plans" structural, not just a smaller schema.
           recorded.push({ name: toolName, args: call.input, result: { error: "UNKNOWN_TOOL" } });
           toolResults.push({
             toolCallId: call.toolCallId,
@@ -540,6 +797,50 @@ export const runOperator: RunOperator = async (
         break;
       }
 
+      // ── Model tiers: escalation (contracts/operator.md §Model tiers) ──────
+      // Only the planner may create/revise a plan; a plan this turn always
+      // hands control back to the executor. Escalation edges, exhaustively: a
+      // `failed-plan-invalid` checkpoint, or a second consecutive
+      // `failed-plan-sound` on the executor's watch.
+      //
+      // Deciding to escalate must NOT push a message yet: the assistant's
+      // tool-call message was already appended above, and a well-formed
+      // conversation requires its matching "tool" role tool-result message to
+      // be the very next one — an escalation-summary "user" message pushed
+      // here would land between them and fail provider-side validation. The
+      // summary is queued and pushed after the tool-result block below.
+      let escalationSummary: string | undefined;
+      if (stepPlan !== undefined) {
+        currentTier = "executor";
+        consecutiveFailedPlanSound = 0;
+      } else if (stepCheckpoint !== undefined) {
+        if (stepCheckpoint.visual === true) forceFrameNextStep = true;
+        if (stepCheckpoint.outcome === "held") {
+          consecutiveFailedPlanSound = 0;
+        } else if (stepCheckpoint.outcome === "failed-plan-sound") {
+          consecutiveFailedPlanSound += 1;
+        }
+        const escalate =
+          tier === "executor" &&
+          (stepCheckpoint.outcome === "failed-plan-invalid" || consecutiveFailedPlanSound >= 2);
+        if (escalate) {
+          replansUsed += 1;
+          if (replansUsed > options.maxReplans) {
+            throw new OperatorError(
+              OPERATOR_ERROR_CODES.MAX_REPLANS_EXCEEDED,
+              `Operator run exceeded its ${options.maxReplans}-replan budget without converging.`,
+            );
+          }
+          currentTier = "planner";
+          consecutiveFailedPlanSound = 0;
+          escalationSummary = buildEscalationSummary({
+            stepsUsed: steps.length,
+            plan: run.plan,
+            checkpoint: stepCheckpoint,
+          });
+        }
+      }
+
       if (toolResults.length > 0) {
         messages.push({
           role: "tool",
@@ -569,6 +870,10 @@ export const runOperator: RunOperator = async (
           role: "user",
           content: [{ type: "text", text: formatPlanReminder(stepPlan) }],
         });
+      }
+
+      if (escalationSummary !== undefined) {
+        messages.push({ role: "user", content: [{ type: "text", text: escalationSummary }] });
       }
     }
   } catch (err) {

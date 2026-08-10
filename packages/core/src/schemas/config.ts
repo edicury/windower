@@ -28,6 +28,16 @@ export const WindowerConfigSchema = z.object({
   operator: z
     .object({
       defaultModel: ModelConfigSchema.optional(),
+      /**
+       * Phase 22 — per-tier config defaults (data-model.md §WindowerConfig).
+       * Resolution order per tier, highest precedence first: the explicit
+       * flag (`--planner-model`/`--executor-model`) → the tier's own config
+       * default here → `--model`/`defaultModel` → error. The executor
+       * additionally falls back to the resolved planner, which is what makes
+       * a single `--model`/`defaultModel` run identical to a pre-Phase-22 run.
+       */
+      defaultPlannerModel: ModelConfigSchema.optional(),
+      defaultExecutorModel: ModelConfigSchema.optional(),
       apiKeyEnvVar: z.string().optional(),
       baseUrl: z.string().optional(),
       guardrailDefaults: OperatorGuardrailsSchema.optional(),

@@ -11,6 +11,11 @@ import { z } from "zod";
  */
 
 export const OPERATOR_TOOL_NAMES = [
+  "observe_elements",
+  "click_element",
+  "double_click_element",
+  "type_into_element",
+  "scroll_element",
   "screenshot",
   "move_mouse",
   "click",
@@ -31,6 +36,18 @@ export const OPERATOR_TOOL_NAMES = [
 export type OperatorToolName = (typeof OPERATOR_TOOL_NAMES)[number];
 
 /**
+ * The five Phase 22 element tools (contracts/operator.md §Tool surface).
+ * Each re-resolves its `ref` via `enumerateElements({ refs: [ref] })`
+ * immediately before acting — see `executor.ts`'s `resolveElementCenter`.
+ */
+export const OPERATOR_ELEMENT_TOOL_NAMES = [
+  "click_element",
+  "double_click_element",
+  "type_into_element",
+  "scroll_element",
+] as const satisfies readonly OperatorToolName[];
+
+/**
  * The tools that consume the per-step batch budget (`maxBatchActions`) — i.e.
  * exactly those that map onto `performInput`/`resizeWindow`
  * (contracts/operator-loop-protocol.md §"Batches inside a step": "`captureFrame`
@@ -38,6 +55,10 @@ export type OperatorToolName = (typeof OPERATOR_TOOL_NAMES)[number];
  * `wait`, `plan`, `checkpoint`, `done`, and `fail` make no RPC at all.
  */
 export const OPERATOR_ACTION_TOOL_NAMES = [
+  "click_element",
+  "double_click_element",
+  "type_into_element",
+  "scroll_element",
   "move_mouse",
   "click",
   "double_click",
@@ -60,6 +81,22 @@ const RectInputSchema = z.object({
 });
 
 export const ToolInputSchemas = {
+  observe_elements: z.object({
+    role: z.string().optional(),
+    labelContains: z.string().optional(),
+    maxElements: z.number().int().positive().optional(),
+  }),
+  click_element: z.object({
+    ref: z.string().min(1),
+    button: z.enum(["left", "right", "other"]).optional(),
+  }),
+  double_click_element: z.object({ ref: z.string().min(1) }),
+  type_into_element: z.object({ ref: z.string().min(1), text: z.string() }),
+  scroll_element: z.object({
+    ref: z.string().min(1),
+    deltaX: z.number(),
+    deltaY: z.number(),
+  }),
   screenshot: z.object({
     maxWidth: z.number().int().positive().optional(),
   }),
@@ -109,6 +146,21 @@ export const ToolInputSchemas = {
 export type ToolInput<N extends OperatorToolName> = z.infer<(typeof ToolInputSchemas)[N]>;
 
 const DESCRIPTIONS: Record<OperatorToolName, string> = {
+  observe_elements:
+    "Shape the NEXT observation's accessibility-element list: filter by role, by a label " +
+    "substring, or cap how many elements come back. Returns no payload inline — the filtered " +
+    "list is delivered as the next observation, the same mechanism `screenshot` uses for frames.",
+  click_element:
+    "Click the accessibility element with this ref (from the most recent observation). The " +
+    "ref is re-resolved to its current exact rect immediately before clicking — prefer this " +
+    "over `click` whenever a ref exists, since it needs no coordinate estimate.",
+  double_click_element: "Double-click the accessibility element with this ref.",
+  type_into_element:
+    "Click the accessibility element with this ref to focus it, then type literal text. To " +
+    "type a secret, use its placeholder token exactly as given in the task (e.g. {{password}}) " +
+    "— the real value is substituted outside the model and is never available to you.",
+  scroll_element:
+    "Scroll by (deltaX, deltaY) with the pointer over the accessibility element with this ref.",
   screenshot:
     "Capture a fresh frame of the target. The image is delivered as the next observation, " +
     "so call this after an action whose effect you need to see.",
@@ -150,10 +202,31 @@ const DESCRIPTIONS: Record<OperatorToolName, string> = {
  * functions: `generateText` returns the tool calls and this package executes
  * them itself, which is what lets guardrails, secret substitution, and step
  * recording sit on the single path between the model and the sidecar.
+ *
+ * `tier` (Phase 22, contracts/operator.md §Model tiers): the executor's
+ * surface is the full set **minus `plan`** — only the planner may create or
+ * revise a plan, and removing the tool is what makes that structural rather
+ * than a prompt request. Both the initial plan stage and an escalation get
+ * the full surface (including `plan`), so `tier` only ever narrows.
+ *
+ * `elementsAvailable` (Phase 22 bug fix): when the run has determined,
+ * run-wide, that accessibility elements are structurally unavailable this
+ * run (`enumerateElements` unsupported, or a non-window target — see
+ * `run.ts`'s `elementsUnsupported`), the five element tools
+ * (`OPERATOR_ELEMENT_TOOL_NAMES` plus `observe_elements`) are removed from
+ * the surface entirely rather than left present-but-unusable. A tool named
+ * `click_element` invites use even when told not to use it; removing it is
+ * what makes "not available this run" structural instead of a prompt
+ * request the model can ignore.
  */
-export function buildToolSet(): ToolSet {
+export function buildToolSet(
+  tier: "planner" | "executor" = "planner",
+  elementsAvailable = true,
+): ToolSet {
   const tools: Record<string, { description: string; inputSchema: z.ZodType }> = {};
   for (const name of OPERATOR_TOOL_NAMES) {
+    if (tier === "executor" && name === "plan") continue;
+    if (!elementsAvailable && ELEMENT_TOOL_NAMES_SET.has(name)) continue;
     tools[name] = {
       description: DESCRIPTIONS[name],
       inputSchema: ToolInputSchemas[name],
@@ -161,6 +234,12 @@ export function buildToolSet(): ToolSet {
   }
   return tools as ToolSet;
 }
+
+/** The five element-facing tools, gated together by `elementsAvailable`. */
+const ELEMENT_TOOL_NAMES_SET: ReadonlySet<OperatorToolName> = new Set([
+  "observe_elements",
+  ...OPERATOR_ELEMENT_TOOL_NAMES,
+]);
 
 export function isOperatorToolName(name: string): name is OperatorToolName {
   return (OPERATOR_TOOL_NAMES as readonly string[]).includes(name);

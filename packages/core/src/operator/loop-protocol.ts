@@ -1,13 +1,14 @@
 import { z } from "zod";
 import {
   CaptureFrameResultSchema,
+  EnumerateElementsResultSchema,
   PerformInputResultSchema,
   ResizeWindowResultSchema,
 } from "../protocol/methods.js";
 import { CaptureTargetSchema } from "../schemas/capture-target.js";
 import { InputActionSchema } from "../schemas/input-action.js";
 import {
-  ModelConfigSchema,
+  OperatorModelsSchema,
   OperatorRunStateSchema,
   OperatorStepSchema,
 } from "../schemas/operator.js";
@@ -68,6 +69,14 @@ export const OperatorLoopErrorCodeSchema = z.enum([
   "OPERATOR_BATCH_LIMIT_EXCEEDED",
   "OPERATOR_TIMEOUT",
   "OPERATOR_ABORTED",
+  /**
+   * A `reportPlan` at `replansUsed >= maxReplans` (Phase 22). Delivered as
+   * `reportPlan`'s error, not a daemon-pushed `abort` — like
+   * `INPUT_OUT_OF_BOUNDS`, it is terminal but ends the run through the
+   * child's own loop, which reports `failed` (contracts/operator-loop-protocol.md
+   * error taxonomy).
+   */
+  "OPERATOR_MAX_REPLANS_EXCEEDED",
   "UNKNOWN_SECRET_REF",
   "CONTROL_SURFACE_UNAVAILABLE",
   "INVALID_ARGS",
@@ -100,6 +109,15 @@ export const GuardrailStateSchema = z.object({
   bounds: RectSchema.optional(),
   /** Highest plan revision the daemon has accepted; absent before the first `reportPlan`. */
   planRevision: z.number().int().nonnegative().optional(),
+  /**
+   * Phase 22 — planner escalations accepted so far this run, and the ceiling
+   * (`OperatorGuardrails.maxReplans`, default 3). Exceeding it is
+   * `OPERATOR_MAX_REPLANS_EXCEEDED` and IS run-terminating
+   * (contracts/operator.md §Guardrails), the same daemon-authoritative
+   * treatment every other guardrail here gets.
+   */
+  replansUsed: z.number().int().nonnegative(),
+  maxReplans: z.number().int().positive(),
 });
 export type GuardrailState = z.infer<typeof GuardrailStateSchema>;
 
@@ -131,12 +149,17 @@ export const LoopReadyResultSchema = z.object({
    * §Handshake.
    */
   target: CaptureTargetSchema,
-  model: ModelConfigSchema,
+  /** Phase 22 — tiered models; see `OperatorModelsSchema`. */
+  models: OperatorModelsSchema,
   /** Placeholder names only — the child never receives a secret value. */
   secretNames: z.array(z.string()),
   maxSteps: z.number().int().positive(),
   /** Per-step action ceiling — `contracts/operator.md` §Action batching. */
   maxBatchActions: z.number().int().positive(),
+  /** Phase 22 guardrail — planner-escalation ceiling; see `GuardrailState.maxReplans`. */
+  maxReplans: z.number().int().positive(),
+  /** Phase 22 — `"auto"` (default) | `"ax"` | `"vision"`; see `OperatorRunOptions.observe`. */
+  observe: z.enum(["auto", "ax", "vision"]).optional(),
   timeoutMs: z.number().int().positive(),
   unbounded: z.boolean(),
   bounds: RectSchema.optional(),
@@ -156,7 +179,8 @@ export const LoopBeginStepResultSchema = z.object({ guardrail: GuardrailStateSch
 export type LoopBeginStepResult = z.infer<typeof LoopBeginStepResultSchema>;
 
 // ---- proxied screen-facing methods (child → daemon) ----
-// Exactly `OperatorDeps`' four members. No target param: the daemon resolves
+// Exactly `OperatorDeps`' five members (Phase 22 added `enumerateElements`).
+// No target param: the daemon resolves
 // the run's target itself, so the child cannot widen its own reach.
 export const LoopCaptureFrameParamsSchema = z.object({
   format: z.enum(["png", "jpeg"]),
@@ -188,6 +212,23 @@ export const LoopResizeWindowParamsSchema = z.object({
   bounds: RectSchema,
 });
 export type LoopResizeWindowParams = z.infer<typeof LoopResizeWindowParamsSchema>;
+
+/**
+ * Phase 22 — the fifth proxied method. No `target` param, same rule as the
+ * other four: the daemon resolves the run's target itself, so the child
+ * cannot widen its own reach by naming a different one. `refs` is the
+ * freshness path (`contracts/sidecar-protocol.md`): passing it re-reads
+ * exactly those elements' current attributes/bounds instead of walking the
+ * tree, which is what lets an element tool re-resolve immediately before
+ * acting in one round trip.
+ */
+export const LoopEnumerateElementsParamsSchema = z.object({
+  refs: z.array(z.string()).optional(),
+  filter: z.enum(["interactable", "all"]).optional(),
+  maxDepth: z.number().int().positive().optional(),
+  maxElements: z.number().int().positive().optional(),
+});
+export type LoopEnumerateElementsParams = z.infer<typeof LoopEnumerateElementsParamsSchema>;
 
 // ---- reportPlan (child → daemon) ----
 /**
@@ -278,6 +319,7 @@ export const OPERATOR_LOOP_CHILD_METHODS = [
   "performInput",
   "enumerateTargets",
   "resizeWindow",
+  "enumerateElements",
   "reportPlan",
   "reportStep",
   "reportResult",
@@ -285,12 +327,16 @@ export const OPERATOR_LOOP_CHILD_METHODS = [
 ] as const;
 export type OperatorLoopChildMethod = (typeof OPERATOR_LOOP_CHILD_METHODS)[number];
 
-/** The four proxied screen-facing methods — servable only inside an open step. */
+/**
+ * The five proxied screen-facing methods — servable only inside an open step.
+ * Exactly `OperatorDeps`' five members (Phase 22 added `enumerateElements`).
+ */
 export const OPERATOR_LOOP_PROXIED_METHODS = [
   "captureFrame",
   "performInput",
   "enumerateTargets",
   "resizeWindow",
+  "enumerateElements",
 ] as const satisfies readonly OperatorLoopChildMethod[];
 
 export interface OperatorLoopChildMethodMap {
@@ -308,6 +354,10 @@ export interface OperatorLoopChildMethodMap {
   resizeWindow: {
     params: LoopResizeWindowParams;
     result: z.infer<typeof ResizeWindowResultSchema>;
+  };
+  enumerateElements: {
+    params: LoopEnumerateElementsParams;
+    result: z.infer<typeof EnumerateElementsResultSchema>;
   };
   reportPlan: { params: LoopReportPlanParams; result: LoopReportPlanResult };
   reportStep: { params: LoopReportStepParams; result: LoopReportStepResult };
@@ -330,6 +380,10 @@ export const OPERATOR_LOOP_CHILD_METHOD_SCHEMAS: {
     result: LoopEnumerateTargetsResultSchema,
   },
   resizeWindow: { params: LoopResizeWindowParamsSchema, result: ResizeWindowResultSchema },
+  enumerateElements: {
+    params: LoopEnumerateElementsParamsSchema,
+    result: EnumerateElementsResultSchema,
+  },
   reportPlan: { params: LoopReportPlanParamsSchema, result: LoopReportPlanResultSchema },
   reportStep: { params: LoopReportStepParamsSchema, result: LoopReportStepResultSchema },
   reportResult: { params: LoopReportResultParamsSchema, result: LoopReportResultResultSchema },

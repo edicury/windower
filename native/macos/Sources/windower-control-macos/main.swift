@@ -40,6 +40,7 @@ let supportedCapabilities: [String] = [
     "input.mouse",
     "input.keyboard",
     "window-control",
+    "ui.elements",
 ]
 
 func logStderr(_ message: String) {
@@ -134,6 +135,16 @@ func handleRequest(id: JSONValue, method: String, params: JSONValue?) {
             let decodedParams = try decodeParams(ResizeWindowParams.self, from: params)
             let result = try WindowControlService.resizeWindow(
                 targetId: decodedParams.targetId, bounds: decodedParams.bounds)
+            resultValue = try JSONCodec.encode(result)
+
+        case "enumerateElements":
+            // Capture-free observation (contracts/sidecar-protocol.md
+            // §Element enumeration): no ScreenCaptureKit symbol, no
+            // `~/.windower/capture.lock`. Same Accessibility TCC grant as
+            // `performInput`/`resizeWindow` — PERMISSION_DENIED, not a
+            // separate permission kind.
+            let decodedParams = try decodeParams(EnumerateElementsParams.self, from: params)
+            let result = try ElementQueryService.enumerateElements(params: decodedParams)
             resultValue = try JSONCodec.encode(result)
 
         default:

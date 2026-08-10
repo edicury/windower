@@ -152,6 +152,17 @@ export class SidecarClient {
     return this.call("captureFrame", params);
   }
 
+  /**
+   * Phase 22 — compact interactable accessibility-element list for a target.
+   * Control-surface, capture-free: links no ScreenCaptureKit symbol, takes no
+   * `~/.windower/capture.lock`. Requires `ui.elements`.
+   */
+  enumerateElements(
+    params: SidecarMethodMap["enumerateElements"]["params"],
+  ): Promise<SidecarMethodMap["enumerateElements"]["result"]> {
+    return this.call("enumerateElements", params);
+  }
+
   /** Closes the underlying transport and rejects any in-flight calls. */
   dispose(): void {
     if (this.disposed) return;

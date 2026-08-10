@@ -108,6 +108,17 @@ describe("operator loop child — plans on the wire", () => {
           },
         ],
       },
+      // Phase 22: only the planner may call `plan` — a replan is reached via
+      // a `checkpoint` with outcome `failed-plan-invalid` (the escalation
+      // edge), not a bare second `plan` call from the executor's turn.
+      {
+        toolCalls: [
+          {
+            name: "checkpoint",
+            args: { expectation: "Safari opened the URL", outcome: "failed-plan-invalid" },
+          },
+        ],
+      },
       {
         toolCalls: [{ name: "plan", args: { steps: ["Log in first"], rationale: "Login wall." } }],
       },
@@ -122,10 +133,10 @@ describe("operator loop child — plans on the wire", () => {
     ]);
     // The child never chooses a revision — it wears the daemon's.
     expect(daemon.calls.reportStep[0]?.plan?.revision).toBe(0);
-    expect(daemon.calls.reportStep[1]?.plan?.revision).toBe(1);
+    expect(daemon.calls.reportStep[2]?.plan?.revision).toBe(1);
     expect(daemon.plan?.revision).toBe(1);
     // Planning costs no step budget beyond the step it rode in on.
-    expect(daemon.calls.beginStep).toEqual([0, 1, 2]);
+    expect(daemon.calls.beginStep).toEqual([0, 1, 2, 3]);
   });
 });
 

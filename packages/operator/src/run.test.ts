@@ -26,11 +26,20 @@ function makeOptions(
   return {
     runId: "run-1",
     task: "Do the thing",
-    model: parseModelConfig("anthropic:claude-sonnet-5"),
+    models: { planner: parseModelConfig("anthropic:claude-sonnet-5") },
     secrets: [],
     maxSteps: 10,
     timeoutMs: 60_000,
     maxBatchActions: DEFAULT_OPERATOR_MAX_BATCH_ACTIONS,
+    maxReplans: 3,
+    // This suite predates the Phase 22 observation policy and asserts the
+    // pre-Phase-22 shape (one captureFrame per step, `observationRef`-style
+    // single observation) — "vision" is the literal parity mode for that
+    // (contracts/operator.md §Observation policy). Phase-22-specific
+    // behavior (elements, auto fallback, model tiers) is covered in
+    // `planning.test.ts`/`checkpoints.test.ts` and the dedicated Phase 22
+    // suites.
+    observe: "vision",
     unbounded: false,
     bounds: BOUNDS,
     target: FAKE_TARGET,
@@ -367,7 +376,7 @@ describe("runOperator — transcript", () => {
     const run = OperatorRunSchema.parse(JSON.parse(await readFile(transcriptPath, "utf8")));
     expect(run.id).toBe("run-1");
     expect(run.state).toBe("succeeded");
-    expect(run.model).toEqual(parseModelConfig("anthropic:claude-sonnet-5"));
+    expect(run.models).toEqual({ planner: parseModelConfig("anthropic:claude-sonnet-5") });
     expect(run.endedAt).toBeDefined();
     expect(run.steps).toHaveLength(3);
   });
@@ -388,8 +397,9 @@ describe("runOperator — transcript", () => {
     // Operator-owned storage: the ref is relative to the run's own directory
     // and derives nothing from a video filename — contracts/operator.md
     // §Transcript format.
-    expect(result.steps[0]?.observationRef).toBe(`frames/${frames[0]}`);
-    expect(result.steps[0]?.observationRef).not.toMatch(/\.mp4|operator\.frames/);
+    const observationRef = result.steps[0]?.observations.find((o) => o.kind === "frame")?.ref;
+    expect(observationRef).toBe(`frames/${frames[0]}`);
+    expect(observationRef).not.toMatch(/\.mp4|operator\.frames/);
   });
 
   it("leaves a usable partial transcript when a run dies mid-flight", async () => {
@@ -434,7 +444,7 @@ describe("runOperator — model swap", () => {
     const anthropicDeps = createFakeDeps();
     const anthropicResult = await runOperator(
       makeOptions({
-        model: parseModelConfig("anthropic:claude-sonnet-5"),
+        models: { planner: parseModelConfig("anthropic:claude-sonnet-5") },
         languageModel: createScriptedModel(script, {
           provider: "anthropic",
           modelId: "claude-sonnet-5",
@@ -446,9 +456,11 @@ describe("runOperator — model swap", () => {
     const localDeps = createFakeDeps();
     const localResult = await runOperator(
       makeOptions({
-        model: parseModelConfig("openai-compatible:llama-3.3", {
-          baseUrl: "http://localhost:1234/v1",
-        }),
+        models: {
+          planner: parseModelConfig("openai-compatible:llama-3.3", {
+            baseUrl: "http://localhost:1234/v1",
+          }),
+        },
         languageModel: createScriptedModel(script, {
           provider: "openai-compatible",
           modelId: "llama-3.3",
@@ -468,7 +480,7 @@ describe("runOperator — model swap", () => {
 
   it("fails cleanly when the configured provider cannot be resolved", async () => {
     const result = await runOperator(
-      makeOptions({ model: parseModelConfig("nope:x"), env: {} }),
+      makeOptions({ models: { planner: parseModelConfig("nope:x") }, env: {} }),
       createFakeDeps(),
     );
     expect(result.state).toBe("failed");

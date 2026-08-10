@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
-import type { OperatorRun } from "@windower/core";
+import type { OperatorRun, UIElement } from "@windower/core";
 import { OperatorRunSchema } from "@windower/core";
 import type { Redactor } from "./redaction.js";
 
@@ -30,6 +30,7 @@ import type { Redactor } from "./redaction.js";
  */
 
 const FRAMES_DIR = "frames";
+const OBSERVATIONS_DIR = "observations";
 
 /**
  * `~/.windower/operator-runs/<runId>/frames/`, a plain subdirectory of the
@@ -49,9 +50,27 @@ export function hashFrame(imageBase64: string): string {
   return createHash("sha256").update(imageBase64, "base64").digest("hex");
 }
 
+/**
+ * `~/.windower/operator-runs/<runId>/observations/`, sibling to `frames/`.
+ * Phase 22 — where an `enumerateElements` observation's JSON is persisted,
+ * content-addressed exactly like a frame (data-model.md §ObservationRef).
+ */
+export function observationsDirFor(transcriptPath: string): string {
+  return join(dirname(transcriptPath), OBSERVATIONS_DIR);
+}
+
+function hashElementsJson(json: string): string {
+  return createHash("sha256").update(json, "utf8").digest("hex");
+}
+
 export interface TranscriptWriter {
   /** Persists a frame and returns the ref to record in `OperatorStep`. */
   writeFrame(imageBase64: string, format: "png" | "jpeg"): Promise<string>;
+  /**
+   * Phase 22 — persists an `enumerateElements` result's element list and
+   * returns the ref to record in `OperatorStep.observations`.
+   */
+  writeElements(elements: UIElement[]): Promise<string>;
   /** Redacts, validates, and atomically rewrites the transcript. */
   write(run: OperatorRun): Promise<void>;
 }
@@ -68,6 +87,10 @@ export function createNullTranscriptWriter(): TranscriptWriter {
       counter += 1;
       return `memory:${counter}:${hashFrame(imageBase64).slice(0, 16)}`;
     },
+    async writeElements(elements) {
+      counter += 1;
+      return `memory:${counter}:${hashElementsJson(JSON.stringify(elements)).slice(0, 16)}`;
+    },
     async write() {},
   };
 }
@@ -80,9 +103,18 @@ export function createTranscriptWriter(
   const framesDirName = basename(framesDir);
   let framesDirReady: Promise<void> | undefined;
 
+  const observationsDir = observationsDirFor(transcriptPath);
+  const observationsDirName = basename(observationsDir);
+  let observationsDirReady: Promise<void> | undefined;
+
   async function ensureFramesDir(): Promise<void> {
     framesDirReady ??= mkdir(framesDir, { recursive: true }).then(() => undefined);
     await framesDirReady;
+  }
+
+  async function ensureObservationsDir(): Promise<void> {
+    observationsDirReady ??= mkdir(observationsDir, { recursive: true }).then(() => undefined);
+    await observationsDirReady;
   }
 
   return {
@@ -92,6 +124,14 @@ export function createTranscriptWriter(
       const filename = `${hash.slice(0, 16)}.${format === "jpeg" ? "jpg" : "png"}`;
       await writeFile(join(framesDir, filename), Buffer.from(imageBase64, "base64"));
       return `${framesDirName}/${filename}`;
+    },
+
+    async writeElements(elements) {
+      await ensureObservationsDir();
+      const json = `${JSON.stringify(elements, null, 2)}\n`;
+      const filename = `${hashElementsJson(json).slice(0, 16)}.json`;
+      await writeFile(join(observationsDir, filename), json, "utf8");
+      return `${observationsDirName}/${filename}`;
     },
 
     async write(run) {

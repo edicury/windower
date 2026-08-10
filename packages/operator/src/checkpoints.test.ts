@@ -32,11 +32,13 @@ function makeOptions(
   return {
     runId: "run-1",
     task: "Open Safari and create an incident",
-    model: parseModelConfig("anthropic:claude-sonnet-5"),
+    models: { planner: parseModelConfig("anthropic:claude-sonnet-5") },
     secrets: [],
     maxSteps: 10,
     timeoutMs: 60_000,
     maxBatchActions: DEFAULT_OPERATOR_MAX_BATCH_ACTIONS,
+    maxReplans: 3,
+    observe: "vision",
     unbounded: false,
     bounds: BOUNDS,
     target: FAKE_TARGET,
@@ -127,32 +129,57 @@ describe("checkpoints are recorded, never derived", () => {
     }
   });
 
-  it("does not fabricate `failed-plan-invalid` for a turn that replanned", async () => {
-    // "The turn replanned" is NOT a usable proxy for a failed checkpoint.
+  it("does not fabricate `failed-plan-invalid` for the checkpoint that triggered a replan", async () => {
+    // "The turn replanned" is NOT a usable proxy for a failed checkpoint —
+    // and, Phase 22, a replan is now a SEPARATE later step (only the planner
+    // may call `plan`, contracts/operator.md §Model tiers), so the checkpoint
+    // that triggers escalation and the `plan` call that answers it are two
+    // different steps' records, neither fabricated from the other.
     const model = createScriptedModel([
       PLAN_TURN,
       { toolCalls: [{ name: "click", args: { x: 10, y: 10 } }] },
+      {
+        toolCalls: [
+          {
+            name: "checkpoint",
+            args: { expectation: "Warroom loaded", outcome: "failed-plan-invalid" },
+          },
+        ],
+      },
       { toolCalls: [{ name: "plan", args: { steps: ["Dismiss the login wall"] } }] },
       DONE_TURN,
     ]);
 
     const result = await runOperator(makeOptions({ languageModel: model }), createFakeDeps());
 
-    const replanStep = result.steps[2];
+    const checkpointStep = result.steps[2];
+    expect(checkpointStep?.checkpoint?.outcome).toBe("failed-plan-invalid");
+    expect(checkpointStep?.plan).toBeUndefined();
+
+    const replanStep = result.steps[3];
     expect(replanStep?.plan?.revision).toBe(1);
     expect(replanStep?.checkpoint).toBeUndefined();
-    expect(result.steps.some((s) => s.checkpoint !== undefined)).toBe(false);
   });
 
   it("records a `held` checkpoint on a turn that also replanned, as stated", async () => {
     // The mirror image of the test above: the runtime does not overwrite,
     // second-guess, or downgrade a stated outcome because the same turn
-    // happened to call `plan`.
+    // happened to call `plan`. Only the escalated planner turn has both tools
+    // available at once (contracts/operator.md §Model tiers), so that's the
+    // turn exercised here.
     const model = createScriptedModel([
       PLAN_TURN,
+      { toolCalls: [{ name: "click", args: { x: 10, y: 10 } }] },
       {
         toolCalls: [
-          { name: "click", args: { x: 10, y: 10 } },
+          {
+            name: "checkpoint",
+            args: { expectation: "Login wall appeared", outcome: "failed-plan-invalid" },
+          },
+        ],
+      },
+      {
+        toolCalls: [
           {
             name: "checkpoint",
             args: { expectation: "Safari is frontmost", outcome: "held" },
@@ -165,7 +192,7 @@ describe("checkpoints are recorded, never derived", () => {
 
     const result = await runOperator(makeOptions({ languageModel: model }), createFakeDeps());
 
-    const step = result.steps[1];
+    const step = result.steps[3];
     expect(step?.checkpoint).toEqual({ expectation: "Safari is frontmost", outcome: "held" });
     expect(step?.plan?.revision).toBe(1);
   });

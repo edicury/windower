@@ -8,8 +8,9 @@ import type {
   OperatorPlan,
   OperatorStep,
   Rect,
+  UIElement,
 } from "@windower/core";
-import { LOOP_PROTOCOL_VERSION } from "@windower/core";
+import { DEFAULT_OPERATOR_MAX_REPLANS, LOOP_PROTOCOL_VERSION } from "@windower/core";
 import type { LoopStreams } from "../loop/rpc.js";
 import { FAKE_TARGET, TINY_PNG_BASE64 } from "./fakes.js";
 
@@ -29,6 +30,8 @@ import { FAKE_TARGET, TINY_PNG_BASE64 } from "./fakes.js";
 export interface FakeLoopDaemonOptions {
   config?: Partial<LoopReadyResult>;
   maxBatchActions?: number;
+  /** Phase 22 — the fixture `enumerateElements` serves. */
+  elements?: UIElement[];
   /** Per-method overrides — throw a `{ code }` object to reject with that code. */
   onPerformInput?: (actions: InputAction[]) => { performed: number } | undefined;
   onResizeWindow?: (targetId: string, bounds: Rect) => void;
@@ -42,6 +45,7 @@ export interface FakeLoopDaemonCalls {
   performInput: InputAction[][];
   enumerateTargets: number;
   resizeWindow: Array<{ targetId: string; bounds: Rect }>;
+  enumerateElements: number;
   reportPlan: Array<{ steps: string[]; rationale?: string; revision: number }>;
   reportStep: OperatorStep[];
   reportResult: Array<{ state: string; summary?: string; error?: { code: string } }>;
@@ -61,6 +65,7 @@ export class FakeLoopDaemon {
     performInput: [],
     enumerateTargets: 0,
     resizeWindow: [],
+    enumerateElements: 0,
     reportPlan: [],
     reportStep: [],
     reportResult: [],
@@ -83,6 +88,8 @@ export class FakeLoopDaemon {
   private openStep: number | undefined;
   private actionsInStep = 0;
   private planRevision: number | undefined;
+  /** Not incremented by this fake: escalation/`maxReplans` enforcement is client-side in `run.ts`, not proxied over this wire. */
+  private readonly replansUsed = 0;
   private aborted = false;
   private nextDaemonRequestId = 1;
   private readonly pings = new Map<number, (result: LoopPingResult) => void>();
@@ -95,10 +102,17 @@ export class FakeLoopDaemon {
     this.config = {
       runId: "run-loop-1",
       task: "Do the thing",
-      model: { provider: "mock", model: "mock-model" },
+      models: { planner: { provider: "mock", model: "mock-model" } },
       secretNames: [],
       maxSteps: 10,
       timeoutMs: 60_000,
+      maxReplans: DEFAULT_OPERATOR_MAX_REPLANS,
+      // Existing loop/child tests assert an unconditional `captureFrame` per
+      // step — the Phase 21 baseline behavior. `"vision"` is the parity mode
+      // that reproduces exactly that (contracts/operator.md §Observation
+      // policy), so it stays the fixture default; Phase 22-specific tests
+      // override it explicitly via `config: { observe: "auto" | "ax" }`.
+      observe: "vision",
       unbounded: false,
       bounds: BOUNDS,
       startedAtMs: Date.now(),
@@ -143,6 +157,8 @@ export class FakeLoopDaemon {
       unbounded: this.config.unbounded,
       bounds: this.config.bounds,
       planRevision: this.planRevision,
+      replansUsed: this.replansUsed,
+      maxReplans: this.config.maxReplans ?? DEFAULT_OPERATOR_MAX_REPLANS,
     };
   }
 
@@ -254,6 +270,14 @@ export class FakeLoopDaemon {
         this.calls.performInput.push(actions);
         const overridden = this.options.onPerformInput?.(actions);
         return overridden ?? { performed: actions.length };
+      }
+
+      case "enumerateElements": {
+        this.requireOpenStep(method);
+        // An observation, not an action — no `chargeAction()` (Phase 22,
+        // mirroring `captureFrame`/`enumerateTargets` above).
+        this.calls.enumerateElements += 1;
+        return { elements: this.options.elements ?? [], generation: "gen-1", truncated: false };
       }
 
       case "resizeWindow": {

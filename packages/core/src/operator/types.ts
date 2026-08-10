@@ -1,7 +1,8 @@
 import type { CaptureTarget } from "../schemas/capture-target.js";
 import type { InputAction } from "../schemas/input-action.js";
-import type { ModelConfig, OperatorRunState, OperatorStep } from "../schemas/operator.js";
+import type { OperatorModels, OperatorRunState, OperatorStep } from "../schemas/operator.js";
 import type { Rect } from "../schemas/rect.js";
+import type { UIElement } from "../schemas/ui-element.js";
 
 /**
  * The integration seam between the daemon (which owns sidecar/session state and
@@ -14,8 +15,9 @@ import type { Rect } from "../schemas/rect.js";
  *
  * Nothing here is platform-specific: `OperatorDeps` is expressed purely in
  * terms of sidecar protocol methods (`captureFrame`, `performInput`,
- * `enumerateTargets`, `resizeWindow`) and capability-gated behavior, never
- * an OS branch (CLAUDE.md §protocol before platform).
+ * `enumerateTargets`, `resizeWindow`, `enumerateElements`) and
+ * capability-gated behavior, never an OS branch (CLAUDE.md §protocol before
+ * platform).
  */
 
 /** A `SecretRef` after resolution from env/keychain/literal by the daemon. */
@@ -36,12 +38,32 @@ export interface OperatorDeps {
     targetId: string,
     bounds: Rect,
   ): Promise<{ actualBounds: Rect; result: "success" | "partial" | "unsupported" }>;
+  /**
+   * Phase 22 — compact interactable accessibility-element list for the run's
+   * target. Control-surface, capture-free: makes no captureFrame-equivalent
+   * call and takes no `~/.windower/capture.lock`. `refs` re-reads exactly
+   * those elements' current attributes/bounds (the freshness path a
+   * re-resolve-before-act uses) instead of walking the tree.
+   */
+  enumerateElements(params: {
+    refs?: string[];
+    filter?: "interactable" | "all";
+    maxDepth?: number;
+    maxElements?: number;
+  }): Promise<{ elements: UIElement[]; generation: string; truncated: boolean }>;
 }
 
 export interface OperatorRunOptions {
   runId: string;
   task: string;
-  model: ModelConfig;
+  /**
+   * Phase 22 — two model tiers (contracts/operator.md §Model tiers).
+   * `executor` defaults to `planner` wherever it is resolved. The CLI/MCP
+   * boundary accepts a bare `ModelConfig` too and normalizes it inward via
+   * `normalizeOperatorModels` before it ever reaches this package — this type
+   * only ever sees the tiered shape.
+   */
+  models: OperatorModels;
   /** Already resolved from env/keychain/literal by the daemon. */
   secrets: ResolvedSecret[];
   /** Guardrail; `DEFAULT_OPERATOR_MAX_STEPS` applied by the caller. */
@@ -57,6 +79,21 @@ export interface OperatorRunOptions {
    * normally (contracts/operator.md §Action batching).
    */
   maxBatchActions: number;
+  /**
+   * Phase 22 guardrail; `DEFAULT_OPERATOR_MAX_REPLANS` (3) applied by the
+   * caller. Bounds how many times the planner may re-enter and emit a new
+   * plan revision. Exceeding it is `OPERATOR_MAX_REPLANS_EXCEEDED` and IS
+   * run-terminating (contracts/operator.md §Guardrails).
+   */
+  maxReplans: number;
+  /**
+   * Phase 22 — `"auto"` (default: elements, falling back to a frame per the
+   * observation policy), `"ax"` (never capture a frame), or `"vision"`
+   * (always capture a frame, never read elements — pre-Phase-22 parity
+   * baseline). Applied by the caller; `packages/operator` treats an absent
+   * value as `"auto"`.
+   */
+  observe?: "auto" | "ax" | "vision";
   /** `--unbounded`: disables the target-bounds coordinate clamp. */
   unbounded: boolean;
   /**

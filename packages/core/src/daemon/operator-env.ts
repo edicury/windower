@@ -21,7 +21,7 @@
  * added there.
  */
 import type { ResolvedSecret } from "../operator/types.js";
-import type { ModelConfig, SecretRef } from "../schemas/index.js";
+import type { ModelConfig, OperatorModels, SecretRef } from "../schemas/index.js";
 import type { DaemonHelloEnv } from "./protocol.js";
 
 const DEFAULT_API_KEY_ENV_VARS: Record<string, string> = {
@@ -66,22 +66,52 @@ function resolvedEnvSecretRefs(secrets: readonly SecretRef[] | undefined): Resol
  * sent at all) when neither an API key nor any `env:` secret is present in
  * this process's environment — `hello`'s `env` is optional, and there's
  * nothing to scope.
+ *
+ * Phase 22 — `models` accepts the tiered `{ planner, executor? }` shape (an
+ * unnormalized bare `ModelConfig` is also accepted and treated as a
+ * single-tier run, so a caller mid-migration doesn't need to wrap it), or is
+ * omitted entirely by a caller relying on `~/.windower/config.json`'s
+ * `operator.default*Model` (resolved daemon-side) — in which case no API key
+ * is scoped here at all and only `secrets` may still produce a payload. The
+ * executor's API-key env var is forwarded only when it differs from the
+ * planner's — the common case (single provider, or no `--executor-model` at
+ * all) sends exactly the same single-slot payload as before this phase.
  */
 export function buildOperatorHelloEnv(params: {
-  model: ModelConfig;
+  models?: ModelConfig | OperatorModels;
   secrets?: readonly SecretRef[];
 }): DaemonHelloEnv | undefined {
-  const apiKeyEnvVar = apiKeyEnvVarFor(params.model);
+  const planner: ModelConfig | undefined =
+    params.models === undefined
+      ? undefined
+      : "planner" in params.models
+        ? params.models.planner
+        : params.models;
+  const executor: ModelConfig | undefined =
+    params.models !== undefined && "planner" in params.models ? params.models.executor : undefined;
+
+  const apiKeyEnvVar = planner ? apiKeyEnvVarFor(planner) : undefined;
   const apiKeyValue = apiKeyEnvVar ? process.env[apiKeyEnvVar] : undefined;
+
+  const executorEnvVar = executor ? apiKeyEnvVarFor(executor) : undefined;
+  const executorDiffers = executorEnvVar !== undefined && executorEnvVar !== apiKeyEnvVar;
+  const executorApiKeyValue = executorDiffers ? process.env[executorEnvVar] : undefined;
+
   const secretRefs = resolvedEnvSecretRefs(params.secrets);
 
-  if (apiKeyValue === undefined && secretRefs.length === 0) {
+  if (
+    apiKeyValue === undefined &&
+    executorApiKeyValue === undefined &&
+    secretRefs.length === 0
+  ) {
     return undefined;
   }
 
   return {
     apiKeyEnvVar: apiKeyValue !== undefined ? apiKeyEnvVar : undefined,
     apiKeyValue,
+    executorApiKeyEnvVar: executorApiKeyValue !== undefined ? executorEnvVar : undefined,
+    executorApiKeyValue,
     secretRefs: secretRefs.length > 0 ? secretRefs : undefined,
   };
 }

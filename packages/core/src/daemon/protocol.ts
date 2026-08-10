@@ -50,12 +50,26 @@ export type DaemonIdentity = z.infer<typeof DaemonIdentitySchema>;
  * else is read or sent, and the daemon never logs this field in full or in
  * part. Blocking `operate` (the default per phase-20) never populates it —
  * only `operate --detach` and MCP's `run_operator` do.
+ *
+ * Phase 22 — a run has two model tiers (planner/executor), which may use two
+ * different providers and therefore two different API-key env vars.
+ * `apiKeyEnvVar`/`apiKeyValue` carry the planner's (unchanged field names, so
+ * a single-tier run — still the common case — is byte-identical to
+ * pre-Phase-22). `executorApiKeyEnvVar`/`executorApiKeyValue` are additive
+ * and sent only when the executor resolves to a *different* env var than the
+ * planner's; when both tiers share one provider/env var (including the
+ * default "no `--executor-model`" case), only the planner slot is sent, same
+ * as before this phase.
  */
 export const DaemonHelloEnvSchema = z.object({
-  /** Name of the model API-key env var, e.g. `"ANTHROPIC_API_KEY"`. */
+  /** Name of the planner model's API-key env var, e.g. `"ANTHROPIC_API_KEY"`. */
   apiKeyEnvVar: z.string().optional(),
   /** The value itself — only ever sent for detached/daemon-backed operate runs. */
   apiKeyValue: z.string().optional(),
+  /** Executor model's API-key env var, only when it differs from the planner's. */
+  executorApiKeyEnvVar: z.string().optional(),
+  /** Executor model's API-key value, only when `executorApiKeyEnvVar` is present. */
+  executorApiKeyValue: z.string().optional(),
   /** Resolved `env:`-sourced `SecretRef`s named in this request only. */
   secretRefs: z.array(z.object({ name: z.string(), value: z.string() })).optional(),
 });

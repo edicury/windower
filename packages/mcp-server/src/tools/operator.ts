@@ -71,11 +71,22 @@ export function registerOperatorTools(
         "to review each step (there is no per-step approval surface).\n\n" +
         "`target` is the SAME target selector `start_recording` takes — a `CaptureTarget` or " +
         "`{ targetId }` from `list_targets`. It is the operator's own target: it is what the " +
-        "operator observes and clicks, and what its coordinate clamp is evaluated against.\n\n" +
-        "`model` selects the operator's OWN model (`{ provider, model, baseUrl?, apiKeyEnvVar? }`, " +
-        "e.g. anthropic:claude-sonnet-5, openai:gpt-5, or openai-compatible + `baseUrl` for a " +
-        "local server) — it is independent of whatever model is running you. API keys come from " +
-        "the environment; never pass one in these arguments.\n\n" +
+        "operator observes and drives, and what its coordinate clamp is evaluated against.\n\n" +
+        "By default the operator OBSERVES via accessibility elements (exact rects for buttons, " +
+        "fields, links, etc.) rather than a screenshot, and falls back to a screenshot only when " +
+        "elements are absent/insufficient or a checkpoint needs a visual check. Pass " +
+        '`observe: "vision"` to force screenshot-only observation (e.g. canvas/WebGL-heavy UI), ' +
+        'or `observe: "ax"` to require element-only observation.\n\n' +
+        "`models` selects the operator's OWN model(s) — independent of whatever model is running " +
+        "you. Pass a single `{ provider, model, baseUrl?, apiKeyEnvVar? }` (e.g. " +
+        "anthropic:claude-sonnet-5, openai:gpt-5, or openai-compatible + `baseUrl` for a local " +
+        "server) to use one model for everything, or `{ planner, executor? }` to split the work: " +
+        "a strong `planner` model writes the plan once, and a cheaper `executor` model (worth " +
+        "configuring — it decides each step's action against an already-labeled element list, " +
+        "which is close to mechanical) executes it and only hands control back to the planner when " +
+        "a checkpoint fails. Omitting `executor` uses the planner for both. API keys come from the " +
+        "environment; never pass one in these arguments — a run with two different providers needs " +
+        "both providers' env vars present in this server's own environment.\n\n" +
         "SECRETS: never put a password/token in `task`. Pass `secrets: [{ name, source: " +
         '"env"|"keychain"|"literal", ref }]` and refer to it in the task as `{{name}}`. The ' +
         "operator's model only ever sees the `{{name}}` placeholder — the real value is resolved " +
@@ -83,11 +94,13 @@ export function registerOperatorTools(
         'transcript, logs, and event timeline before anything is written. `"literal"` is ' +
         "discouraged (shell/argument exposure); prefer env or keychain.\n\n" +
         "GUARDRAILS are enforced by the runtime, not requested in a prompt: `maxSteps` (default " +
-        "40), wall-clock `timeoutSeconds` (default 300), `maxBatchActions` (default 8), a clamp of " +
-        "every coordinate to the run's OWN target's bounds unless `unbounded` is set, and abort. " +
+        "40), wall-clock `timeoutSeconds` (default 300), `maxBatchActions` (default 8), `maxReplans` " +
+        "(default 3 — how many times the executor may hand a stalled plan back to the planner " +
+        "before the run gives up rather than burning its whole step budget), a clamp of every " +
+        "coordinate to the run's OWN target's bounds unless `unbounded` is set, and abort. " +
         "Hitting one ends the run as `failed` with a structured error — report that plainly rather " +
-        "than retrying blindly. The operator's tool surface is closed: screenshot, mouse, " +
-        "keyboard, wait, list targets, resize window, done/fail. It has no shell, filesystem, or " +
+        "than retrying blindly. The operator's tool surface is closed: element/screenshot " +
+        "observation, mouse, keyboard, wait, list targets, resize window, done/fail. It has no shell, filesystem, or " +
         "network tool.\n\n" +
         "The run's only artifact is its own transcript, in operator-owned storage at " +
         "`~/.windower/operator-runs/<runId>/transcript.json` (frames alongside it). There is no " +

@@ -36,8 +36,8 @@
 //   FAKE_DAEMON_SHUTDOWN_DELAY_MS  delay between answering `shutdown` and
 //                                  actually closing the socket (default 20)
 
-import { createServer } from "node:net";
 import { existsSync, unlinkSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -96,7 +96,7 @@ function fakeRun(id) {
     id,
     state: "running",
     task: "fake task",
-    model: { provider: "anthropic", model: "claude-sonnet-5" },
+    models: { planner: { provider: "anthropic", model: "claude-sonnet-5" } },
     target: {
       kind: "display",
       id: "display:0",

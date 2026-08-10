@@ -61,6 +61,10 @@ function recordingDeps(log: CallLog, recordingActive: boolean): OperatorDeps {
       log.push(`resizeWindow ${targetId} ${JSON.stringify(bounds)}`);
       return base.resizeWindow(targetId, bounds);
     },
+    async enumerateElements(params) {
+      log.push(`enumerateElements ${JSON.stringify(params)}`);
+      return base.enumerateElements(params);
+    },
   };
 }
 
@@ -83,11 +87,12 @@ function options(): OperatorRunOptions & OperatorRunInternals {
   return {
     runId: "run-1",
     task: "Navigate to the site",
-    model: parseModelConfig("anthropic:claude-sonnet-5"),
+    models: { planner: parseModelConfig("anthropic:claude-sonnet-5") },
     secrets: [],
     maxSteps: 10,
     timeoutMs: 60_000,
     maxBatchActions: DEFAULT_OPERATOR_MAX_BATCH_ACTIONS,
+    maxReplans: 3,
     unbounded: false,
     bounds: { x: 0, y: 0, width: 1920, height: 1080 },
     target: FAKE_TARGET,

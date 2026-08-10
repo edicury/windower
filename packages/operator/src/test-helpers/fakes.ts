@@ -1,5 +1,5 @@
 import type { LanguageModelV4GenerateResult } from "@ai-sdk/provider";
-import type { CaptureTarget, InputAction, OperatorDeps, Rect } from "@windower/core";
+import type { CaptureTarget, InputAction, OperatorDeps, Rect, UIElement } from "@windower/core";
 import { MockLanguageModelV4 } from "ai/test";
 
 /**
@@ -30,10 +30,13 @@ export interface FakeDepsCalls {
   performInput: InputAction[][];
   listTargets: Array<Array<"display" | "window" | "app"> | undefined>;
   resizeWindow: Array<{ targetId: string; bounds: Rect }>;
+  enumerateElements: Array<{ refs?: string[]; filter?: string; maxElements?: number }>;
 }
 
 export interface FakeDeps extends OperatorDeps {
   calls: FakeDepsCalls;
+  /** Test hook (Phase 22): replaces the `enumerateElements` fixture — same shape `FakeSidecar.setElements` gives `packages/core`. */
+  setElements(elements: UIElement[]): void;
 }
 
 /** A 1x1 transparent PNG, base64. Small enough to keep test fixtures readable. */
@@ -41,19 +44,28 @@ export const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 export function createFakeDeps(
-  overrides: Partial<OperatorDeps> & { onPerformInput?: (actions: InputAction[]) => void } = {},
+  overrides: Partial<OperatorDeps> & {
+    onPerformInput?: (actions: InputAction[]) => void;
+    /** Initial `enumerateElements` fixture. Empty by default — a run that doesn't override `observe` and gets no elements degrades to a frame under `"auto"`, matching the observation policy. */
+    elements?: UIElement[];
+  } = {},
 ): FakeDeps {
   const calls: FakeDepsCalls = {
     captureFrame: [],
     performInput: [],
     listTargets: [],
     resizeWindow: [],
+    enumerateElements: [],
   };
 
   const targets: CaptureTarget[] = [FAKE_TARGET];
+  let elements: UIElement[] = overrides.elements ?? [];
 
   const deps: FakeDeps = {
     calls,
+    setElements(next) {
+      elements = next;
+    },
     async captureFrame(params) {
       calls.captureFrame.push(params);
       if (overrides.captureFrame) return overrides.captureFrame(params);
@@ -74,6 +86,20 @@ export function createFakeDeps(
       calls.resizeWindow.push({ targetId, bounds });
       if (overrides.resizeWindow) return overrides.resizeWindow(targetId, bounds);
       return { actualBounds: bounds, result: "success" };
+    },
+    async enumerateElements(params) {
+      calls.enumerateElements.push(params);
+      if (overrides.enumerateElements) return overrides.enumerateElements(params);
+      if (params.refs !== undefined) {
+        const resolved = elements.filter((e) => params.refs?.includes(e.ref));
+        if (resolved.length !== params.refs.length) {
+          throw Object.assign(new Error("Element ref no longer resolves to a live element."), {
+            code: "AX_ELEMENT_STALE",
+          });
+        }
+        return { elements: resolved, generation: "gen-1", truncated: false };
+      }
+      return { elements, generation: "gen-1", truncated: false };
     },
   };
 

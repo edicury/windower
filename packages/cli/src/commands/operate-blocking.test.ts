@@ -35,7 +35,7 @@ const DISPLAY_TARGET: CaptureTarget = {
 const baseParams: RunOperatorParams = {
   task: "Open the app and create an incident",
   target: DISPLAY_TARGET,
-  model: { provider: "anthropic", model: "claude-sonnet-5" },
+  models: { planner: { provider: "anthropic", model: "claude-sonnet-5" } },
 };
 
 function fakeClient() {
@@ -83,7 +83,7 @@ describe("runOperatorBlocking (operate's local/blocking path)", () => {
   it("runs the loop in-process and persists the terminal run", async () => {
     mockedRunOperator.mockResolvedValue({
       state: "succeeded",
-      steps: [{ index: 0, observationRef: "frame-0.png", toolCalls: [], tMs: 100 }],
+      steps: [{ index: 0, observations: [{ kind: "frame", ref: "frame-0.png" }], toolCalls: [], tMs: 100 }],
       summary: "done",
     });
 
@@ -152,7 +152,7 @@ describe("runOperatorBlocking (operate's local/blocking path)", () => {
 
   it("calls onStep as steps land and persists them", async () => {
     mockedRunOperator.mockImplementation(async (options: { onStep?: (step: unknown) => void }) => {
-      await options.onStep?.({ index: 0, observationRef: "frame-0.png", toolCalls: [], tMs: 5 });
+      await options.onStep?.({ index: 0, observations: [{ kind: "frame", ref: "frame-0.png" }], toolCalls: [], tMs: 5 });
       return { state: "succeeded", steps: [], summary: "done" };
     });
     const onStep = vi.fn();
@@ -164,7 +164,7 @@ describe("runOperatorBlocking (operate's local/blocking path)", () => {
     });
 
     expect(onStep).toHaveBeenCalledWith(
-      expect.objectContaining({ index: 0, observationRef: "frame-0.png" }),
+      expect.objectContaining({ index: 0, observations: [{ kind: "frame", ref: "frame-0.png" }] }),
     );
   });
 
@@ -288,7 +288,7 @@ describe("renderOperatorStepLine", () => {
   it("summarizes the step index, elapsed time, and tool calls", () => {
     const line = renderOperatorStepLine({
       index: 2,
-      observationRef: "frame-2.png",
+      observations: [{ kind: "frame", ref: "frame-2.png" }],
       toolCalls: [{ name: "click", args: { x: 10, y: 20 }, result: { performed: 1 } }],
       tMs: 4200,
     });
@@ -300,7 +300,7 @@ describe("renderOperatorStepLine", () => {
   it("handles a step with no tool calls", () => {
     const line = renderOperatorStepLine({
       index: 0,
-      observationRef: "frame-0.png",
+      observations: [{ kind: "frame", ref: "frame-0.png" }],
       toolCalls: [],
       tMs: 0,
     });

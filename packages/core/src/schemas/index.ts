@@ -1,5 +1,6 @@
 export * from "./rect.js";
 export * from "./capture-target.js";
+export * from "./ui-element.js";
 export * from "./video-settings.js";
 export * from "./audio-settings.js";
 export * from "./session.js";

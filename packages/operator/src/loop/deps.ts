@@ -15,11 +15,11 @@ import type { LoopRpcPeer } from "./rpc.js";
  * convention. This module is therefore deliberately import-poor: one type-only
  * import from `@windower/core` (erased at compile time) and the RPC peer.
  *
- * The adapter adds no capability of its own. These four methods are exactly
- * `OperatorDeps`' four members, which are exactly the four sidecar-facing
- * methods every other Windower interface already uses — the child can do
- * strictly less than the in-process loop could, because it cannot reach a
- * `SidecarClient` at all.
+ * The adapter adds no capability of its own. These five methods are exactly
+ * `OperatorDeps`' five members (Phase 22 added `enumerateElements`), which
+ * are exactly the five sidecar-facing methods every other Windower interface
+ * already uses — the child can do strictly less than the in-process loop
+ * could, because it cannot reach a `SidecarClient` at all.
  *
  * Note what is *not* here: nothing that starts, stops, cancels, or looks up a
  * recording. The operator does not know whether one exists and behaves
@@ -51,6 +51,12 @@ export function createLoopDeps(peer: LoopRpcPeer): OperatorDeps {
 
     resizeWindow(targetId: string, bounds: Rect) {
       return peer.request("resizeWindow", { targetId, bounds });
+    },
+
+    enumerateElements(params) {
+      // No `target` param, same rule as the other four: the daemon resolves
+      // the run's target itself (Phase 22).
+      return peer.request("enumerateElements", params);
     },
   };
 }

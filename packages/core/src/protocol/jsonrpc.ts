@@ -66,6 +66,14 @@ export const SidecarErrorCodeSchema = z.enum([
   "INTERNAL_ERROR",
   "INPUT_UNSUPPORTED",
   "INPUT_OUT_OF_BOUNDS",
+  /**
+   * Phase 22 — a supplied `ref` (to `enumerateElements`'s `refs` param, or to
+   * an element tool re-resolving one) no longer resolves to a live element,
+   * generally because its `generation` was superseded or the window moved.
+   * Non-terminal: the operator re-enumerates and continues
+   * (contracts/sidecar-protocol.md §Error taxonomy).
+   */
+  "AX_ELEMENT_STALE",
 ]);
 export type SidecarErrorCode = z.infer<typeof SidecarErrorCodeSchema>;
 

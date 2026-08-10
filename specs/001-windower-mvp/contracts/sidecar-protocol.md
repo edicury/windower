@@ -18,12 +18,13 @@ The method list is split into two **surfaces**, each a self-contained method-own
 | Surface | Methods | macOS binary (Phase 21) |
 |---|---|---|
 | **Capture** | `describe`, `enumerateTargets`, `getPermissions`, `requestPermission`, `startCapture`, `stopCapture`, `cancelCapture`, `captureFrame` | `windower-capture-macos` |
-| **Control** | `describe`, `getPermissions`, `requestPermission`, `performInput`, `resizeWindow` | `windower-control-macos` |
+| **Control** | `describe`, `getPermissions`, `requestPermission`, `performInput`, `resizeWindow`, `enumerateElements` | `windower-control-macos` |
 
 Why each method lands where it does:
 
 - `enumerateTargets`, `startCapture`, `stopCapture`, `cancelCapture`, `captureFrame` all read screen content or screen-content metadata, so they belong to whatever owns the platform's screen-capture state. There are no separate audio methods to place — audio is configured entirely through `startCapture`'s `AudioSettings` param, so it follows `startCapture` onto the capture surface.
 - `performInput` and `resizeWindow` write input events and window geometry. They read no screen content and share no OS resource with capture, so they are on the control surface.
+- `enumerateElements` (Phase 22) reads the platform's **accessibility** tree, not screen content. It shares its OS resource (and its TCC grant) with `performInput`/`resizeWindow`, not with capture, so it is on the control surface. It is **capture-free**: it links no ScreenCaptureKit symbol, takes no `~/.windower/capture.lock`, and may be served concurrently by any number of control-surface processes (`contracts/screen-capture-exclusivity.md`). A caller observing a target through `enumerateElements` makes **no** capture call at all.
 - `describe` is on **both** surfaces. Each implementation reports only its own capabilities (see Handshake), never the other's.
 - `getPermissions`/`requestPermission` are on **both** surfaces, and were already specified as returning the "backend-relevant subset" of `PermissionReport` — that wording now does real work. A capture implementation reports the capture-relevant kinds (`screenRecording`, `microphone`); a control implementation reports the ones its own methods need (`accessibility`). A daemon holding both connections merges the two reports; a daemon holding one gets a partial report and MUST treat absent kinds as unknown, not denied.
 
@@ -45,12 +46,12 @@ On spawn, the daemon sends `describe` before anything else, on each connection i
 //       "window-control", "capture.display", "capture.window", "capture.region",
 //       "audio.system", "audio.system.perApp", "audio.microphone",
 //       "cursor.visible", "eventTimeline.cursor", "eventTimeline.mouse", "eventTimeline.keyboard",
-//       "input.mouse", "input.keyboard", "screenshot"
+//       "input.mouse", "input.keyboard", "screenshot", "ui.elements"
 //     ]
 //   }}
 ```
 
-The example above is a single implementation that happens to advertise every capability. When the two surfaces are separate implementations, **each `describe` reports only the capabilities of the methods that implementation actually serves** — a capture implementation advertises `enumerate.*`/`capture.*`/`audio.*`/`cursor.*`/`eventTimeline.*`/`screenshot` and does not advertise `input.*`/`window-control`; a control implementation advertises `input.mouse`/`input.keyboard`/`window-control` and nothing else. A caller holding both connections takes the union; a caller holding one MUST NOT infer anything about capabilities it did not see.
+The example above is a single implementation that happens to advertise every capability. When the two surfaces are separate implementations, **each `describe` reports only the capabilities of the methods that implementation actually serves** — a capture implementation advertises `enumerate.*`/`capture.*`/`audio.*`/`cursor.*`/`eventTimeline.*`/`screenshot` and does not advertise `input.*`/`window-control`; a control implementation advertises `input.mouse`/`input.keyboard`/`window-control`/`ui.elements` and nothing else. A caller holding both connections takes the union; a caller holding one MUST NOT infer anything about capabilities it did not see.
 
 The daemon MUST check a capability is present before calling any method that depends on it, and MUST surface `UNSUPPORTED_CAPABILITY` up the stack (not crash) when a caller requests something the active backend can't do — including when it routes a method to the surface that owns it and that surface doesn't advertise the capability.
 
@@ -76,10 +77,22 @@ The daemon MUST check a capability is present before calling any method that dep
 | `requestPermission` | `{ kind: "screenRecording"\|"accessibility"\|"microphone" }` | `{ status: PermissionStatus }` | always available |
 | `performInput` | `{ sessionId?, actions: InputAction[] }` | `{ performed: number }` | `input.mouse` / `input.keyboard` (per action `kind`) |
 | `resizeWindow` | `{ targetId: string, bounds: Rect }` | `{ actualBounds: Rect, result: "success"\|"partial"\|"unsupported" }` | `window-control` |
+| `enumerateElements` | `{ target: CaptureTarget, refs?: string[], filter?: "interactable"\|"all", maxDepth?: number, maxElements?: number }` | `{ elements: UIElement[], generation: string, truncated: boolean }` | `ui.elements` |
 
 `performInput`'s `sessionId` stays optional and stays a plain correlation hint: the control surface does not own sessions and MUST NOT reject a `sessionId` it doesn't recognize (only the capture surface, which does own sessions, returns `SESSION_NOT_FOUND`).
 
-`CaptureTarget`, `VideoSettings`, `AudioSettings`, `Rect`, `PermissionStatus`/`PermissionReport` are exactly the shapes in `data-model.md` — this contract does not redefine them.
+`CaptureTarget`, `VideoSettings`, `AudioSettings`, `Rect`, `UIElement`, `PermissionStatus`/`PermissionReport` are exactly the shapes in `data-model.md` — this contract does not redefine them.
+
+### Element enumeration (`enumerateElements`, Phase 22)
+
+`enumerateElements` returns a **flat, filtered, bounded list** of the target's accessibility elements — not a nested tree and not the platform's complete element graph. Each `UIElement` carries an exact `Rect` in **pixels** (`data-model.md`), so a caller acts on an element by feeding that rect's center to `performInput` rather than estimating a coordinate from an image.
+
+- `filter` defaults to `"interactable"`: elements that are actionable or carry an accessible name. `"all"` disables the filter but remains subject to `maxDepth`/`maxElements`.
+- `maxDepth`/`maxElements` bound the walk. When either bound cut it, the result sets `truncated: true` — a backend MUST NOT truncate silently.
+- `generation` identifies one walk. Every `ref` in the result is valid only within its generation; a backend MAY keep a small number of recent generations alive and MUST NOT reuse a `ref` across generations for a different element.
+- `refs` is the **freshness path**: passing refs re-reads exactly those elements' current attributes and bounds instead of walking the tree, so a caller can re-resolve immediately before acting in one round trip. This is why no separate `resolveElement` method exists. A `ref` that no longer resolves — stale generation, closed window, re-rendered view — is `AX_ELEMENT_STALE`, which is a **recoverable** condition: the caller re-enumerates. It is not a failure of the target.
+
+`enumerateElements` is an **observation**. It reads state and writes nothing, so nothing in this protocol serializes it against capture or against input.
 
 `performInput` takes an **array** of actions deliberately, not a single action per call — a click-then-type sequence (focus a field, then type into it) is one atomic round trip and one capability check, not N round trips each re-validating `input.mouse`/`input.keyboard`. `InputAction` is a discriminated union on `kind`: `mouse_move`, `mouse_down`, `mouse_up`, `mouse_click`, `mouse_drag`, `scroll`, `type_text`, `key_press`, `wait` — see `data-model.md` for the exact per-kind fields. Coordinates in every mouse-related action are **pixels, global top-left-origin Quartz space** — the same coordinate space `TimelineEvent` already uses, so a coordinate read from an event timeline or a `captureFrame` result can be fed straight into `performInput` with no conversion.
 
@@ -96,8 +109,9 @@ This is opt-in behavior of the implementation, not of the caller, and it is obse
 
 `fresh?: boolean` (default `false`) lets a caller opt out. When `fresh: true`, the implementation MUST perform a real single-shot capture regardless of any active stream. Callers should leave it unset; it exists for the rare case that needs a guaranteed-at-this-instant frame and is willing to pay the latency (and, on backends with a contended capture resource, the extra contention) for it. The param is additive and optional — a backend that never shares frames satisfies the contract by ignoring it, since its behavior is already `fresh: true` in effect.
 
-### Platform notes: input synthesis
+### Platform notes: input synthesis and element enumeration
 
+- `AXUIElementCopyAttributeValue` (the macOS mechanism behind `enumerateElements`) requires the **same** Accessibility TCC grant `performInput` and `resizeWindow` already require and already report via `getPermissions`/`requestPermission` — there is no new permission kind to add and no `PermissionReport` schema change. AX reports geometry in **points**; the sidecar converts to pixels using the same per-display scale math it already applies to `performInput` coordinates (`research.md` §3), so a `UIElement.bounds` can be fed straight back into `performInput` with no conversion.
 - `CGEventPost` (the macOS mechanism behind `performInput`) requires the same Accessibility TCC grant the sidecar already requests and reports via `getPermissions`/`requestPermission` (`Permissions.swift`'s `accessibilityStatus()`) — there is no new permission kind to add and no `PermissionReport` schema change.
 - macOS secure event input blocks event **taps** from reading keystrokes, not `CGEventPost` from **writing** them — typing into a password field or other secure-input context works normally but is invisible to the event timeline. This is the same `keystrokes: false`-style degradation already documented for Phase 10's `eventTimeline.keyboard` capability; the operator (Phase 19) must treat this as an expected capability gap, not a failure.
 
@@ -122,6 +136,7 @@ All JSON-RPC errors use a `data.code` from this fixed set so callers can branch 
 | `INTERNAL_ERROR` | Unexpected failure; `message` has detail, treat as a bug report |
 | `INPUT_UNSUPPORTED` | Caller requested an `InputAction.kind` this backend cannot synthesize |
 | `INPUT_OUT_OF_BOUNDS` | A mouse coordinate in `performInput` falls outside any known display's bounds |
+| `AX_ELEMENT_STALE` | A `ref` passed to `enumerateElements` no longer resolves to a live element (stale generation, closed window, re-rendered view). Recoverable — the caller re-enumerates |
 
 ## Cross-platform validation
 

@@ -3,11 +3,13 @@ import { join } from "node:path";
 import {
   type CaptureTarget,
   DEFAULT_OPERATOR_MAX_BATCH_ACTIONS,
+  DEFAULT_OPERATOR_MAX_REPLANS,
   DEFAULT_OPERATOR_MAX_STEPS,
   DEFAULT_OPERATOR_TIMEOUT_MS,
   DaemonError,
   type InputAction,
   type OperatorDeps,
+  type OperatorModels,
   type OperatorRun,
   type OperatorStep,
   type Rect,
@@ -15,6 +17,7 @@ import {
   type RunOperator,
   type RunOperatorParams,
   SidecarError,
+  normalizeOperatorModels,
   spawnSidecar as realSpawnSidecar,
   requiredCapabilityForInputAction,
 } from "@windower/core";
@@ -165,6 +168,19 @@ export async function runOperatorBlocking(
   // target is not a representable value, so an unresolvable selector is a
   // rejected call rather than a persisted run.
   const target = await resolveOperatorTarget(passthrough, params.target);
+  // Same treatment: `windower operate`'s blocking path never relies on the
+  // daemon's config-fallback resolution — `buildRunOperatorParams`
+  // (`operate-params.ts`) has already fully resolved `models` (erroring if
+  // no planner could be resolved) before this function is ever called, so a
+  // caller reaching here without `models` is a caller bypassing that
+  // resolution — a rejected call, not a run with no model.
+  if (params.models === undefined) {
+    throw new DaemonError(
+      "INVALID_ARGS",
+      "No operator model resolved: `models` is required for a blocking operator run",
+    );
+  }
+  const models: OperatorModels = normalizeOperatorModels(params.models);
   const runId = randomUUID();
   const transcriptPath = transcriptPathFor(runId);
   let run: OperatorRun = {
@@ -172,7 +188,7 @@ export async function runOperatorBlocking(
     state: "pending",
     task: params.task,
     target,
-    model: params.model,
+    models,
     steps: [],
     startedAt: nowIso(),
   };
@@ -217,7 +233,7 @@ export async function runOperatorBlocking(
       {
         runId,
         task: params.task,
-        model: params.model,
+        models,
         secrets,
         maxSteps: guardrails.maxSteps ?? DEFAULT_OPERATOR_MAX_STEPS,
         timeoutMs:
@@ -225,6 +241,8 @@ export async function runOperatorBlocking(
             ? Math.round(guardrails.timeoutSeconds * 1000)
             : DEFAULT_OPERATOR_TIMEOUT_MS,
         maxBatchActions: guardrails.maxBatchActions ?? DEFAULT_OPERATOR_MAX_BATCH_ACTIONS,
+        maxReplans: guardrails.maxReplans ?? DEFAULT_OPERATOR_MAX_REPLANS,
+        observe: params.observe,
         unbounded: guardrails.unbounded ?? false,
         target,
         bounds: target.bounds,
@@ -340,6 +358,20 @@ function createDeps(ctx: {
     resizeWindow: async (targetId, bounds: Rect) => {
       try {
         return await ctx.control.resizeWindow({ targetId, bounds });
+      } catch (err) {
+        throw toDaemonError(err);
+      }
+    },
+    // Phase 22 — control-surface, capture-free: goes through `ControlEngine`
+    // exactly like `performInput`/`resizeWindow` above, NEVER `ctx.capture`,
+    // and takes no `~/.windower/capture.lock`. A structured
+    // `UNSUPPORTED_CAPABILITY` here is what lets the operator's observation
+    // policy fall back to a frame instead of crashing. Mirrors
+    // `OperatorRunEngine.createDeps`'s `enumerateElements`.
+    enumerateElements: async (elementsParams) => {
+      await ctx.control.requireCapability("ui.elements");
+      try {
+        return await ctx.control.enumerateElements({ target: ctx.target, ...elementsParams });
       } catch (err) {
         throw toDaemonError(err);
       }

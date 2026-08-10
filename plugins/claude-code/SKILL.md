@@ -133,8 +133,11 @@ demoed" is something you genuinely cannot do:
 - **Native / desktop UI you have no tool for.** Your browser tool is
   browser-only. A macOS app, a preferences pane, a native installer, an
   Electron app's OS-level chrome, a menu bar item, a system dialog — you have
-  no way to click those. The operator does: it perceives the screen with
-  `captureFrame` and drives real mouse/keyboard input through the sidecar.
+  no way to click those. The operator does: by default it perceives the
+  screen through accessibility elements (exact button/field/link rects, no
+  screenshot needed), falling back to a screenshot only when elements are
+  absent or insufficient, and drives real mouse/keyboard input through the
+  sidecar.
 - **The user handed you one instruction to be executed end-to-end.** "Open the
   app, log in with these creds, create an incident to showcase" is a single
   natural-language task; passing it through verbatim is both simpler and
@@ -149,30 +152,51 @@ Keep driving it yourself when:
   you'll be faster, more reliable, and more precise than pixel-level input.
 - You need to interleave non-UI work (run a command, edit a file, call an API)
   with the on-screen steps. The operator's tool surface is deliberately closed:
-  screenshot, mouse, keyboard, wait, list targets, resize, done/fail. It has
-  no shell, no filesystem, no network tool.
+  element/screenshot observation, mouse, keyboard, wait, list targets, resize,
+  done/fail. It has no shell, no filesystem, no network tool.
 - The user wants to review or steer each step. The operator runs to completion
   on its own; there is no per-step approval surface.
 
 ### Using it
 
-`run_operator`'s input is exactly five members — `task`, `target`, `model`,
-and optional `secrets` / `guardrails`. There is no recording member of any
+`run_operator`'s input is `task`, `target`, and optional `models` /
+`observe` / `secrets` / `guardrails`. There is no recording member of any
 kind:
 
 ```
 run_operator({
   task: "Open the app, log in as {{user}} / {{password}}, create an incident called 'Checkout latency'",
   target: { targetId: "42" },     // the same selector start_recording takes
-  model: { provider: "anthropic", model: "claude-sonnet-5" },
+  models: {
+    planner: { provider: "anthropic", model: "claude-sonnet-5" },
+    executor: { provider: "anthropic", model: "claude-haiku" }   // optional — see below
+  },
   secrets: [
     { name: "user", source: "env", ref: "DEMO_USER" },
     { name: "password", source: "keychain", ref: "waroom-demo" }
   ],
-  guardrails: { maxSteps: 40, timeoutSeconds: 300, maxBatchActions: 8 }
+  guardrails: { maxSteps: 40, timeoutSeconds: 300, maxBatchActions: 8, maxReplans: 3 }
 })
 # → { runId: "op_9c31" } — returns immediately, same non-blocking shape as start_recording
 ```
+
+**`models` is optional and has two tiers.** Pass a single `{ provider, model, baseUrl?, apiKeyEnvVar? }`
+to use it for everything (identical to a pre-tiering run), or split it: a
+strong `planner` writes the plan once from a rich observation, and a cheap
+`executor` (worth configuring — deciding "click the button at this exact
+rect" is close to mechanical once elements are the percept) executes each
+step and only hands control back to the planner when a checkpoint fails.
+Omit `executor` to use the planner for both, or omit `models` entirely to
+fall back to `~/.windower/config.json`'s `operator.defaultPlannerModel` /
+`defaultExecutorModel` / `defaultModel`. A two-provider run needs **both**
+providers' API-key env vars present in this MCP server process's own
+environment — never pass a key as an argument.
+
+**`observe` controls the percept.** The default, `"auto"`, observes via
+accessibility elements and falls back to a screenshot only when elements are
+absent/insufficient or a step's checkpoint needs a visual check — you don't
+need to set this for normal use. Set `observe: "vision"` for a target that's
+dominated by canvas/WebGL/opaque web content, where elements won't help.
 
 Then poll `get_operator_run({ runId })` for `state`
 (`running|succeeded|failed|aborted|timed_out`), the plan, and the step
@@ -207,9 +231,11 @@ var and pass the ref instead.
 
 **Guardrails are real, not advisory.** The step cap (default 40), the
 wall-clock timeout (default 5 min), the batch cap (default 8 actions per
-turn), the clamp of every coordinate to the **operator's own target** bounds
-(nothing to do with recording), and abort are all enforced by the Windower
-runtime, not requested in the model's prompt. A run that hits one ends as
+turn), the replan cap (default 3 — how many times the executor may hand a
+stalled plan back to the planner before giving up), the clamp of every
+coordinate to the **operator's own target** bounds (nothing to do with
+recording), and abort are all enforced by the Windower runtime, not requested
+in the model's prompt. A run that hits one ends as
 `failed` (or `timed_out`) with a structured error — you don't need to police
 the operator yourself, but you should report those failures to the user
 plainly rather than retrying blindly.
@@ -217,8 +243,9 @@ plainly rather than retrying blindly.
 **Reporting.** An operator run produces **no video and no manifest** — those
 come from the `start_recording`/`stop_recording` pair, if you ran one. What a
 run writes is its own transcript, at
-`~/.windower/operator-runs/<runId>/transcript.json`, with its observation
-frames in that directory's `frames/`. Nothing in a recording's manifest points
+`~/.windower/operator-runs/<runId>/transcript.json`, with observation frames
+in that directory's `frames/` and accessibility-element snapshots in
+`observations/`. Nothing in a recording's manifest points
 at it; you hold both paths because you made both calls, so report both. If a
 recording was running, synthetic input is tagged `source: "operator"` in its
 event timeline, so a later editing pass can tell operator clicks from a

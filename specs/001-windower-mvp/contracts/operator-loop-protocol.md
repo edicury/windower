@@ -47,10 +47,15 @@ The child sends `ready` as its **first** message; the daemon's result is the run
 //     "runId": "018f2c...",
 //     "task": "open waroom.co in Safari",
 //     "target": { "id": "window:4821", "kind": "window", "title": "Safari", "bounds": { … } },
-//     "model": { "provider": "anthropic", "model": "claude-sonnet-5" },
+//     "models": {
+//       "planner":  { "provider": "anthropic", "model": "claude-sonnet-5" },
+//       "executor": { "provider": "anthropic", "model": "claude-haiku-4-5-20251001" }
+//     },
+//     "observe": "auto",
 //     "secretNames": ["password"],
 //     "maxSteps": 40,
 //     "maxBatchActions": 8,
+//     "maxReplans": 3,
 //     "timeoutMs": 300000,
 //     "unbounded": false,
 //     "bounds": { "x": 0, "y": 0, "width": 3024, "height": 1964 },
@@ -67,6 +72,7 @@ The child sends `ready` as its **first** message; the daemon's result is the run
 | `onStep` | Replaced by the `reportStep` request. |
 | `transcriptPath` | **Not sent.** The daemon owns all disk writes; see "Persistence". |
 | `secrets` | **Not sent.** Replaced by `secretNames: string[]`; see "Secrets". |
+| `models` | (Phase 22) Both tiers, already resolved — `executor` is never absent on the wire even when the caller supplied one `--model`. The child does not apply the tier-defaulting rule; the daemon does, so a single-model run and a two-tier run reach the child in the same shape. |
 | `startedAtMs` | New. The daemon's authoritative run-start epoch, so the child's `tMs` and the daemon's `timeoutMs` are measured from the same instant rather than from two independent `Date.now()` reads separated by a spawn. |
 
 `target` is the **resolved** `CaptureTarget` the run operates — the daemon resolves the caller's `CaptureTarget | { targetId }` selector once, before the spawn, so the child never enumerates to find out what it is driving and `bounds` is always the resolved target's own `Rect`. It is the same selector shape `start_recording` takes, resolved the same way; it is **not** and **MUST NOT** become a channel for telling the child that a recording exists over that target.
@@ -83,6 +89,7 @@ The child sends `ready` as its **first** message; the daemon's result is the run
 | `performInput` | `{ actions: InputAction[] }` | `{ performed: number }` | Proxied to the control surface, after daemon-side bounds clamp and secret substitution. |
 | `enumerateTargets` | `{ kinds?: ("display"\|"window"\|"app")[] }` | `{ targets: CaptureTarget[] }` | Proxied to the capture sidecar. `"app"` is filtered daemon-side exactly as `PassthroughService` does today. |
 | `resizeWindow` | `{ targetId: string, bounds: Rect }` | `{ actualBounds: Rect, result: "success"\|"partial"\|"unsupported" }` | Proxied to the control surface. |
+| `enumerateElements` | `{ refs?: string[], filter?: "interactable"\|"all", maxDepth?: number, maxElements?: number }` | `{ elements: UIElement[], generation: string, truncated: boolean }` | (Phase 22) Proxied to the **control** surface, always against the run's own `target` — carries no target, exactly like `captureFrame`. An **observation**, not an action. The daemon persists the element snapshot under the run's `observations/` and returns it; the child writes nothing to disk. `AX_ELEMENT_STALE` passes through unchanged and is not run-terminating. |
 | `reportPlan` | `{ steps: string[], rationale?: string }` | `{ accepted: true, revision: number }` | The child's model called `plan`. The daemon assigns the revision, stamps `atStepIndex`/`tMs` from its own state and clock, sets `OperatorRun.plan`, and holds it for the open step. Requires an open step; never increments the step counter. |
 | `reportStep` | `{ step: OperatorStep }` | `{ accepted: true, guardrail: GuardrailState }` | Closes the open step. The daemon redacts, appends to `OperatorRun.steps`, and persists. `step.checkpoint` and `step.reasoning` carry the turn's verification outcome and narration; see "Operator events on this wire". |
 | `reportResult` | `{ state: OperatorRunState, summary?: string, error?: { code: string, message: string } }` | `{ accepted: true }` | Terminal. After the response the child writes nothing further and exits `0`. |
@@ -100,16 +107,18 @@ type GuardrailState = {
   unbounded: boolean;
   bounds?: Rect;
   planRevision?: number;     // highest plan revision the daemon has accepted; absent before the first reportPlan
+  replansUsed?: number;      // (Phase 22) planner escalations accepted so far
+  maxReplans?: number;       // (Phase 22) ceiling; exceeding it is OPERATOR_MAX_REPLANS_EXCEEDED, terminal
 };
 ```
 
-The four proxied methods are exactly `OperatorDeps`' four members (`captureFrame`, `performInput`, `listTargets`, `resizeWindow`), which are in turn exactly the four sidecar-facing methods every other Windower interface already uses. This protocol adds **no** capability to the operator: the loop child can do strictly less than the in-process loop could, because it can no longer reach a `SidecarClient` at all. The daemon-side `OperatorDeps` implementation for a child process is a thin adapter over these methods.
+The five proxied methods are exactly `OperatorDeps`' five members (`captureFrame`, `performInput`, `listTargets`, `resizeWindow`, `enumerateElements`), which are in turn exactly the five sidecar-facing methods every other Windower interface already uses. This protocol adds **no** capability to the operator: the loop child can do strictly less than the in-process loop could, because it can no longer reach a `SidecarClient` at all. The daemon-side `OperatorDeps` implementation for a child process is a thin adapter over these methods.
 
 There is no method here that spawns a process, reads or writes the filesystem, or makes an HTTP request on the child's behalf. `contracts/operator.md`'s closed-tool-surface guarantee holds a fortiori across this boundary — the model's tool surface is a subset of the child's, which is a subset of the table above.
 
 ### Step framing, and why `beginStep` exists
 
-Screen-facing methods are only servable **inside an open step**. `captureFrame` / `performInput` / `enumerateTargets` / `resizeWindow` outside one is `NO_OPEN_STEP`.
+Screen-facing methods are only servable **inside an open step**. `captureFrame` / `performInput` / `enumerateTargets` / `resizeWindow` / `enumerateElements` outside one is `NO_OPEN_STEP`.
 
 This is what makes daemon-side step counting airtight. Counting `captureFrame` calls would double-count the `screenshot` tool against the loop's own per-step observation; counting `reportStep` calls would let a buggy child that simply never reports run forever while still issuing proxied actions. An explicit open/close bracket, with proxied calls gated on an open bracket, closes both holes with one mechanism.
 
@@ -122,7 +131,7 @@ This is what makes daemon-side step counting airtight. Counting `captureFrame` c
 `contracts/operator.md` §Action batching lets one turn emit several action tool calls. On this wire a batch is not a new frame: it is **several `performInput`/`resizeWindow` requests inside one open step**, and the step bracket is unchanged.
 
 - A batch costs **one** step, regardless of how many actions it contains. `stepsUsed` increments on `beginStep`, never on an action request.
-- The daemon counts *action* requests — `performInput` and `resizeWindow` — within the open step as `actionsInStep`. `captureFrame` and `enumerateTargets` are observations, not actions, and do not count.
+- The daemon counts *action* requests — `performInput` and `resizeWindow` — within the open step as `actionsInStep`. `captureFrame`, `enumerateTargets`, and `enumerateElements` are observations, not actions, and do not count — including the `enumerateElements({refs})` re-resolve an element tool performs immediately before acting. The action it precedes counts; the lookup does not.
 - An action request at `actionsInStep >= maxBatchActions` fails `OPERATOR_BATCH_LIMIT_EXCEEDED`. This is **not** run-terminating: the daemon leaves the step open, the child abandons the rest of the batch, records the over-limit and subsequent actions as `{ skipped: "BATCH_ABORTED" }`, and closes the step with `reportStep` as normal.
 - Guardrails are re-checked per action, in request order — the bounds clamp, secret substitution, deadline, and abort state are evaluated when each action request arrives, never once for the batch. A batch is not a transaction: there is no rollback for actions the daemon already served.
 - When an action fails mid-batch, the daemon serves nothing retroactively and does nothing implicit. Whether the run continues or ends is decided by the error's own class, per `contracts/operator.md` §Batch failure semantics — terminal guardrail codes (`INPUT_OUT_OF_BOUNDS`, `OPERATOR_TIMEOUT`, `OPERATOR_ABORTED`, `OPERATOR_MAX_STEPS_EXCEEDED`) end the run; proxied surface errors (`TARGET_NOT_FOUND`, `RESIZE_UNSUPPORTED`, `CAPTURE_FAILED`, `UNSUPPORTED_CAPABILITY`, `INPUT_UNSUPPORTED`) are returned to the child as that action's result and the run continues.
@@ -199,7 +208,7 @@ The child writes nothing to disk. `transcriptPath` is not part of its configurat
 - `reportStep` → the daemon redacts the step, appends it to `OperatorRun.steps`, writes the observation frame into the run's own `frames/` directory (content-addressed, per `contracts/operator.md`), and rewrites `~/.windower/operator-runs/<runId>/transcript.json`. Operator artifacts live in operator-owned storage; resolving a path next to a video file would require knowing a recording exists.
 - `reportResult` → the daemon sets `state`/`endedAt`/`error`, persists, and finalizes.
 
-`OperatorStep.observationRef` in a `reportStep` payload names the frame the child observed by its content hash; the daemon already holds the bytes, because the frame came from its own `captureFrame` proxy. The child never re-sends image data upward — `captureFrame` results flow down, refs flow up.
+`OperatorStep.observations` in a `reportStep` payload names what the child observed by content hash — a frame, an element snapshot, or both. The daemon already holds the bytes in either case, because they came from its own `captureFrame`/`enumerateElements` proxy. The child never re-sends observation data upward — results flow down, refs flow up.
 
 This is what keeps the redaction filter and the manifest/transcript layout in exactly one process, and keeps a compromised child from writing to arbitrary paths.
 
@@ -207,7 +216,7 @@ This is what keeps the redaction filter and the manifest/transcript layout in ex
 
 All JSON-RPC errors on this channel use a `data.code` from a fixed set, same shape as `contracts/sidecar-protocol.md` and `contracts/daemon-rpc.md`.
 
-**Passed through unchanged** from the proxied surfaces — a routed error arrives at the child exactly as the capture sidecar or control surface produced it, so the child cannot tell a proxied call from a direct one: `PERMISSION_DENIED`, `TARGET_NOT_FOUND`, `RESIZE_UNSUPPORTED`, `CAPTURE_FAILED`, `UNSUPPORTED_CAPABILITY`, `INPUT_UNSUPPORTED`, `INPUT_OUT_OF_BOUNDS`, `INTERNAL_ERROR`, `SCREEN_CAPTURE_BUSY` (`contracts/screen-capture-exclusivity.md`).
+**Passed through unchanged** from the proxied surfaces — a routed error arrives at the child exactly as the capture sidecar or control surface produced it, so the child cannot tell a proxied call from a direct one: `PERMISSION_DENIED`, `TARGET_NOT_FOUND`, `RESIZE_UNSUPPORTED`, `CAPTURE_FAILED`, `UNSUPPORTED_CAPABILITY`, `INPUT_UNSUPPORTED`, `INPUT_OUT_OF_BOUNDS`, `INTERNAL_ERROR`, `AX_ELEMENT_STALE` (Phase 22 — recoverable, the child re-enumerates), `SCREEN_CAPTURE_BUSY` (`contracts/screen-capture-exclusivity.md`).
 
 **New to this protocol:**
 
@@ -221,6 +230,7 @@ All JSON-RPC errors on this channel use a `data.code` from a fixed set, same sha
 | `STEP_INDEX_MISMATCH` | daemon → child | `beginStep.index !== stepsUsed`, or `reportStep.step.index !== ` the open step's index. |
 | `OPERATOR_MAX_STEPS_EXCEEDED` | daemon → child | `beginStep` at `index >= maxSteps`. Same string as `packages/operator`'s existing `OPERATOR_ERROR_CODES.MAX_STEPS_EXCEEDED` — this is the same guardrail, moved, not a new one. |
 | `OPERATOR_BATCH_LIMIT_EXCEEDED` | daemon → child | An action request (`performInput`/`resizeWindow`) at `actionsInStep >= maxBatchActions`. **Not run-terminating** — the step stays open, the child abandons the rest of the batch and closes the step normally. |
+| `OPERATOR_MAX_REPLANS_EXCEEDED` | daemon → child (as `reportPlan`'s error) | (Phase 22) A `reportPlan` at `replansUsed >= maxReplans`. **Run-terminating** — a run on its Nth plan is not converging, and exhausting `maxSteps` instead just costs the caller the rest of the budget to learn the same thing. |
 | `OPERATOR_TIMEOUT` | daemon → child | Any request after the wall-clock deadline. |
 | `OPERATOR_ABORTED` | daemon → child | Any request after an abort was signalled. |
 | `UNKNOWN_SECRET_REF` | daemon → child | `performInput` contained a `{{name}}` placeholder not in `secretNames`. |
