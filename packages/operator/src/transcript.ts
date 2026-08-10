@@ -6,35 +6,43 @@ import { OperatorRunSchema } from "@windower/core";
 import type { Redactor } from "./redaction.js";
 
 /**
- * Transcript writer — `<recording>.operator.json` next to the video file, per
- * contracts/operator.md §Transcript format and the repo convention that
- * manifest/timeline files live beside the video rather than in a DB.
+ * Transcript writer — operator-owned storage, per contracts/operator.md
+ * §Transcript format: `~/.windower/operator-runs/<runId>/transcript.json`, with
+ * observation frames in a sibling directory. It is deliberately **not** written
+ * next to a video file, because locating one would require the operator to know
+ * a recording exists and to look it up — both prohibited. An orchestrator that
+ * wants the two artifacts side by side copies or links them itself, from the
+ * two paths it already holds.
  *
  * Two deliberate choices:
  *
  * 1. **Incremental.** The transcript is rewritten after every step (atomic
  *    tmp + rename), mirroring the daemon's persist-on-every-transition rule —
  *    a crashed or killed run still leaves a usable partial transcript.
- * 2. **Frames by reference.** Observation frames are written as sibling files
- *    in `<recording>.operator.frames/` named by their content hash, and the
- *    step records only carry the relative ref. Base64 is never inlined, so the
- *    JSON stays small and diffable.
+ * 2. **Frames by reference.** Observation frames are written into the run
+ *    directory's `frames/`, named by their content hash, and the step records
+ *    only carry the relative ref. Base64 is never inlined, so the JSON stays
+ *    small and diffable.
  *
  * Where `contracts/operator.md` and `data-model.md` disagree on field names
  * (`runId`/`observation.screenshotRef` vs `id`/`observationRef`), the core Zod
  * schemas win — the hash is carried inside the ref's filename instead.
  */
 
-const FRAMES_SUFFIX = ".operator.frames";
-const TRANSCRIPT_SUFFIX = ".operator.json";
+const FRAMES_DIR = "frames";
 
+/**
+ * `~/.windower/operator-runs/<runId>/frames/`, a plain subdirectory of the
+ * run's own directory.
+ *
+ * This deliberately derives nothing from the transcript's *filename*. The
+ * previous `<stem>.operator.frames` scheme was a holdover from when the
+ * transcript lived next to a video file — a layout that only made sense if the
+ * operator knew a recording existed, which `contracts/operator.md`
+ * §Transcript format prohibits.
+ */
 export function framesDirFor(transcriptPath: string): string {
-  const dir = dirname(transcriptPath);
-  const base = basename(transcriptPath);
-  const stem = base.endsWith(TRANSCRIPT_SUFFIX)
-    ? base.slice(0, -TRANSCRIPT_SUFFIX.length)
-    : base.replace(/\.json$/, "");
-  return join(dir, `${stem}${FRAMES_SUFFIX}`);
+  return join(dirname(transcriptPath), FRAMES_DIR);
 }
 
 export function hashFrame(imageBase64: string): string {
@@ -48,7 +56,11 @@ export interface TranscriptWriter {
   write(run: OperatorRun): Promise<void>;
 }
 
-/** No-op writer used when a run has no `transcriptPath` (e.g. `--no-record`). */
+/**
+ * No-op writer for a run with no `transcriptPath` — the loop child, which
+ * writes nothing to disk because the daemon owns all persistence
+ * (contracts/operator-loop-protocol.md §Persistence).
+ */
 export function createNullTranscriptWriter(): TranscriptWriter {
   let counter = 0;
   return {

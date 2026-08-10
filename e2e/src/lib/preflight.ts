@@ -19,7 +19,7 @@ export function missingBuildPrerequisites(): string[] {
   }
   if (!sidecarBinaryExists()) {
     missing.push(
-      'native/macos sidecar is not built — run "pnpm turbo run build" or "swift build --package-path native/macos" first',
+      'native/macos capture sidecar (windower-capture-macos) is not built — run "pnpm turbo run build" or "swift build --package-path native/macos" first',
     );
   }
   if (!demoAppBinaryExists()) {

@@ -23,6 +23,51 @@ Windower is a Screen Studio / Loom-style screen recorder built **for AI agents a
 
 Windower ships the same way chrome-skills does: as an installable **plugin + skill set** (CLI binary, MCP server, `SKILL.md`) that teaches an agent the recording workflow, rather than as a GUI app a person operates.
 
+### 1.1 Architecture — three independent capabilities
+
+Windower provides **capabilities, not a workflow.** There are three, and they are peers — none owns, references, or sequences another:
+
+- **Capture** — target enumeration, screenshots/frames, recording, the event timeline. On macOS it is the only capability permitted to hold ScreenCaptureKit state.
+- **Control** — mouse, keyboard, window activation, resize, focus. Zero ScreenCaptureKit dependency on macOS.
+- **Operator** — a reasoning loop: plan → observe → act → verify. It MUST never directly spawn native processes and never touch platform capture/control APIs; every screen-facing effect goes through Windower's normal capabilities.
+
+**Orchestration is the caller's, not Windower's.** The coding agent using Windower — Claude Code, Codex, a shell script, a CI job, a human at a terminal — already has orchestration capabilities, and it owns the workflow:
+
+```
+             Coding Agent
+             (orchestrator)
+            /      |       \
+           /       |        \
+      Capture   Operator   Control
+         |          |
+         |       Reasoning
+         |
+    native capture
+```
+
+Windower deliberately introduces **no** `DemoRun`, `WorkflowRun`, `RecordingAgent`, or equivalent orchestration abstraction, and no "orchestration plane" of its own. Duplicating orchestration the caller already provides would buy nothing and would lock every caller into one workflow. Claude Code MAY use subagents internally for concurrency or isolation — that is a Claude Code implementation detail, not a Windower domain concept.
+
+### 1.2 The usage recipe (caller-side, not a Windower workflow)
+
+The intended pattern is a **recipe for the calling agent**, documented in the Claude Code skill (`plugins/claude-code/SKILL.md`). Other agents are free to compose the same primitives differently:
+
+```
+start_recording(target)
+run_operator(target, task)
+wait for the operator run to reach a terminal state
+stop_recording(session)
+```
+
+Both calls take the **same target selector**; that shared target is the only thing the two capabilities have in common, and neither learns of the other through it. The operator drives the screen; capture records the screen. Nothing in either data path crosses.
+
+**Normative — the Operator MUST NOT:** know whether a recording exists, start a recording, stop a recording, look a recording up, route frames through a recording session, or carry a recording identifier for timeline correlation. **The same `OperatorRun` MUST behave identically whether the screen is being recorded or not.** A recording is not an input to, an output of, or an observable property of an operator run.
+
+Symmetrically, a recording must not know what is driving the screen — the Windower Operator, Claude Code directly, another agent, Playwright, a human, or nothing at all — and does not care (see `data-model.md`'s `RecordingSession` invariant).
+
+The operator emits its own `plan`/`action`/`checkpoint`/`narration`/`result` events; capture emits cursor/mouse/keyboard/window events. Both are wall-clock stamped, and the caller already knows which operations it started together, so no Windower-side component correlates them. If Windower ever needs internal event-stream correlation, it will be designed for the rendering problem specifically — never by making the Operator aware of Recording.
+
+**Breaking change (Phase 21) to Phase 19's shipped surface.** `run_operator`/`windower operate` previously started and owned a recording of its own ("standalone mode"), and a Phase 21 draft additionally proposed an "attach mode" (`sessionId`) pointing a run at an existing session. **Both are removed** — not renamed, not deprecated-in-place. Each independently violates the prohibitions above, and keeping either would preserve exactly the lifecycle coupling this correction exists to eliminate. Callers that relied on the all-in-one call now make two calls (`start_recording` + `run_operator`) plus a `stop_recording`, as shown above.
+
 ## 2. Goals & non-goals
 
 ### 2.1 Goals (MVP)
@@ -42,7 +87,7 @@ Windower ships the same way chrome-skills does: as an installable **plugin + ski
 
 ### 2.1.1 Goals (v1.2 — Operator, Phase 19)
 
-- **One-line instruction execution.** An agent (or a human) can hand Windower a single natural-language task; Windower **perceives the screen** (periodic screenshots via the sidecar's `captureFrame`), **synthesizes mouse/keyboard input** (`performInput`) to drive the UI, and **records** the whole run — all in a loop driven by an LLM the user chooses via a provider-swappable SDK (Vercel AI SDK), independent of whatever model is calling Windower in the first place.
+- **One-line instruction execution.** An agent (or a human) can hand Windower a single natural-language task plus a target; Windower **perceives the screen** (periodic screenshots via the sidecar's `captureFrame`) and **synthesizes mouse/keyboard input** (`performInput`) to drive the UI — all in a loop driven by an LLM the user chooses via a provider-swappable SDK (Vercel AI SDK), independent of whatever model is calling Windower in the first place. The run itself does **not** record anything; an orchestrator that wants video sequences `start_recording`/`stop_recording` around it (§1.2).
 
 ### 2.2 Non-goals (MVP)
 
@@ -119,9 +164,9 @@ Note (Phase 19): the operator's underlying LLM is a **distinct actor** from the 
 
 ### 4.7 Operator (Phase 19)
 
-- **US-18.** As an agent or human, I can give Windower a single natural-language task (e.g. "Open waroom.co, log in as {{user}}/{{password}}, create an incident") and have it perceive the screen, drive input, and complete the task end-to-end, with a recording produced alongside it.
+- **US-18.** As an agent or human, I can give Windower a single natural-language task (e.g. "Open waroom.co, log in as {{user}}/{{password}}, create an incident") plus a target, and have it perceive the screen, drive input, and complete the task end-to-end. If I want a video of it, I start and stop a recording around the run myself (§1.2) — the run behaves identically either way.
 - **US-19.** As an agent or human, credentials I supply as secret refs (keychain/env) are resolved only at input-synthesis time and never reach the model's context or any log/transcript.
-- **US-20.** As an agent or human, I can abort an in-progress operator run mid-flight via the CLI (`windower operate abort <runId>`) or the daemon RPC, and any active recording is stopped/finalized rather than left hanging.
+- **US-20.** As an agent or human, I can abort an in-progress operator run mid-flight via the CLI (`windower operate abort <runId>`) or the daemon RPC; the run reaches a terminal state promptly and no recording anywhere on the machine is affected.
 - **US-21.** As an agent, the operator's model/provider is chosen independently of my own calling model — I can drive `run_operator` from any harness/model and have it use a differently-configured model underneath.
 - **US-22.** As an agent, operator-generated input events are distinguishable from human-generated ones in the event timeline (`TimelineEvent.source: "human" | "operator"`), so a post-processor or a reasoning agent can tell which clicks/keys were synthetic.
 
@@ -143,9 +188,9 @@ Traces to phase exit criteria in `tasks/`. All must be green for MVP to ship.
 - [ ] Every recording writes to the configured output folder with a `manifest.json` matching the documented schema. (Phase 12)
 - [ ] Fixture-app e2e suite is green in CI (or documented as locally-gated if CI cannot hold TCC permissions); soak test: 30-minute recording completes without drift or crash. (Phase 13)
 - [ ] Sidecar binary is codesigned + notarized; `npm install`/plugin install works from a clean machine through first successful recording. (Phase 14)
-- [ ] `windower operate "<task>"` (or `run_operator`) drives a real one-line task end-to-end (the waroom.co example) and produces a valid recording alongside it. (Phase 19)
+- [ ] `windower operate "<task>" --target <id>` (or `run_operator`) drives a real one-line task end-to-end (the waroom.co example). The same run, executed once bare and once wrapped in a `start_recording`/`stop_recording` pair by the orchestrator, behaves identically and produces a valid recording in the wrapped case. (Phase 19, revised Phase 21)
 - [ ] Credentials passed via `--secret`/`SecretRef` never appear in the model's context, the operator transcript, or any log output. (Phase 19)
-- [ ] An in-progress operator run can be aborted via `windower operate abort <runId>` or `abort_operator_run`, and any active recording is cleanly stopped/finalized, not left hanging. (Phase 19)
+- [ ] An in-progress operator run can be aborted via `windower operate abort <runId>` or `abort_operator_run`; the run reaches a terminal state promptly and no recording is stopped, canceled, or otherwise touched as a side effect. (Phase 19, revised Phase 21)
 - [ ] The operator's model/provider can be configured independently of the calling agent's own model (verified with at least two distinct providers). (Phase 19)
 - [ ] Operator-generated `TimelineEvent`s carry `source: "operator"` and are distinguishable from human-generated events in the same event timeline. (Phase 19)
 

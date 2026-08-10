@@ -10,7 +10,12 @@ import {
 const MODEL = "anthropic:claude-sonnet-5";
 
 function opts(overrides: Partial<OperateOpts> = {}): OperateOpts {
-  return { model: MODEL, ...overrides };
+  return { model: MODEL, target: "d1", ...overrides };
+}
+
+/** Removed flags aren't members of `OperateOpts` any more — commander still binds them. */
+function withRemovedFlag(key: string, value: unknown): OperateOpts {
+  return { ...opts(), [key]: value } as OperateOpts;
 }
 
 describe("buildRunOperatorParams — model", () => {
@@ -159,59 +164,65 @@ describe("buildRunOperatorParams — guardrails", () => {
   });
 });
 
-describe("buildRunOperatorParams — recording flags", () => {
-  it("reuses the shared video/audio flag parsing", () => {
-    const params = buildRunOperatorParams(
-      "t",
-      opts({
-        fps: "60",
-        codec: "hevc",
-        container: "mov",
-        resolution: "1920x1080",
-        quality: "lossless_ish",
-        cursor: false,
-        audioMic: true,
-        micDevice: "mic-1",
-        audioSystem: true,
-        out: "/tmp/out",
-      }),
-    );
-    expect(params.recording).toEqual({
-      video: {
-        fps: 60,
-        codec: "hevc",
-        container: "mov",
-        resolution: { width: 1920, height: 1080 },
-        quality: "lossless_ish",
-        showCursor: false,
-      },
-      audio: {
-        tracks: [
-          { source: "system", enabled: true },
-          { source: "microphone", enabled: true, deviceId: "mic-1" },
-        ],
-        separateTracks: true,
-      },
-      outputDir: "/tmp/out",
+describe("buildRunOperatorParams — target (Phase 21)", () => {
+  it("takes start's target flags — the operator's target is its own", () => {
+    expect(buildRunOperatorParams("t", opts({ target: "window-3" })).target).toEqual({
+      targetId: "window-3",
     });
   });
 
-  it("maps --no-record to recording.disabled", () => {
-    // commander sets `record: false` for `--no-record`.
-    expect(buildRunOperatorParams("t", opts({ record: false })).recording).toEqual({
-      disabled: true,
-    });
-    expect(buildRunOperatorParams("t", opts()).recording).toBeUndefined();
+  it("builds a region selector from --kind region + --region", () => {
+    expect(
+      buildRunOperatorParams("t", opts({ target: "d1", kind: "region", region: "0,0,10,20" }))
+        .target,
+    ).toEqual({ kind: "region", displayId: "d1", bounds: { x: 0, y: 0, width: 10, height: 20 } });
   });
 
-  it("rejects target-selection flags — run_operator takes no target", () => {
-    for (const overrides of [{ target: "42" }, { kind: "window" }, { region: "0,0,10,10" }]) {
-      expect(() => buildRunOperatorParams("t", opts(overrides))).toThrow(DaemonError);
-    }
+  it("requires --target", () => {
+    expect(() => buildRunOperatorParams("t", opts({ target: undefined }))).toThrow(DaemonError);
   });
 
   it("rejects an empty task", () => {
     expect(() => buildRunOperatorParams("   ", opts())).toThrow(DaemonError);
+  });
+});
+
+describe("buildRunOperatorParams — removed recording flags (Phase 21)", () => {
+  // The operator records nothing, so every recording flag is gone. The error
+  // must point at the caller-side recipe rather than merely rejecting the flag.
+  const removed: Array<[string, unknown, string]> = [
+    ["record", false, "--no-record"],
+    ["session", "sess-1", "--session"],
+    ["fps", "60", "--fps"],
+    ["codec", "hevc", "--codec"],
+    ["container", "mov", "--container"],
+    ["resolution", "1920x1080", "--resolution"],
+    ["quality", "lossless_ish", "--quality"],
+    ["audioSystem", true, "--audio-system"],
+    ["audioMic", true, "--audio-mic"],
+    ["micDevice", "mic-1", "--mic-device"],
+    ["separateTracks", true, "--separate-tracks"],
+    ["out", "/tmp/out", "--out"],
+  ];
+
+  for (const [key, value, flag] of removed) {
+    it(`rejects ${flag} and points at the start/operate/stop recipe`, () => {
+      try {
+        buildRunOperatorParams("t", withRemovedFlag(key, value));
+        throw new Error("expected a rejection");
+      } catch (err) {
+        expect((err as DaemonError).code).toBe("INVALID_ARGS");
+        const message = (err as DaemonError).message;
+        expect(message).toContain(flag);
+        expect(message).toContain("windower start");
+        expect(message).toContain("windower operate");
+        expect(message).toContain("windower stop");
+      }
+    });
+  }
+
+  it("produces no recording member at all", () => {
+    expect(buildRunOperatorParams("t", opts())).not.toHaveProperty("recording");
   });
 });
 
@@ -221,10 +232,9 @@ describe("buildRunOperatorParams — schema parity", () => {
       "Open waroom.co, log in as {{user}}/{{password}}, create an incident",
       opts({
         secret: ["user=env:DEMO_USER", "password=keychain:waroom"],
-        resolution: "1920x1080",
-        out: "~/Desktop",
         maxSteps: "20",
         timeout: "120",
+        maxBatch: "4",
       }),
     );
     expect(RunOperatorParamsSchema.parse(params)).toEqual(params);

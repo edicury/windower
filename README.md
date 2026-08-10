@@ -37,12 +37,22 @@ Every other command (`record`, `targets`, `doctor`, `permission request`, `resiz
 
 ### The operator (`windower operate`)
 
-`windower operate "<task>"` drives an LLM-guided run — perceive the screen, synthesize input, complete the task — and records it. It **blocks by default**: it runs in the invoking process, streams step progress to stderr, and prints the final result when done, so it works with zero daemon setup just like `record`. Pass `--detach` to get the old non-blocking behavior back (`{ runId }` immediately, poll with `operate status`) if you want to kick off a long run from a terminal and walk away.
+`windower operate "<task>" --target <id>` drives an LLM-guided run — perceive the screen, synthesize input, complete the task. It **records nothing**: recording and operating are independent capabilities, and the caller sequences them. It **blocks by default**: it runs in the invoking process, streams step progress to stderr, and prints the final result when done, so it works with zero daemon setup just like `record`. Pass `--detach` to get the non-blocking behavior (`{ runId }` immediately, poll with `operate status`) if you want to kick off a long run from a terminal and walk away.
 
 ```bash
 windower operate "Open waroom.co, log in as {{user}}/{{password}}, create an incident" \
-  --secret password=keychain:waroom --resolution 1920x1080 --out ~/Desktop --json
+  --target <id> --secret password=keychain:waroom --json
 ```
+
+Want a video of it? Wrap the run in the ordinary two-call recording pattern — three independent commands you control, passing the same target to both:
+
+```bash
+SESSION=$(windower start --target <id> --resolution 1920x1080 --out ~/Desktop --json | jq -r .sessionId)
+windower operate "Open waroom.co and create an incident" --target <id> --json
+windower stop "$SESSION" --json
+```
+
+The run never starts, stops, or touches that recording — aborting or failing a run leaves it recording until you stop it. The run's own artifact is its transcript at `~/.windower/operator-runs/<runId>/transcript.json`; the video and `manifest.json` come from `start`/`stop`.
 
 ## Building from source (development)
 
@@ -66,7 +76,7 @@ pnpm link --global -C packages/cli    # requires `pnpm setup` once, if no global
 echo "alias windower='node $(pwd)/packages/cli/dist/index.js'" >> ~/.zshrc && source ~/.zshrc
 ```
 
-`windower` resolves the sidecar binary at `native/macos/.build/debug/windower-sidecar-macos` automatically (dev-build convention — see `packages/core/src/process/sidecar-path.ts`). Override with `WINDOWER_SIDECAR_BINARY_PATH=<path>` if you built elsewhere.
+`swift build` produces **two** binaries from the one Swift Package: `windower-capture-macos` (ScreenCaptureKit + AVFoundation — the only process allowed to touch ScreenCaptureKit) and `windower-control-macos` (CGEvent/Accessibility input and window control, which cannot link ScreenCaptureKit even transitively). `windower` resolves both at `native/macos/.build/debug/<name>` automatically (dev-build convention — see `packages/core/src/process/sidecar-path.ts`). Override either with `WINDOWER_SIDECAR_BINARY_PATH=<path>` / `WINDOWER_CONTROL_BINARY_PATH=<path>` if you built elsewhere.
 
 ### Extra setup for the operator (`windower operate`)
 
@@ -84,7 +94,8 @@ All of these are optional; Windower runs with sensible defaults if none are set.
 | Variable | Default | Surface | What it does |
 |---|---|---|---|
 | `WINDOWER_HOME` | `~/.windower` | CLI, daemon, MCP server | Overrides the root state directory — sessions (`sessions/`), operator runs, `config.json`, `daemon.sock`, `daemon.json`, lockfiles. Mainly for tests/CI so nothing touches a real home directory; a CLI and daemon that resolve this independently and disagree fail loudly at the `hello` handshake (`DAEMON_VERSION_MISMATCH`, naming both paths) rather than silently splitting state. |
-| `WINDOWER_SIDECAR_BINARY_PATH` | unset (auto-resolved) | CLI, daemon, MCP server (anything that spawns the native sidecar) | Pins the exact sidecar binary to spawn, skipping auto-resolution. Without it, resolution tries the dev-build path under `native/<os>/.build/debug/` (inside a monorepo checkout), then falls back to the platform-specific `@windower/sidecar-<os>-<arch>` npm package. `windower doctor`'s `sidecar.source` reports which strategy actually resolved (`env-override` / `dev-build` / `npm-package`). See `packages/core/src/process/sidecar-path.ts`. |
+| `WINDOWER_SIDECAR_BINARY_PATH` | unset (auto-resolved) | CLI, daemon, MCP server (anything that spawns the capture sidecar) | Pins the exact **capture**-surface binary (`windower-capture-macos`) to spawn, skipping auto-resolution. Keeps its pre-split name — it always pointed at the capture surface. Without it, resolution tries the dev-build path under `native/<os>/.build/debug/` (inside a monorepo checkout), then falls back to the platform-specific `@windower/sidecar-<os>-<arch>` npm package. `windower doctor`'s `sidecar.source` reports which strategy actually resolved (`env-override` / `dev-build` / `npm-package`). See `packages/core/src/process/sidecar-path.ts`. |
+| `WINDOWER_CONTROL_BINARY_PATH` | unset (auto-resolved) | CLI, daemon, MCP server (anything that spawns the control sidecar) | The same override for the **control**-surface binary (`windower-control-macos`, which backs `performInput`/`resizeWindow` and never touches ScreenCaptureKit). A separate variable rather than a shared one, since one path can't name two binaries; same resolution order. A platform that implements both surfaces in one binary simply points both variables at it — the two-binary split is macOS's answer to the single-ScreenCaptureKit-writer invariant, not a protocol requirement. |
 | `WINDOWER_DAEMON_BIN_PATH` | unset (auto-resolved) | CLI, MCP server (whichever process spawns the daemon) | Pins the exact daemon entrypoint (`node <path>`) that `ensureDaemonRunning` spawns, mirroring `WINDOWER_SIDECAR_BINARY_PATH`'s resolution order (env override → dev-build path → published `@windower/daemon` package). Useful for testing a version-mismatch auto-restart against a real older build. See `packages/core/src/daemon/connect.ts`. |
 | `WINDOWER_BACKEND` | unset | CLI only | `local` or `daemon` — debugging escape hatch that overrides the normal command → backend-mode routing (see the "Daemon policy" table in `specs/001-windower-mvp/contracts/cli.md`). Forces an otherwise-`local` command through the daemon, or vice versa. Equivalent to the `--daemon`/`--no-daemon` CLI flags, which take precedence over this variable when both are given. Has no effect on `attach`-mode commands (`stop`, `cancel`, `daemon status`/`stop`/`restart`) — attaching only to an already-listening daemon is inherent to their correctness and isn't overridable. |
 | `WINDOWER_OPERATOR_DEBUG` | unset | `packages/operator` (used by both blocking `operate` in-process and the daemon-backed detached path) | When set (any truthy value), the operator's redacted logger writes its log lines to stderr instead of discarding them. Every line still passes through the same redaction filter as the transcript, so secrets are never printed even with this on — it only controls whether the (already-redacted) lines are emitted at all. |

@@ -6,7 +6,8 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js"
+    ".": "./dist/index.js",
+    "./loop-entry": "./dist/loop-entry.js"
   },
   "files": ["dist", "README.md"],
   "publishConfig": {

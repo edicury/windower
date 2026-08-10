@@ -1,5 +1,7 @@
 import type {
+  OperatorCheckpoint,
   OperatorDeps,
+  OperatorPlan,
   OperatorRun,
   OperatorRunOptions,
   OperatorRunResult,
@@ -8,16 +10,21 @@ import type {
   OperatorToolCall,
   RunOperator,
 } from "@windower/core";
-import { formatModelConfig } from "@windower/core";
+import { BATCH_ABORTED_RESULT, formatModelConfig } from "@windower/core";
 import type { LanguageModel, ModelMessage } from "ai";
 import { generateText } from "ai";
-import { OPERATOR_ERROR_CODES, OperatorError, toOperatorError } from "./errors.js";
+import {
+  OPERATOR_ERROR_CODES,
+  OperatorError,
+  isTerminalOperatorErrorCode,
+  toOperatorError,
+} from "./errors.js";
 import { type ExecutionContext, executeToolCall } from "./executor.js";
 import { Deadline } from "./guardrails.js";
-import { buildSystemPrompt } from "./prompt.js";
+import { buildSystemPrompt, formatPlanReminder } from "./prompt.js";
 import { resolveModel } from "./providers.js";
 import { type LogSink, createRedactedLogger, createRedactor } from "./redaction.js";
-import { isOperatorToolName } from "./tools.js";
+import { isActionToolName, isOperatorToolName } from "./tools.js";
 import { buildToolSet } from "./tools.js";
 import {
   type TranscriptWriter,
@@ -54,6 +61,32 @@ export interface OperatorRunInternals {
   logSink?: LogSink;
   /** Injected clock, for deterministic `tMs` in tests. */
   now?: () => number;
+  /** Run-start epoch; a loop child passes the daemon's, so both share one origin. */
+  startedAtMs?: number;
+  /**
+   * Secret **names** for the prompt when no resolved values are available. Set
+   * by the loop child, which receives `secretNames` and never a value
+   * (contracts/operator-loop-protocol.md §Secrets): substitution and redaction
+   * both become no-ops there because the process holds no secret material at
+   * all, while the model still gets told which placeholders exist.
+   */
+  secretNames?: readonly string[];
+  /**
+   * Opens step `index` against the authoritative step counter before the
+   * observation. The loop child maps this to `beginStep`; a rejection (max
+   * steps, deadline, abort) carries the daemon's code and ends the run.
+   */
+  onBeginStep?: (index: number) => void | Promise<void>;
+  /**
+   * Assigns the identity of a plan revision. Returns the revision number. The
+   * loop child maps this to `reportPlan`, so the daemon — never the model and
+   * never the child — numbers and timestamps a plan. Defaults to a local
+   * monotonic counter for the in-process path.
+   */
+  onPlan?: (
+    content: { steps: string[]; rationale?: string },
+    atStepIndex: number,
+  ) => number | Promise<number>;
 }
 
 type InternalOptions = OperatorRunOptions & OperatorRunInternals;
@@ -120,7 +153,7 @@ export const runOperator: RunOperator = async (
 
   const redactor = createRedactor(options.secrets);
   const logger = createRedactedLogger(redactor, internals.logSink);
-  const deadline = new Deadline(options.timeoutMs, now);
+  const deadline = new Deadline(options.timeoutMs, now, internals.startedAtMs);
   const writer: TranscriptWriter =
     options.transcriptPath === undefined
       ? createNullTranscriptWriter()
@@ -131,6 +164,10 @@ export const runOperator: RunOperator = async (
     id: options.runId,
     state: "running",
     task: options.task,
+    // The resolved target this run drives — and the run's only notion of what
+    // it is operating. There is no session or recording identifier to carry
+    // alongside it (contracts/operator.md §Recording independence).
+    target: options.target,
     model: options.model,
     steps,
     startedAt: new Date(deadline.startedAtMs).toISOString(),
@@ -164,15 +201,21 @@ export const runOperator: RunOperator = async (
 
   const messages: ModelMessage[] = [];
   let nextFrameMaxWidth: number | undefined;
+  /** Local fallback when no authority (the daemon) is assigning revisions. */
+  let nextLocalPlanRevision = 0;
 
   try {
     const model = internals.languageModel ?? resolveModel(options.model, options.env);
     const tools = buildToolSet();
     const system = buildSystemPrompt({
       task: options.task,
-      secretNames: options.secrets.map((s) => s.name),
+      secretNames:
+        options.secrets.length > 0
+          ? options.secrets.map((s) => s.name)
+          : (internals.secretNames ?? []),
       maxSteps: options.maxSteps,
       timeoutMs: options.timeoutMs,
+      maxBatchActions: options.maxBatchActions,
       unbounded: options.unbounded,
       bounds: options.bounds,
     });
@@ -213,6 +256,18 @@ export const runOperator: RunOperator = async (
           OPERATOR_ERROR_CODES.MAX_STEPS_EXCEEDED,
           `Operator run exhausted its ${options.maxSteps}-step budget without calling done.`,
         );
+      }
+
+      // Opening the step is what makes the step counter authoritative when the
+      // loop runs as a child process — every screen-facing call the daemon
+      // serves is gated on an open step (contracts/operator-loop-protocol.md
+      // §"Step framing"). In-process there is no hook and this is a no-op.
+      if (internals.onBeginStep !== undefined) {
+        try {
+          await internals.onBeginStep(index);
+        } catch (err) {
+          throw toOperatorError(err, OPERATOR_ERROR_CODES.DEPENDENCY_ERROR);
+        }
       }
 
       // ── Observe ──────────────────────────────────────────────────────────
@@ -276,9 +331,30 @@ export const runOperator: RunOperator = async (
       const reasoning = reasoningText.trim().length > 0 ? reasoningText.trim() : undefined;
 
       // ── Act ──────────────────────────────────────────────────────────────
+      // One turn's tool calls are a *batch* (contracts/operator.md §Action
+      // batching). They execute sequentially in emission order inside this one
+      // step; the step costs one step from `maxSteps` no matter how many
+      // actions it contains. When action k fails, k+1..n never execute, there
+      // is no rollback, and every one of them is still recorded — as
+      // `BATCH_ABORTED_RESULT` — so "ran / failed / never ran" is stated rather
+      // than inferred from array length.
       const recorded: OperatorToolCall[] = [];
       const toolResults: Array<{ toolCallId: string; toolName: string; output: unknown }> = [];
       let terminal: { kind: "done" | "fail"; message: string } | undefined;
+      /** Set when a terminal failure fired mid-batch; rethrown after the step is recorded. */
+      let terminalError: OperatorError | undefined;
+      /** True once the rest of the batch must be skipped, for any reason. */
+      let batchAborted = false;
+      /** Actions (not observations) already served in this step. */
+      let actionsInStep = 0;
+      let stepPlan: OperatorPlan | undefined;
+      /**
+       * Set only by an explicit `checkpoint` call. Never derived: "this turn
+       * replanned" is not a proxy for `failed-plan-invalid`, and its absence is
+       * not a proxy for `held` (contracts/operator.md §Execution model). A turn
+       * that states nothing records nothing.
+       */
+      let stepCheckpoint: OperatorCheckpoint | undefined;
 
       const stepBase = { index, observationRef, reasoning, tMs: deadline.elapsedMs() };
 
@@ -309,26 +385,126 @@ export const runOperator: RunOperator = async (
           continue;
         }
 
+        if (batchAborted) {
+          recorded.push({ name: toolName, args: call.input, result: BATCH_ABORTED_RESULT });
+          toolResults.push({
+            toolCallId: call.toolCallId,
+            toolName,
+            output: BATCH_ABORTED_RESULT,
+          });
+          continue;
+        }
+
+        // Batch budget. Checked per action, on arrival — never once for the
+        // batch up front, and never for observations or bookkeeping calls.
+        if (isActionToolName(toolName)) {
+          if (actionsInStep >= options.maxBatchActions) {
+            const output = {
+              error: {
+                code: OPERATOR_ERROR_CODES.BATCH_LIMIT_EXCEEDED,
+                message: `This turn emitted more than ${options.maxBatchActions} action tool calls. This one and everything after it in the turn were skipped; the run continues from the next observation.`,
+              },
+            };
+            recorded.push({ name: toolName, args: call.input, result: output });
+            toolResults.push({ toolCallId: call.toolCallId, toolName, output });
+            batchAborted = true;
+            continue;
+          }
+          actionsInStep += 1;
+        }
+
         let outcome: Awaited<ReturnType<typeof executeToolCall>>;
         try {
           outcome = await executeToolCall(toolName, call.input, ctx);
         } catch (err) {
+          const failure = toOperatorError(err, OPERATOR_ERROR_CODES.DEPENDENCY_ERROR);
           // `call.input` is the placeholder-form arguments the model sent —
           // recorded as-is, never the substituted value.
-          recorded.push({ name: toolName, args: call.input });
-          await recordStep({ ...stepBase, toolCalls: recorded });
-          throw err;
+          const output = redactor.redact({
+            error: { code: failure.code, message: failure.message },
+          });
+          recorded.push({ name: toolName, args: call.input, result: output });
+          batchAborted = true;
+          if (isTerminalOperatorErrorCode(failure.code)) {
+            // Batching MUST NOT downgrade a terminal guardrail failure: the run
+            // ends, but only after the remaining actions are recorded as
+            // skipped, so the partial step is still a complete record.
+            terminalError = failure;
+          } else {
+            toolResults.push({ toolCallId: call.toolCallId, toolName, output });
+          }
+          continue;
+        }
+
+        if (outcome.kind === "plan") {
+          if (stepPlan !== undefined) {
+            // One turn produces at most one plan revision
+            // (contracts/operator-loop-protocol.md §"Plans on this wire").
+            const output = {
+              ok: false,
+              note: "A plan was already recorded this turn. One `plan` call per turn.",
+            };
+            recorded.push({ name: toolName, args: call.input, result: output });
+            toolResults.push({ toolCallId: call.toolCallId, toolName, output });
+            continue;
+          }
+          let revision: number;
+          try {
+            revision =
+              internals.onPlan === undefined
+                ? nextLocalPlanRevision++
+                : await internals.onPlan(
+                    { steps: outcome.steps, rationale: outcome.rationale },
+                    index,
+                  );
+          } catch (err) {
+            throw toOperatorError(err, OPERATOR_ERROR_CODES.DEPENDENCY_ERROR);
+          }
+          stepPlan = {
+            revision,
+            steps: outcome.steps,
+            rationale: outcome.rationale,
+            atStepIndex: index,
+            tMs: stepBase.tMs,
+          };
+          run.plan = redactor.redact(stepPlan);
+          const output = { ok: true, revision };
+          recorded.push({ name: toolName, args: call.input, result: output });
+          toolResults.push({ toolCallId: call.toolCallId, toolName, output });
+          continue;
+        }
+
+        if (outcome.kind === "checkpoint") {
+          if (stepCheckpoint !== undefined) {
+            // One verification per step, mirroring how a second `plan` in one
+            // turn is refused: `OperatorStep.checkpoint` is a single optional
+            // record, and silently overwriting it would lose the first one.
+            const output = {
+              ok: false,
+              note: "A checkpoint was already recorded this turn. One `checkpoint` call per turn.",
+            };
+            recorded.push({ name: toolName, args: call.input, result: output });
+            toolResults.push({ toolCallId: call.toolCallId, toolName, output });
+            continue;
+          }
+          stepCheckpoint = outcome.checkpoint;
+          const output = { ok: true, outcome: outcome.checkpoint.outcome };
+          recorded.push({ name: toolName, args: call.input, result: output });
+          toolResults.push({ toolCallId: call.toolCallId, toolName, output });
+          continue;
         }
 
         if (outcome.kind === "done") {
           recorded.push({ name: toolName, args: call.input });
           terminal = { kind: "done", message: outcome.summary };
-          break;
+          batchAborted = true;
+          continue;
         }
         if (outcome.kind === "fail") {
           recorded.push({ name: toolName, args: call.input });
           terminal = { kind: "fail", message: outcome.reason };
-          break;
+          batchAborted = true;
+          continue;
         }
 
         const result = redactor.redact(outcome.result);
@@ -336,7 +512,19 @@ export const runOperator: RunOperator = async (
         toolResults.push({ toolCallId: call.toolCallId, toolName, output: result });
       }
 
-      await recordStep({ ...stepBase, toolCalls: recorded });
+      // `checkpoint` stays `undefined` unless this turn stated one. The loop
+      // child hands the whole step to `reportStep`, so this is also how the
+      // checkpoint reaches the daemon as `reportStep.step.checkpoint`
+      // (contracts/operator-loop-protocol.md §"Operator events on this wire") —
+      // the child reports the fact, the daemon derives the event.
+      await recordStep({
+        ...stepBase,
+        plan: stepPlan,
+        checkpoint: stepCheckpoint,
+        toolCalls: recorded,
+      });
+
+      if (terminalError !== undefined) throw terminalError;
 
       if (terminal !== undefined) {
         if (terminal.kind === "done") {
@@ -368,9 +556,18 @@ export const runOperator: RunOperator = async (
           content: [
             {
               type: "text",
-              text: "You did not call a tool. Call exactly one tool, or call `done`/`fail` to end the run.",
+              text: "You did not call a tool. Call `plan` if you have not planned yet, otherwise emit the next action (or a short batch of them), or call `done`/`fail` to end the run.",
             },
           ],
+        });
+      }
+
+      if (stepPlan !== undefined) {
+        // Keeps the current plan legible in context without the model having to
+        // scroll back past pruned observations to find it.
+        messages.push({
+          role: "user",
+          content: [{ type: "text", text: formatPlanReminder(stepPlan) }],
         });
       }
     }

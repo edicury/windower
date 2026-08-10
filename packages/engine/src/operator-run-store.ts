@@ -18,6 +18,9 @@ export function operatorRunsDir(): string {
   return join(windowerHome(), "operator-runs");
 }
 
+/** Monotonic within this process — see `save`'s temp-file naming. */
+let writeCounter = 0;
+
 export function operatorRunFilePath(runId: string): string {
   return join(operatorRunsDir(), `${runId}.json`);
 }
@@ -80,7 +83,11 @@ export class OperatorRunStore {
     // status <runId>` (and crash recovery) would otherwise be able to read a
     // half-written file mid-run.
     const finalPath = operatorRunFilePath(sanitized.id);
-    const tempPath = `${finalPath}.tmp`;
+    // Unique per write: `abort_operator_run` marking a run `aborted` and the
+    // loop's own finalizer can legitimately land on the same run at the same
+    // moment, and a shared `<id>.json.tmp` makes the second `rename` fail with
+    // ENOENT after the first one moved the file out from under it.
+    const tempPath = `${finalPath}.${process.pid}.${++writeCounter}.tmp`;
     await writeFile(tempPath, `${JSON.stringify(sanitized, null, 2)}\n`, "utf8");
     await rename(tempPath, finalPath);
     this.cache.set(sanitized.id, sanitized);

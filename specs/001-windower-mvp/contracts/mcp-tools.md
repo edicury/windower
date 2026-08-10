@@ -59,16 +59,52 @@ Runs `local` (Phase 20) — reads the session store directly, no daemon involved
 Runs `local` (Phase 20) — reads the session store directly, no daemon involved.
 
 ## `run_operator`
-**Input:** `{ task: string, model: ModelConfig, recording?: { video?: Partial<VideoSettings>, audio?: Partial<AudioSettings>, outputDir?: string, disabled?: boolean }, secrets?: SecretRef[], guardrails?: { maxSteps?: number, timeoutSeconds?: number, unbounded?: boolean } }`
+**Input:** `{ task: string, target: CaptureTarget | { targetId: string }, model: ModelConfig, secrets?: SecretRef[], guardrails?: { maxSteps?: number, timeoutSeconds?: number, maxBatchActions?: number, unbounded?: boolean } }`
 **Output:** `{ runId: string }`
-Returns immediately — does not wait for the run to finish. Same non-blocking two-call shape as `start_recording`: call this, the operator perceives/acts/records on its own, then poll `get_operator_run` or wait for completion. Runs `daemon`-backed.
+Returns immediately — does not wait for the run to finish. Same non-blocking two-call shape as `start_recording`: call this, the operator perceives and acts on its own, then poll `get_operator_run` or wait for completion. Runs `daemon`-backed.
+
+`target` is **the same target selector `start_recording` takes** — the identical type, reused, not an operator-specific parallel shape. It is what the operator perceives (`captureFrame`) and drives, and what its bounds clamp is evaluated against. An orchestrator that wants a recording of the run passes the same selector to both calls; that shared value is the only thing the two capabilities have in common, and neither learns of the other through it.
+
+The input above is **exhaustive** — `task`, `target`, model/provider config, guardrails/planning config. See `contracts/operator.md` for the canonical `OperatorRunOptions` shape; this tool accepts exactly its members and nothing else.
 
 **Why this stays non-blocking and daemon-backed, unchanged, even though Phase 20 made `windower operate` block by default on the CLI (settled — do not relitigate):**
-- **Host timeouts.** MCP hosts impose per-tool-call timeouts far shorter than `DEFAULT_OPERATOR_TIMEOUT_MS`. A blocking `run_operator` would time out at the host well before a real operator run finishes, and the run itself — recording, synthetic input, model calls — would be orphaned server-side with no way for the calling agent to reach it again.
+- **Host timeouts.** MCP hosts impose per-tool-call timeouts far shorter than `DEFAULT_OPERATOR_TIMEOUT_MS`. A blocking `run_operator` would time out at the host well before a real operator run finishes, and the run itself — synthetic input, model calls — would be orphaned server-side with no way for the calling agent to reach it again.
 - **Cross-surface visibility.** A run started here must stay visible to `windower operate status` from a terminal, and to a second MCP host attached to the same daemon. That requires a shared, daemon-backed owner of run state — a run living only inside one MCP server process's memory (the shape a blocking call would need) can't satisfy either.
 - **Consistency with `start_recording`/`stop_recording`.** The two-call `run_operator`/`get_operator_run` shape deliberately mirrors the existing `start_recording`/`stop_recording` pattern — MCP's blocking-vs-non-blocking story stays uniform across both features rather than diverging just because the CLI's default changed.
 
 The CLI's `windower operate` blocking-by-default change and its `--detach` opt-out (see `contracts/cli.md`) are a CLI-only ergonomics change; they do not alter this tool's contract.
+
+**Recording independence (Phase 21, normative).** `run_operator` is completely unaware of recording. The operator **MUST NOT**:
+
+1. know whether a recording exists;
+2. start a recording;
+3. stop a recording;
+4. look up a recording (by id, by target, or by any other means);
+5. route frames through a recording session;
+6. carry a recording identifier, including for timeline correlation.
+
+**The same `OperatorRun` MUST behave identically whether the screen is being recorded or not.** A recording is neither an input to nor an output of a run, and `get_operator_run` exposes no field describing one. Symmetrically, `get_session`/`list_sessions` expose **no** field describing an operator run: a `RecordingSession` must not know whether it is recording a human, Windower Operator, Claude Code, Playwright, another agent, or nothing at all (see `data-model.md`'s `RecordingSession` invariant).
+
+**Breaking change (Phase 21) to Phase 19's shipped surface.** `run_operator` previously accepted a `recording` option and started/owned a recording of its own ("standalone mode"); a Phase 21 draft additionally proposed a `sessionId` input pointing a run at an existing session ("attach mode"). **Both are removed** — the tool accepts neither member, and the `sessionId`-vs-`recording` mutual-exclusivity `INVALID_ARGS` rule is moot and deleted rather than kept as a no-op. Rationale: standalone mode required the Operator to start a recording and attach mode required it to hold a recording identifier; each independently violates the prohibitions above, and either one preserves the lifecycle coupling this correction exists to eliminate. Callers relying on the all-in-one call migrate to the orchestrated shape below. Passing `sessionId` or `recording` now fails as an unrecognized member.
+
+**The orchestrated shape.** Recording and Operator are peer capabilities the caller sequences (`spec.md` §1.2):
+
+```
+recording = start_recording({ target })
+operator  = run_operator({ target, task })
+poll get_operator_run(operator.runId) until terminal
+stop_recording(recording.sessionId)
+```
+
+Both calls take the same `target`. The caller owns the recording end to end — the run never stops or cancels it under **any** outcome (`succeeded`, `failed`, `aborted`, `timed_out`, or a crashed operator loop), because it has no way to name it. The orchestrator holds both ids because it created both; Windower never joins them. This does not alter the non-blocking, `daemon`-backed reasoning above.
+
+Correlating a run's `plan`/`action`/`checkpoint`/`narration`/`result` events with a recording's captured cursor/mouse/keyboard/window events is the **orchestration** plane's job. The daemon MAY do it by wall-clock, in memory, without either capability referencing the other; there is deliberately no persistent `DemoRun`/`WorkflowRun` model.
+
+There is deliberately **no** push/event-stream either — the heavier alternative was evaluated and rejected in Phase 21; polling `get_operator_run` is sufficient.
+
+**Error codes** (in addition to the shared sidecar/daemon taxonomy):
+- `OPERATOR_LOOP_CRASHED` — the operator's decision-loop process died unexpectedly. The `OperatorRun` transitions to `failed` with this code. No recording anywhere on the machine is touched, because the run never held one.
+- `OPERATOR_BATCH_LIMIT_EXCEEDED` — a turn issued more action tool calls than `guardrails.maxBatchActions` allows. Non-terminal: the over-limit actions are skipped, the step closes, the run continues (see `contracts/operator.md` §Action batching).
 
 ## `get_operator_run`
 **Input:** `{ runId: string }`
@@ -90,7 +126,7 @@ The CLI's `windower operate` blocking-by-default change and its `--detach` opt-o
 Responds first, then shuts the daemon process down. Before this addition there was no way to cleanly stop a running daemon over the wire (only `SIGTERM`, unreachable from a plain RPC client) — `contracts/cli.md`'s `daemon status|stop` explicitly calls for lifecycle control from the CLI, so the protocol was extended rather than the CLI reaching around it (per repo `CLAUDE.md` — "protocol before platform").
 
 **`mode` (Phase 20):**
-- `"graceful"` (default) — stop accepting new connections, abort active operator runs (their existing finalizer stops the recording cleanly), `stopRecording` every session still in `recording` so video, manifest, and `.events.json` all land, then close the socket, unlink `~/.windower/daemon.json`, and exit. Bounded to roughly 30s; if it doesn't complete in time it escalates to `immediate`.
+- `"graceful"` (default) — stop accepting new connections, abort active operator runs (each transitions to `aborted` and is persisted; no recording is touched, since a run never owns one), `stopRecording` every session still in `recording` so video, manifest, and `.events.json` all land, then close the socket, unlink `~/.windower/daemon.json`, and exit. Bounded to roughly 30s; if it doesn't complete in time it escalates to `immediate`.
 - `"immediate"` — closes the socket and exits without waiting for in-flight sessions or operator runs to finalize. Matches the pre-Phase-20 behavior of `shutdown`; capture processes for any still-`recording` session are left orphaned and the next daemon start rewrites those sessions to `failed`, same as before. Use only when graceful shutdown has already failed or is known to be unsafe to wait for.
 
 Full lifecycle semantics (lockfile, `hello` version handshake, `DAEMON_BUSY`) are specified in `contracts/daemon-rpc.md`.

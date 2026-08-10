@@ -2,11 +2,15 @@ import { mkdtemp, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OperatorRunOptions, OperatorStep, ResolvedSecret } from "@windower/core";
-import { OperatorRunSchema, parseModelConfig } from "@windower/core";
+import {
+  DEFAULT_OPERATOR_MAX_BATCH_ACTIONS,
+  OperatorRunSchema,
+  parseModelConfig,
+} from "@windower/core";
 import { describe, expect, it } from "vitest";
 import { OPERATOR_ERROR_CODES } from "./errors.js";
 import { type OperatorRunInternals, runOperator } from "./run.js";
-import { createFakeDeps, createScriptedModel } from "./test-helpers/fakes.js";
+import { FAKE_TARGET, createFakeDeps, createScriptedModel } from "./test-helpers/fakes.js";
 import { framesDirFor } from "./transcript.js";
 
 const BOUNDS = { x: 0, y: 0, width: 1920, height: 1080 };
@@ -26,8 +30,10 @@ function makeOptions(
     secrets: [],
     maxSteps: 10,
     timeoutMs: 60_000,
+    maxBatchActions: DEFAULT_OPERATOR_MAX_BATCH_ACTIONS,
     unbounded: false,
     bounds: BOUNDS,
+    target: FAKE_TARGET,
     signal: new AbortController().signal,
     ...overrides,
   };
@@ -366,7 +372,7 @@ describe("runOperator — transcript", () => {
     expect(run.steps).toHaveLength(3);
   });
 
-  it("stores frames as sibling files referenced by hash, never inlined base64", async () => {
+  it("stores frames in the run's own frames/ dir, referenced by hash, never inlined base64", async () => {
     const transcriptPath = await tempTranscriptPath();
     const model = createScriptedModel([{ toolCalls: [{ name: "done", args: { summary: "ok" } }] }]);
     const result = await runOperator(
@@ -379,7 +385,11 @@ describe("runOperator — transcript", () => {
     const frames = await readdir(framesDirFor(transcriptPath));
     expect(frames).toHaveLength(1);
     expect(frames[0]).toMatch(/^[0-9a-f]{16}\.png$/);
-    expect(result.steps[0]?.observationRef).toBe(`demo.mp4.operator.frames/${frames[0]}`);
+    // Operator-owned storage: the ref is relative to the run's own directory
+    // and derives nothing from a video filename — contracts/operator.md
+    // §Transcript format.
+    expect(result.steps[0]?.observationRef).toBe(`frames/${frames[0]}`);
+    expect(result.steps[0]?.observationRef).not.toMatch(/\.mp4|operator\.frames/);
   });
 
   it("leaves a usable partial transcript when a run dies mid-flight", async () => {

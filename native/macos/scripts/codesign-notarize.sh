@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 #
-# codesign-notarize.sh — codesign + notarize the windower-sidecar-macos binary.
+# codesign-notarize.sh — codesign + notarize ONE sidecar binary.
+#
+# Phase 21 split the single sidecar into two executables
+# (windower-capture-macos, windower-control-macos); this script signs one at a
+# time, and package.json's `codesign` script invokes it once per binary.
 #
 # Usage:
-#   ./scripts/codesign-notarize.sh [path/to/windower-sidecar-macos]
+#   ./scripts/codesign-notarize.sh [path/to/binary]
 #
 # Default binary path is the swift build (release) output:
-#   .build/release/windower-sidecar-macos
+#   .build/release/windower-capture-macos
 #
 # Required environment variables:
 #   DEVELOPER_ID_APPLICATION  - Codesigning identity, e.g.
@@ -23,7 +27,7 @@
 
 set -euo pipefail
 
-BINARY_PATH="${1:-.build/release/windower-sidecar-macos}"
+BINARY_PATH="${1:-.build/release/windower-capture-macos}"
 
 fail() {
   echo "error: $1" >&2
@@ -61,7 +65,7 @@ echo "==> Verifying codesign"
 codesign --verify --verbose "$BINARY_PATH"
 
 # notarytool needs a zip/dmg/pkg to submit, not a bare executable.
-NOTARIZE_ZIP="$(mktemp -d)/windower-sidecar-macos.zip"
+NOTARIZE_ZIP="$(mktemp -d)/$(basename "$BINARY_PATH").zip"
 echo "==> Zipping $BINARY_PATH for notarization submission -> $NOTARIZE_ZIP"
 ditto -c -k --keepParent "$BINARY_PATH" "$NOTARIZE_ZIP"
 

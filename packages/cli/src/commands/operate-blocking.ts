@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { basename, dirname, extname, join } from "node:path";
+import { join } from "node:path";
 import {
   type CaptureTarget,
+  DEFAULT_OPERATOR_MAX_BATCH_ACTIONS,
   DEFAULT_OPERATOR_MAX_STEPS,
   DEFAULT_OPERATOR_TIMEOUT_MS,
   DaemonError,
@@ -13,18 +14,19 @@ import {
   type ResolvedSecret,
   type RunOperator,
   type RunOperatorParams,
-  type SidecarClient,
   SidecarError,
   spawnSidecar as realSpawnSidecar,
   requiredCapabilityForInputAction,
 } from "@windower/core";
 import {
+  type CaptureAccess,
+  CaptureLock,
+  ControlEngine,
   OperatorRunStore,
   PassthroughService,
-  type RecordingEngine,
   SecretResolver,
   type SidecarFactory,
-  type SidecarHandle,
+  operatorRunsDir,
   redactSecrets,
 } from "@windower/engine";
 
@@ -43,6 +45,11 @@ import {
  * `daemon`-mode (`operate --detach`) implementation, and this module does not
  * share its private internals (per the phase brief, "wiring a NEW caller,
  * not touching loop internals").
+ *
+ * Phase 21: this path records nothing and knows nothing about recording. A
+ * caller who wants video runs `windower start` before and `windower stop`
+ * after — three independent calls it sequences itself
+ * (contracts/operator.md §Ownership).
  */
 
 /** Resolved through a non-literal specifier so `@windower/cli` — and every command that
@@ -101,9 +108,9 @@ export function renderOperatorStepLine(step: OperatorStep): string {
   return `[operate] step ${step.index + 1} @ ${seconds}s: ${calls}`;
 }
 
-function transcriptPathFor(outputPath: string): string {
-  const ext = extname(outputPath);
-  return join(dirname(outputPath), `${basename(outputPath, ext)}.operator.json`);
+/** Operator-owned storage, derived from the run id — contracts/operator.md §Transcript format. */
+function transcriptPathFor(runId: string): string {
+  return join(operatorRunsDir(), runId, "transcript.json");
 }
 
 function toDaemonError(err: unknown): DaemonError {
@@ -115,13 +122,14 @@ function toDaemonError(err: unknown): DaemonError {
 export interface RunOperatorBlockingOptions {
   /** Fires when the model calls `screenshot`/`click`/etc. — used to render step progress to stderr. */
   onStep?: (step: OperatorStep) => void;
-  /** SIGINT wires here — aborting finalizes (not discards) any active recording, same as a normal completion. */
+  /** SIGINT wires here — aborting ends the run and touches nothing else. */
   signal: AbortSignal;
-  /** The `RecordingEngine` behind the invoking CLI's `LocalWindower`/`withBackend` call — reused so `--no-record`
-   *  and recording-backed runs share the exact same session/manifest machinery as `start`/`stop`. */
-  recordingEngine: RecordingEngine;
   /** Injectable for tests — defaults to `@windower/core`'s real `spawnSidecar`. */
   spawnSidecar?: SidecarFactory;
+  /** Capture surface (screen-capture exclusivity seam); defaults to a `CaptureLock` over `spawnSidecar`. */
+  capture?: CaptureAccess;
+  /** Control surface for input/window control; defaults to a `ControlEngine` over `spawnSidecar`. */
+  control?: ControlEngine;
 }
 
 /**
@@ -137,20 +145,38 @@ export async function runOperatorBlocking(
   const store = new OperatorRunStore();
   await store.load();
 
+  const spawnSidecar = options.spawnSidecar ?? realSpawnSidecar;
+  const capture = options.capture ?? new CaptureLock({ spawnSidecar });
+  // `surface: "control"` is load-bearing — `SpawnSidecarOptions.surface`
+  // defaults to `"capture"`, so an unqualified `spawnControl` would start the
+  // *capture* binary for every `performInput`/`resizeWindow`: a second
+  // ScreenCaptureKit process next to a possibly live recording, to serve calls
+  // that touch no capture state at all. Same fix as
+  // `packages/engine/src/operator-run-engine.ts`. It still takes no capture
+  // lock (`contracts/screen-capture-exclusivity.md` §What never takes this
+  // lock).
+  const control =
+    options.control ??
+    new ControlEngine({ spawnControl: spawnSidecar, spawnOptions: { surface: "control" } });
+  const passthrough = new PassthroughService(spawnSidecar, { capture });
+  const secretResolver = new SecretResolver();
+
+  // Resolved before the record exists: an `OperatorRun` without a resolved
+  // target is not a representable value, so an unresolvable selector is a
+  // rejected call rather than a persisted run.
+  const target = await resolveOperatorTarget(passthrough, params.target);
   const runId = randomUUID();
+  const transcriptPath = transcriptPathFor(runId);
   let run: OperatorRun = {
     id: runId,
     state: "pending",
     task: params.task,
+    target,
     model: params.model,
     steps: [],
     startedAt: nowIso(),
   };
   await store.save(run);
-
-  const spawnSidecar = options.spawnSidecar ?? realSpawnSidecar;
-  const passthrough = new PassthroughService(spawnSidecar);
-  const secretResolver = new SecretResolver();
 
   let secrets: ResolvedSecret[];
   try {
@@ -166,63 +192,15 @@ export async function runOperatorBlocking(
     throw daemonErr;
   }
 
-  const recordingDisabled = params.recording?.disabled === true;
-  let sessionId: string | undefined;
-  let transientSidecar: SidecarHandle | undefined;
-  let client: SidecarClient;
-  let target: CaptureTarget;
-  let transcriptPath: string | undefined;
-
-  try {
-    target = await resolveOperatorTarget(passthrough);
-    if (recordingDisabled) {
-      // `--no-record` still needs a sidecar for performInput/captureFrame —
-      // same one-off spawn shape `PassthroughService` uses, held for the run.
-      transientSidecar = spawnSidecar({});
-      client = transientSidecar.client;
-    } else {
-      const started = await options.recordingEngine.startRecording({
-        target,
-        video: params.recording?.video,
-        audio: params.recording?.audio,
-        outputDir: params.recording?.outputDir,
-      });
-      sessionId = started.sessionId;
-      const sessionClient = options.recordingEngine.getSidecarClient(sessionId);
-      if (!sessionClient) {
-        throw new DaemonError(
-          "INTERNAL_ERROR",
-          `Session "${sessionId}" has no active sidecar immediately after start`,
-        );
-      }
-      client = sessionClient;
-      const outputPath = options.recordingEngine.getPlannedOutputPath(sessionId);
-      if (outputPath) {
-        transcriptPath = transcriptPathFor(outputPath);
-        options.recordingEngine.setOperatorRunPath(sessionId, transcriptPath);
-      }
-    }
-  } catch (err) {
-    const daemonErr = toDaemonError(err);
-    await transientSidecar?.terminate().catch(() => {});
-    await store.save({
-      ...run,
-      state: "failed",
-      endedAt: nowIso(),
-      error: { code: daemonErr.code, message: daemonErr.message },
-    });
-    throw daemonErr;
-  }
-
-  const capabilities = await client
-    .describe()
+  const captureCapabilities = await capture
+    .withCaptureClient((client) => client.describe())
     .then((result) => result.capabilities as readonly string[])
     .catch(() => [] as readonly string[]);
 
-  const deps = createDeps({ client, capabilities, sessionId, target, passthrough });
+  const deps = createDeps({ captureCapabilities, target, capture, control, passthrough });
 
   const guardrails = params.guardrails ?? {};
-  run = { ...run, state: "running", sessionId, transcriptPath };
+  run = { ...run, state: "running", transcriptPath };
   await store.save(run);
 
   let aborted = false;
@@ -246,7 +224,9 @@ export async function runOperatorBlocking(
           guardrails.timeoutSeconds !== undefined
             ? Math.round(guardrails.timeoutSeconds * 1000)
             : DEFAULT_OPERATOR_TIMEOUT_MS,
+        maxBatchActions: guardrails.maxBatchActions ?? DEFAULT_OPERATOR_MAX_BATCH_ACTIONS,
         unbounded: guardrails.unbounded ?? false,
+        target,
         bounds: target.bounds,
         transcriptPath,
         signal: options.signal,
@@ -273,22 +253,11 @@ export async function runOperatorBlocking(
     options.signal.removeEventListener("abort", onAbort);
   }
 
-  // Finalize: stop the recording (video/manifest/event timeline all land,
-  // same as a normal `stop`) regardless of how the loop ended — including on
-  // SIGINT-triggered abort, per contracts/cli.md: "Ctrl-C aborts the run and
-  // finalizes (not discards) any active recording, same as a normal
-  // completion."
-  if (sessionId) {
-    try {
-      const session = options.recordingEngine.getSession({ sessionId });
-      if (session.state === "recording") {
-        await options.recordingEngine.stopRecording({ sessionId });
-      }
-    } catch (err) {
-      console.error(`[operate] stopping recording for run ${runId} failed:`, err);
-    }
-  }
-  await transientSidecar?.terminate().catch(() => {});
+  // Finalize: write the run's terminal state, and nothing else. There is no
+  // recording to consult — a caller that started one around this run stops it
+  // itself (contracts/operator-loop-protocol.md §OPERATOR_LOOP_CRASHED: "a
+  // branch there would be a defect").
+  if (options.control === undefined) await control.shutdown().catch(() => {});
 
   const current = store.get(runId) ?? run;
   const steps = result.steps.length > 0 ? redactSecrets(result.steps, secrets) : current.steps;
@@ -298,35 +267,51 @@ export async function runOperatorBlocking(
     state: finalState,
     steps,
     endedAt: nowIso(),
+    // The run's `done`/`fail` summary is persisted, not just returned, so
+    // `windower operate status` and `get_operator_run` show it too — the same
+    // record either path produces (contracts/operator.md §"How they surface").
+    ...(result.summary === undefined ? {} : { summary: redactSecrets(result.summary, secrets) }),
     ...(result.error ? { error: redactSecrets(result.error, secrets) } : {}),
   };
   await store.save(finalRun);
   return finalRun;
 }
 
+/**
+ * `OperatorDeps` over the two independent peers a run needs: the capture
+ * surface for observations (always through the screen-capture exclusivity
+ * seam, so there is only ever one ScreenCaptureKit process) and the control
+ * surface for actions (which never takes that lock). Capability gating is per
+ * call against `describe().capabilities`, never a platform string.
+ */
 function createDeps(ctx: {
-  client: SidecarClient;
-  capabilities: readonly string[];
-  sessionId?: string;
+  captureCapabilities: readonly string[];
   target: CaptureTarget;
+  capture: CaptureAccess;
+  control: ControlEngine;
   passthrough: PassthroughService;
 }): OperatorDeps {
-  const requireCapability = (capability: string): void => {
-    if (!ctx.capabilities.includes(capability)) {
+  const requireCaptureCapability = (capability: string): void => {
+    if (!ctx.captureCapabilities.includes(capability)) {
       throw new DaemonError("UNSUPPORTED_CAPABILITY", `Sidecar does not advertise "${capability}"`);
     }
   };
 
   return {
     captureFrame: async (frameParams) => {
-      requireCapability("screenshot");
+      requireCaptureCapability("screenshot");
       try {
-        return await ctx.client.captureFrame({
-          target: ctx.target,
-          format: frameParams.format,
-          maxWidth: frameParams.maxWidth,
-          quality: frameParams.quality,
-        });
+        // Addressed by TARGET, never by a recording — whether the frame comes
+        // from a live capture source or a one-shot capture is unobservable
+        // here (contracts/operator.md §Recording independence).
+        return await ctx.capture.withCaptureClient((client) =>
+          client.captureFrame({
+            target: ctx.target,
+            format: frameParams.format,
+            maxWidth: frameParams.maxWidth,
+            quality: frameParams.quality,
+          }),
+        );
       } catch (err) {
         throw toDaemonError(err);
       }
@@ -334,51 +319,19 @@ function createDeps(ctx: {
     performInput: async (actions: InputAction[]) => {
       for (const action of actions) {
         const capability = requiredCapabilityForInputAction(action.kind);
-        if (capability) requireCapability(capability);
+        if (capability) await ctx.control.requireCapability(capability);
       }
       try {
-        return await ctx.client.performInput({
-          ...(ctx.sessionId ? { sessionId: ctx.sessionId } : {}),
-          actions,
-        });
+        // No `sessionId`: it is an optional correlation hint on the wire and
+        // an operator run has none to give. Nothing replaces it.
+        return await ctx.control.performInput({ actions });
       } catch (err) {
         throw toDaemonError(err);
       }
     },
-    // Deliberately NOT routed through `ctx.passthrough`: `PassthroughService`
-    // spawns a brand-new, separate `windower-sidecar-macos` process for each
-    // call and terminates it immediately after (by design, for callers with
-    // no active session — see `packages/engine/src/passthrough.ts`). But
-    // `list_targets`/`resize_window` here are called *during* an active
-    // operator run, i.e. while `ctx.client`'s sidecar process has a live
-    // `SCStream` recording. OS-level tracing (bugs.spec.md #6) showed that
-    // spawning ANY second ScreenCaptureKit-capable process on the same
-    // machine while a first process's `SCStream` is live — even briefly,
-    // even for an unrelated `SCShareableContent` enumeration in the
-    // transient process, followed by that transient process exiting —
-    // reliably kills the FIRST process's stream permanently (replayd logs
-    // `RPClientProxy stream:didStopWithError:` for the live session's stream
-    // at the exact moment the transient process's enumeration call lands).
-    // Calling `ctx.client.enumerateTargets`/`ctx.client.resizeWindow`
-    // directly reuses the SAME already-running sidecar process as the live
-    // capture, so no second process — and no stream-killing side effect — is
-    // ever introduced. Mirrors the identical fix in
-    // `packages/engine/src/operator-run-engine.ts`'s `createDeps` — this
-    // file is `operate`'s parallel local/blocking implementation and does
-    // not share that one's internals (see this file's header comment), so
-    // the fix has to be applied in both places.
     listTargets: async (kinds) => {
       try {
-        // "app" is a valid operator/CLI filter but the sidecar protocol only
-        // enumerates "display"|"window" (region has no independent ID) —
-        // same filtering `PassthroughService.listTargets` applies.
-        const sidecarKinds = kinds?.filter(
-          (kind): kind is "display" | "window" => kind === "display" || kind === "window",
-        );
-        if (kinds && sidecarKinds && sidecarKinds.length === 0) {
-          return [];
-        }
-        const { targets } = await ctx.client.enumerateTargets({ kinds: sidecarKinds });
+        const { targets } = await ctx.passthrough.listTargets(kinds ? { kinds: [...kinds] } : {});
         return targets;
       } catch (err) {
         throw toDaemonError(err);
@@ -386,7 +339,7 @@ function createDeps(ctx: {
     },
     resizeWindow: async (targetId, bounds: Rect) => {
       try {
-        return await ctx.client.resizeWindow({ targetId, bounds });
+        return await ctx.control.resizeWindow({ targetId, bounds });
       } catch (err) {
         throw toDaemonError(err);
       }
@@ -395,19 +348,20 @@ function createDeps(ctx: {
 }
 
 /**
- * `run_operator`/`operate` take no `target` — the operator drives whatever
- * the user is looking at — so the run targets the primary display, falling
- * back to the first enumerated one. Mirrors
- * `OperatorRunEngine.resolveOperatorTarget` exactly.
+ * Resolves the caller's target selector — the same `CaptureTarget |
+ * { targetId }` shape `windower start` takes (contracts/operator.md §Inputs),
+ * resolved once before the run starts. Mirrors
+ * `OperatorRunEngine.resolveOperatorTarget`.
  */
-async function resolveOperatorTarget(passthrough: PassthroughService): Promise<CaptureTarget> {
-  const { targets } = await passthrough.listTargets({ kinds: ["display"] });
-  const displays = targets.filter(
-    (t): t is Extract<CaptureTarget, { kind: "display" }> => t.kind === "display",
-  );
-  const target = displays.find((t) => t.isPrimary) ?? displays[0];
-  if (!target) {
-    throw new DaemonError("TARGET_NOT_FOUND", "No display available for the operator run");
+async function resolveOperatorTarget(
+  passthrough: PassthroughService,
+  selector: RunOperatorParams["target"],
+): Promise<CaptureTarget> {
+  if ("kind" in selector) return selector;
+  const { targets } = await passthrough.listTargets({});
+  const found = targets.find((t) => "id" in t && t.id === selector.targetId);
+  if (!found) {
+    throw new DaemonError("TARGET_NOT_FOUND", `No target with id "${selector.targetId}"`);
   }
-  return target;
+  return found;
 }

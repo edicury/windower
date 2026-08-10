@@ -30,6 +30,7 @@ import {
   resolveFilenameTemplate,
   resolveUniqueOutputPath,
 } from "./output-resolver.js";
+import { type CaptureAccess, type CaptureHold, CaptureLock } from "./screen-capture-lock.js";
 import type { SessionStore } from "./session-store.js";
 
 /**
@@ -169,6 +170,22 @@ export interface RecordingEngineOptions {
   muxNarration?: MuxNarrationFn;
   /** Injectable — defaults to `InMemoryTargetLock`. A daemon should pass the real file-lock-backed `TargetLock`. */
   targetLock?: TargetLock;
+  /**
+   * The screen-capture exclusivity lock
+   * (`contracts/screen-capture-exclusivity.md`, Phase 21). Defaults to a
+   * `CaptureLock` over `spawnSidecar` — there is deliberately no "no lock"
+   * mode, since any code path that spawns a capture process without holding
+   * this lock can destabilize `replayd` and kill an unrelated live `SCStream`
+   * (`bugs.spec.md` #6).
+   *
+   * A host that also constructs a `PassthroughService` (or anything else that
+   * enumerates targets / captures frames) should build **one** `CaptureLock`
+   * and pass the same instance to both, so the in-process "already have a
+   * capture sidecar → reuse it" row is taken instead of the host contending
+   * for the lock file against itself. (The hold registry is per-process, so
+   * this is an optimization, not a correctness requirement.)
+   */
+  captureLock?: CaptureLock;
 }
 
 function nowIso(): string {
@@ -214,7 +231,7 @@ function toDaemonError(err: unknown): DaemonError {
  * daemon and a short-lived `record --duration` CLI process each hold their
  * own instance for their own lifetime (`phase-20-daemon-optional.md`,
  * "Extract `@windower/engine`"). Its `activeSidecars`/`eventWriters`/
- * `plannedOutputPaths`/`operatorRunPaths` maps are per-instance and are not
+ * `plannedOutputPaths` map are per-instance and are not
  * shared cross-process — only the injected `TargetLock` is.
  */
 export class RecordingEngine {
@@ -223,13 +240,14 @@ export class RecordingEngine {
   private readonly validateNarrationFileFn: ValidateNarrationFileFn | undefined;
   private readonly muxNarrationFn: MuxNarrationFn | undefined;
   private readonly targetLock: TargetLock;
+  private readonly captureLock: CaptureLock;
   private readonly activeSidecars = new Map<string, SidecarHandle>();
+  /** The long-lived capture-lock hold each recording keeps for its whole duration — released in `cleanupActive`. */
+  private readonly captureHolds = new Map<string, CaptureHold>();
   private readonly eventWriters = new Map<string, EventTimelineWriter>();
   private readonly eventCapabilities = new Map<string, { keystrokes: boolean }>();
   /** Final destination (in the configured output dir) planned at `start`, moved to at `stop` — see output-resolver.ts. */
   private readonly plannedOutputPaths = new Map<string, string>();
-  /** Phase 19: `<recording>.operator.json` for operator-driven sessions, surfaced as `OutputManifest.operatorRunPath`. */
-  private readonly operatorRunPaths = new Map<string, string>();
 
   constructor(options: RecordingEngineOptions) {
     this.store = options.store;
@@ -237,6 +255,19 @@ export class RecordingEngine {
     this.validateNarrationFileFn = options.validateNarrationFile;
     this.muxNarrationFn = options.muxNarration;
     this.targetLock = options.targetLock ?? new InMemoryTargetLock();
+    this.captureLock = options.captureLock ?? new CaptureLock({ spawnSidecar: this.spawnSidecar });
+  }
+
+  /**
+   * The capture-surface seam every non-recording caller should use
+   * (`enumerateTargets`, `captureFrame`, `getPermissions`, …). While a
+   * recording is active this resolves — via row 1 of the acquire-or-wait table
+   * — to that recording's own capture sidecar, so no second ScreenCaptureKit
+   * process is ever spawned alongside a live `SCStream`. With nothing
+   * recording it spawns one under the lock, serialized system-wide.
+   */
+  get captureAccess(): CaptureAccess {
+    return this.captureLock;
   }
 
   /**
@@ -296,33 +327,14 @@ export class RecordingEngine {
     }
   }
 
-  /**
-   * The sidecar client owned by an active session. Phase 19's
-   * `OperatorRunEngine` drives `performInput`/`captureFrame` through the very
-   * same process that is recording, so synthesized input lands inside the
-   * capture rather than in a second, unrelated sidecar.
-   */
-  getSidecarClient(sessionId: string): SidecarClient | undefined {
-    return this.activeSidecars.get(sessionId)?.client;
-  }
-
-  /**
-   * Where this session's video will land at `stop`. Phase 19 derives
-   * `<recording>.operator.json` from it at run start, before the file exists.
-   */
-  getPlannedOutputPath(sessionId: string): string | undefined {
-    return this.plannedOutputPaths.get(sessionId);
-  }
-
-  /**
-   * Links an operator transcript into this session's `OutputManifest` as
-   * `operatorRunPath` (contracts/operator.md §Transcript format). Recorded
-   * here rather than passed to `stopRecording`, since `stop_recording`'s
-   * params are frozen in contracts/mcp-tools.md.
-   */
-  setOperatorRunPath(sessionId: string, operatorRunPath: string): void {
-    this.operatorRunPaths.set(sessionId, operatorRunPath);
-  }
+  // Phase 21: `getSidecarClient`/`getPlannedOutputPath`/`setOperatorRunPath`
+  // are deleted. They existed only so an operator run could borrow a
+  // recording's capture process and point a capture artifact at an operator
+  // artifact — a dependency between two capabilities that must not know each
+  // other exists (`contracts/operator.md` §Ownership, §Transcript format).
+  // Capture-surface access now goes through `CaptureLock` for every caller
+  // alike, which reuses this process's capture sidecar without anyone naming
+  // a session to get at it.
 
   /**
    * Scans loaded sessions for ones stuck in `recording`/`stopping` from a
@@ -426,14 +438,40 @@ export class RecordingEngine {
     };
     await this.store.save(session);
 
-    const handle = this.spawnSidecar({
-      onExit: (info) => {
-        void this.handleSidecarExit(sessionId, info);
-      },
-      onStderrLine: (line) => {
-        console.error(`[RecordingEngine] sidecar[${sessionId}] stderr: ${line}`);
-      },
-    });
+    // Phase 21: the capture sidecar is spawned *under* `~/.windower/capture.lock`
+    // and the hold is kept for the recording's entire duration
+    // (`contracts/screen-capture-exclusivity.md` §Acquire-or-wait row 2). Every
+    // other caller in this process — `list_targets`, the operator's
+    // `captureFrame` — then lands in row 1 and reuses this same capture
+    // sidecar, and every caller in another process is held off by the lock
+    // file rather than spawning a second ScreenCaptureKit process next to this
+    // recording's live `SCStream`.
+    let hold: CaptureHold;
+    try {
+      hold = await this.captureLock.acquireCaptureHold({
+        spawn: {
+          onExit: (info) => {
+            void this.handleSidecarExit(sessionId, info);
+          },
+          onStderrLine: (line) => {
+            console.error(`[RecordingEngine] sidecar[${sessionId}] stderr: ${line}`);
+          },
+        },
+      });
+    } catch (err) {
+      const daemonErr = toDaemonError(err);
+      this.plannedOutputPaths.delete(sessionId);
+      session = {
+        ...session,
+        state: "failed",
+        stoppedAt: nowIso(),
+        error: { code: daemonErr.code, message: daemonErr.message },
+      };
+      await this.store.save(session);
+      throw daemonErr;
+    }
+    this.captureHolds.set(sessionId, hold);
+    const handle = hold.handle;
 
     const writer = new EventTimelineWriter(sessionId);
     this.eventWriters.set(sessionId, writer);
@@ -471,10 +509,12 @@ export class RecordingEngine {
       });
       await handle.client.startCapture({ sessionId, target, video, audio });
     } catch (err) {
-      await handle.terminate().catch(() => {});
+      // `release()` terminates the capture child and unlinks `capture.lock` —
+      // the whole hold, not just the process.
+      this.captureHolds.delete(sessionId);
+      await hold.release().catch(() => {});
       await this.discardEventWriter(sessionId);
       this.plannedOutputPaths.delete(sessionId);
-      this.operatorRunPaths.delete(sessionId);
       const daemonErr = toDaemonError(err);
       session = {
         ...session,
@@ -537,7 +577,10 @@ export class RecordingEngine {
       await this.failSession(session.id, toDaemonError(err));
       throw err;
     } finally {
-      await handle.terminate().catch(() => {});
+      // Terminating the capture child is `cleanupActive` → `CaptureHold.release()`'s
+      // job now, not this call's: the hold is refcounted, so a second
+      // concurrent recording sharing this capture process must not have its
+      // capture killed by *this* session stopping.
       await this.cleanupActive(session.id, session.target);
       this.plannedOutputPaths.delete(session.id);
     }
@@ -552,8 +595,6 @@ export class RecordingEngine {
 
     const outputPath = plannedOutputPath;
     const manifestPath = manifestPathFor(outputPath);
-    const operatorRunPath = this.operatorRunPaths.get(session.id);
-    this.operatorRunPaths.delete(session.id);
 
     const writer = this.eventWriters.get(session.id);
     const capabilities = this.eventCapabilities.get(session.id) ?? { keystrokes: false };
@@ -614,7 +655,6 @@ export class RecordingEngine {
       actualDurationMs: result.actualDurationMs,
       narration,
       eventTimelinePath,
-      operatorRunPath,
     });
     await writeManifest(manifestPath, manifest);
 
@@ -653,12 +693,12 @@ export class RecordingEngine {
     const handle = this.activeSidecars.get(session.id);
     if (handle) {
       await handle.client.cancelCapture({ sessionId: session.id }).catch(() => {});
-      await handle.terminate().catch(() => {});
     }
+    // The capture child is terminated by `cleanupActive` → `CaptureHold.release()`,
+    // and only once the last session sharing it has released.
     await this.cleanupActive(session.id, session.target);
     await this.discardEventWriter(session.id);
     this.plannedOutputPaths.delete(session.id);
-    this.operatorRunPaths.delete(session.id);
 
     await this.store.save({ ...session, state: "canceled", stoppedAt: nowIso() });
     return { canceled: true };
@@ -682,12 +722,11 @@ export class RecordingEngine {
   ): Promise<void> {
     const session = this.store.get(sessionId);
     if (!session || session.state !== "recording") return; // already stopped/canceled via the normal path
-    const handle = this.activeSidecars.get(sessionId);
+    // `cleanupActive` releases this session's capture hold, which terminates
+    // the capture child once no other session is sharing it.
     await this.cleanupActive(sessionId, session.target);
-    await handle?.terminate().catch(() => {});
     await this.discardEventWriter(sessionId);
     this.plannedOutputPaths.delete(sessionId);
-    this.operatorRunPaths.delete(sessionId);
     await this.failSession(
       sessionId,
       new DaemonError("CAPTURE_FAILED", `Sidecar-initiated stop: ${reason}`),
@@ -703,7 +742,6 @@ export class RecordingEngine {
     await this.cleanupActive(sessionId, session.target);
     await this.discardEventWriter(sessionId);
     this.plannedOutputPaths.delete(sessionId);
-    this.operatorRunPaths.delete(sessionId);
     await this.failSession(
       sessionId,
       new DaemonError(
@@ -726,6 +764,12 @@ export class RecordingEngine {
 
   private async cleanupActive(sessionId: string, target: CaptureTarget): Promise<void> {
     this.activeSidecars.delete(sessionId);
+    // Releasing the capture hold terminates the capture child and unlinks
+    // `capture.lock` — after this the machine has no ScreenCaptureKit-holding
+    // process again, and the next caller lands in row 2 (spawn under the lock).
+    const hold = this.captureHolds.get(sessionId);
+    this.captureHolds.delete(sessionId);
+    await hold?.release().catch(() => {});
     await this.targetLock.release(targetKey(target));
   }
 
@@ -747,16 +791,17 @@ export class RecordingEngine {
   ): Promise<CaptureTarget> {
     if ("kind" in target) return target;
 
-    const handle = this.spawnSidecar({});
-    try {
-      const { targets } = await handle.client.enumerateTargets({});
+    // Phase 21: goes through the capture lock rather than spawning its own
+    // sidecar — resolving a target-by-id while another recording is live used
+    // to be exactly the second-`SCShareableContent`-consumer that killed the
+    // first process's stream (`bugs.spec.md` #6).
+    return this.captureLock.withCaptureClient(async (client) => {
+      const { targets } = await client.enumerateTargets({});
       const found = targets.find((t) => "id" in t && t.id === target.targetId);
       if (!found) {
         throw new DaemonError("TARGET_NOT_FOUND", `No target with id "${target.targetId}"`);
       }
       return found;
-    } finally {
-      await handle.terminate().catch(() => {});
-    }
+    });
   }
 }

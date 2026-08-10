@@ -87,10 +87,34 @@ function parseResolution(raw: string | undefined): { width: number; height: numb
 }
 
 /**
+ * `--target`/`--kind`/`--region` → the `CaptureTarget | { targetId }` selector
+ * both `start_recording` and `run_operator` take (contracts/operator.md
+ * §Inputs — "the same target selector `start_recording` takes ... not a new
+ * type"). Exported so `operate` resolves its own target through exactly this
+ * code rather than a parallel implementation.
+ */
+export function buildTargetSelector(opts: {
+  target?: string;
+  kind?: string;
+  region?: string;
+}): StartRecordingParams["target"] {
+  if (!opts.target) {
+    throw new DaemonError("INVALID_ARGS", "--target is required");
+  }
+  const kind = opts.kind ?? "window";
+  if (kind === "region") {
+    if (!opts.region) {
+      throw new DaemonError("INVALID_ARGS", "--region is required when --kind region");
+    }
+    return { kind: "region", displayId: opts.target, bounds: parseRegion(opts.region) };
+  }
+  return { targetId: opts.target };
+}
+
+/**
  * Exported so `operate` (contracts/cli.md `windower operate`) can reuse the
  * exact same video-flag parsing without going through
- * `buildStartRecordingParams` — `run_operator` takes no target, so it needs
- * the video/audio half of the shared flag block only.
+ * `buildStartRecordingParams`.
  */
 export function buildVideo(opts: SharedRecordingOpts): Partial<VideoSettings> | undefined {
   const fps = parseFps(opts.fps);
@@ -134,21 +158,7 @@ export function buildAudio(opts: SharedRecordingOpts): AudioSettings | undefined
 
 /** Builds `start_recording` params from `start`/`record`'s shared CLI flags. */
 export function buildStartRecordingParams(opts: SharedRecordingOpts): StartRecordingParams {
-  if (!opts.target) {
-    throw new DaemonError("INVALID_ARGS", "--target is required");
-  }
-
-  const kind = opts.kind ?? "window";
-  let target: StartRecordingParams["target"];
-  if (kind === "region") {
-    if (!opts.region) {
-      throw new DaemonError("INVALID_ARGS", "--region is required when --kind region");
-    }
-    target = { kind: "region", displayId: opts.target, bounds: parseRegion(opts.region) };
-  } else {
-    target = { targetId: opts.target };
-  }
-
+  const target = buildTargetSelector(opts);
   const video = buildVideo(opts);
   const audio = buildAudio(opts);
 

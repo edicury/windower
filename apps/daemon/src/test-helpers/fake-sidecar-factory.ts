@@ -13,6 +13,14 @@ export interface SpawnedFakeSidecar {
   client: SidecarClient;
   sidecar: FakeSidecar;
   onExit?: (info: { code: number | null; signal: NodeJS.Signals | null }) => void;
+  /**
+   * Which protocol surface the caller asked for — `undefined` means it passed
+   * none, which `SpawnSidecarOptions.surface` resolves to `"capture"`. Tests
+   * assert on this to prove a control-surface call never reaches the capture
+   * binary (`contracts/screen-capture-exclusivity.md` §What never takes this
+   * lock).
+   */
+  surface?: SpawnSidecarOptions["surface"];
 }
 
 /**
@@ -42,7 +50,7 @@ export function createFakeSidecarFactory(options: {
       capabilities: options.capabilities,
       permissions: options.permissions,
     });
-    spawns.push({ client, sidecar, onExit: spawnOptions.onExit });
+    spawns.push({ client, sidecar, onExit: spawnOptions.onExit, surface: spawnOptions.surface });
     return {
       client,
       terminate: async () => {

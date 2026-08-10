@@ -3,10 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "license": "UNLICENSED",
-  "description": "Swift Package wrapper so turbo can drive swift build/swift test for the macOS sidecar.",
+  "description": "Swift Package wrapper so turbo can drive swift build/swift test for the macOS capture + control sidecar binaries.",
   "scripts": {
     "build": "swift build",
-    "test": "swift test",
-    "codesign": "if [ -z \"$DEVELOPER_ID_APPLICATION\" ]; then echo 'skip: DEVELOPER_ID_APPLICATION not set, skipping codesign/notarize (see CODESIGNING.md)'; else ./scripts/codesign-notarize.sh .build/release/windower-sidecar-macos; fi"
+    "test": "swift test && ./scripts/check-no-screencapturekit.sh",
+    "check:linkage": "./scripts/check-no-screencapturekit.sh",
+    "codesign": "if [ -z \"$DEVELOPER_ID_APPLICATION\" ]; then echo 'skip: DEVELOPER_ID_APPLICATION not set, skipping codesign/notarize (see CODESIGNING.md)'; else ./scripts/codesign-notarize.sh .build/release/windower-capture-macos && ./scripts/codesign-notarize.sh .build/release/windower-control-macos; fi"
   }
 }

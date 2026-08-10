@@ -7,10 +7,12 @@ import {
   spawnSidecar as realSpawnSidecar,
   windowerHome,
 } from "@windower/core";
+import { ControlEngine } from "./control-engine.js";
 import { OperatorRunEngine } from "./operator-run-engine.js";
 import { OperatorRunStore } from "./operator-run-store.js";
 import { PassthroughService } from "./passthrough.js";
 import { RecordingEngine, type SidecarFactory } from "./recording-engine.js";
+import { CaptureLock } from "./screen-capture-lock.js";
 import { SessionStore } from "./session-store.js";
 import { FileTargetLock } from "./target-lock.js";
 
@@ -52,17 +54,40 @@ export class LocalWindower implements WindowerBackend {
     const spawnSidecar = options.spawnSidecar ?? realSpawnSidecar;
     this.sessionStore = new SessionStore();
     this.operatorRunStore = new OperatorRunStore();
+    // Phase 21: ONE `CaptureLock` shared by the recording engine and the
+    // passthrough ops, so a `list_targets` issued while this process's own
+    // recording is live takes row 1 of the acquire-or-wait table (reuse the
+    // capture sidecar this process already has — no file I/O, no spawn)
+    // instead of contending with itself for the lock file.
+    const captureLock = new CaptureLock({ spawnSidecar });
+    // The control surface's peer of the same idea: ONE `ControlEngine` shared
+    // by `resize_window` and the operator's `performInput`. It takes no
+    // capture lock — control has no ScreenCaptureKit relationship — and
+    // `surface: "control"` keeps it off the capture binary, whose spawn is
+    // `SpawnSidecarOptions.surface`'s default.
+    const controlEngine = new ControlEngine({
+      spawnControl: spawnSidecar,
+      spawnOptions: { surface: "control" },
+    });
     this.recordingEngine = new RecordingEngine({
       store: this.sessionStore,
       spawnSidecar,
       targetLock: new FileTargetLock(),
+      captureLock,
     });
-    this.passthrough = new PassthroughService(spawnSidecar);
+    this.passthrough = new PassthroughService(spawnSidecar, {
+      capture: captureLock,
+      control: controlEngine,
+    });
     this.operatorRunEngine = new OperatorRunEngine({
       store: this.operatorRunStore,
-      sessionManager: this.recordingEngine,
       passthrough: this.passthrough,
       spawnSidecar,
+      control: controlEngine,
+      // The same capture lock the recording engine and passthrough ops use —
+      // an operator `captureFrame` during this process's own recording is
+      // row 1 of the acquire-or-wait table, not a second capture process.
+      capture: captureLock,
     });
   }
 

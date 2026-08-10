@@ -18,6 +18,14 @@ const skipReasons = missingBuildPrerequisites();
  * This test proves the same behavior end-to-end: a real `kill -9` against
  * the real sidecar OS process, observed through the real daemon's session
  * state machine. Does not duplicate or modify the existing unit test.
+ *
+ * Phase 21 scope: this covers the **capture** surface
+ * (`windower-capture-macos`) only — the binary a recording session spawns.
+ * The phase's exit criteria also call for a control-surface crash-injection
+ * test (`kill -9 windower-control-macos` mid-operator-run must leave the
+ * capture sidecar and in-progress recording completely unaffected); that
+ * needs the `ControlEngine`/operator-loop work to land first and belongs in
+ * its own e2e file.
  */
 describe.skipIf(skipReasons.length > 0)(
   "crash injection: sidecar process killed mid-recording",
@@ -55,7 +63,10 @@ describe.skipIf(skipReasons.length > 0)(
       });
 
       const sidecarPid = await pollUntil(
-        () => findChildPidByCommand(harness.pid, "windower-sidecar-macos"),
+        // Phase 21: a recording's sidecar is the capture-surface binary. A
+        // control-surface (`windower-control-macos`) crash-injection test is
+        // a separate case — see this file's header note.
+        () => findChildPidByCommand(harness.pid, "windower-capture-macos"),
         {
           timeoutMs: 10_000,
           timeoutMessage: "Could not find the spawned sidecar's OS pid via the process table",

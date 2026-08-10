@@ -49,6 +49,17 @@ export const DaemonErrorCodeSchema = z.enum([
   // contracts/daemon-rpc.md's "Error codes" section.
   "DAEMON_VERSION_MISMATCH",
   "DAEMON_BUSY",
+  // Phase 21 (capture/control split).
+  // `OPERATOR_LOOP_CRASHED` — the operator decision-loop child process exited
+  // without sending `reportResult` (non-zero exit, signal, `kill -9`, EOF, or
+  // an unanswered `ping`). Daemon-internal, never on the loop wire; see
+  // contracts/operator-loop-protocol.md §OPERATOR_LOOP_CRASHED.
+  "OPERATOR_LOOP_CRASHED",
+  // `SCREEN_CAPTURE_BUSY` — the ScreenCaptureKit resource is held by a live
+  // process this caller cannot route to: a same-home holder that outlived the
+  // bounded wait budget, or any holder from a different WINDOWER_HOME. See
+  // contracts/screen-capture-exclusivity.md §Error codes.
+  "SCREEN_CAPTURE_BUSY",
 ]);
 export type DaemonErrorCode = z.infer<typeof DaemonErrorCodeSchema>;
 
@@ -158,18 +169,21 @@ export type ListSessionsResult = z.infer<typeof ListSessionsResultSchema>;
 // contracts/mcp-tools.md §run_operator + contracts/cli.md `windower operate`.
 // Returns immediately with `{ runId }` — same non-blocking two-call shape as
 // `start_recording`; poll `get_operator_run` for progress.
-export const RunOperatorParamsSchema = z.object({
+// An operator run is fully specified by `{ task, target, model, secrets?,
+// guardrails? }` and nothing else (contracts/operator.md §Inputs). It is
+// recording-unaware: there is no `sessionId` member and no `recording` member,
+// and the attach-vs-standalone refinement that used to police them is gone
+// rather than kept as a no-op. `.strict()` is what makes passing either one
+// `INVALID_ARGS` — by schema strictness, not by refinement.
+export const RunOperatorParamsSchema = z.strictObject({
   task: z.string().min(1),
+  /**
+   * The **same target selector `start_recording` takes** — resolved through
+   * `enumerateTargets` exactly as capture does, and the source of the bounds
+   * clamp. Not a parallel operator-only type.
+   */
+  target: z.union([CaptureTargetSchema, z.object({ targetId: z.string() })]),
   model: ModelConfigSchema,
-  recording: z
-    .object({
-      video: VideoSettingsSchema.partial().optional(),
-      audio: AudioSettingsSchema.partial().optional(),
-      outputDir: z.string().optional(),
-      /** `--no-record`: run the operator without wrapping it in a recording. */
-      disabled: z.boolean().optional(),
-    })
-    .optional(),
   secrets: z.array(SecretRefSchema).optional(),
   guardrails: OperatorGuardrailsSchema.optional(),
 });

@@ -9,8 +9,8 @@
  */
 import {
   type DaemonClient,
-  type DaemonHelloEnv,
   DaemonError,
+  type DaemonHelloEnv,
   ensureDaemonRunning,
 } from "@windower/core";
 import { ZodError } from "zod";

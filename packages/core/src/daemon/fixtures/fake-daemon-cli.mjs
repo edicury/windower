@@ -97,6 +97,14 @@ function fakeRun(id) {
     state: "running",
     task: "fake task",
     model: { provider: "anthropic", model: "claude-sonnet-5" },
+    target: {
+      kind: "display",
+      id: "display:0",
+      name: "Fake Display",
+      bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+      isPrimary: true,
+      scaleFactor: 1,
+    },
     steps: [],
     startedAt: new Date().toISOString(),
   };

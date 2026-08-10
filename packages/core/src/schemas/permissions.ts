@@ -72,6 +72,38 @@ export const ApiKeyEnvVarReportSchema = z.object({
 });
 export type ApiKeyEnvVarReport = z.infer<typeof ApiKeyEnvVarReportSchema>;
 
+/**
+ * ScreenCaptureKit exclusivity diagnostics for `doctor`
+ * (`contracts/screen-capture-exclusivity.md`).
+ *
+ * This is a *diagnostic*, not a permission — it lives here because `doctor`'s
+ * report is a `PermissionReport` plus optional fields, per `data-model.md`
+ * (there is deliberately no sibling `DoctorReport` type). Carrying it here is
+ * what keeps `doctor --json` schema-validated.
+ *
+ * It records only what the lock file already says. It is NOT a routing or
+ * discovery mechanism: `doctor` never connects to the holder, never steals a
+ * live lock, and never spawns a second ScreenCaptureKit process.
+ */
+export const CaptureLockReportSchema = z.object({
+  /** `~/.windower/capture.lock`, resolved against this process's `WINDOWER_HOME`. */
+  path: z.string(),
+  /** Another live process held the lock while `doctor` ran. */
+  held: z.boolean(),
+  /**
+   * `doctor` could not probe the capture surface because of that holder, so
+   * the capture-derived fields are **unknown, not denied**.
+   */
+  busy: z.boolean(),
+  /** Holder identity — diagnostics only, verbatim from the lock payload. */
+  pid: z.number().optional(),
+  acquiredAt: z.string().optional(),
+  windowerHome: z.string().optional(),
+  /** The `SCREEN_CAPTURE_BUSY` message, verbatim. */
+  message: z.string().optional(),
+});
+export type CaptureLockReport = z.infer<typeof CaptureLockReportSchema>;
+
 export const PermissionReportSchema = z.object({
   screenRecording: PermissionStatusSchema,
   accessibility: PermissionStatusSchema,
@@ -89,5 +121,8 @@ export const PermissionReportSchema = z.object({
   activeSessions: z.number().optional(),
   activeRuns: z.number().optional(),
   apiKeyEnvVars: z.array(ApiKeyEnvVarReportSchema).optional(),
+
+  // Phase 21 addition — see data-model.md.
+  captureLock: CaptureLockReportSchema.optional(),
 });
 export type PermissionReport = z.infer<typeof PermissionReportSchema>;

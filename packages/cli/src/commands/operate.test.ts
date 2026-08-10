@@ -11,6 +11,7 @@ import {
   WINDOWER_HOME_ENV,
   ensureDaemonRunning,
 } from "@windower/core";
+import { OperatorRunStore } from "@windower/engine";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EXIT_GENERIC_FAILURE, EXIT_INVALID_ARGS, exitCodeForError } from "../exit-codes.js";
@@ -25,7 +26,6 @@ import {
   renderRunOperatorResult,
   runBlocking,
 } from "./operate.js";
-import { addSharedRecordingFlags } from "./record-params.js";
 
 vi.mock("@windower/core", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@windower/core")>();
@@ -42,6 +42,14 @@ function run(overrides: Partial<OperatorRun> = {}): OperatorRun {
     id: "op-1",
     state: "running",
     task: "Open the app and create an incident",
+    target: {
+      kind: "display",
+      id: "d1",
+      name: "Built-in",
+      isPrimary: true,
+      bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+      scaleFactor: 2,
+    },
     model: { provider: "anthropic", model: "claude-sonnet-5" },
     steps: [],
     startedAt: "2026-08-09T10:00:00.000Z",
@@ -51,7 +59,7 @@ function run(overrides: Partial<OperatorRun> = {}): OperatorRun {
 
 /**
  * Parses an `operate` argv through the real commander flag registration
- * (`addSharedRecordingFlags` + `addOperateFlags`) without touching a daemon,
+ * (`addOperateFlags`) without touching a daemon,
  * so the flag surface itself — repeatability, `--no-*` negation, argument
  * arity — is covered, not just the param builder.
  */
@@ -68,11 +76,9 @@ function parseOperateArgv(argv: string[]): {
   // thrown `CommanderError` is what the assertions look at.
   program.configureOutput({ writeErr: () => {} });
   const operate = program.command("operate").argument("[task]");
-  addOperateFlags(addSharedRecordingFlags(operate)).action(
-    (task: string | undefined, opts: OperateOpts) => {
-      captured = { task, opts };
-    },
-  );
+  addOperateFlags(operate).action((task: string | undefined, opts: OperateOpts) => {
+    captured = { task, opts };
+  });
   // Registered exactly like the real command, so the "does a bare task still
   // reach the parent action once subcommands exist?" question is covered.
   operate.command("status <runId>").action((runId: string) => {
@@ -105,6 +111,10 @@ describe("`operate` flag surface (commander)", () => {
   it("parses the whole documented operate flag list", () => {
     const { task, opts } = parseOperateArgv([
       "Open the app and create an incident",
+      "--target",
+      "window-3",
+      "--kind",
+      "window",
       "--model",
       "openai-compatible:llama3:8b",
       "--base-url",
@@ -113,40 +123,47 @@ describe("`operate` flag surface (commander)", () => {
       "12",
       "--timeout",
       "90",
+      "--max-batch",
+      "4",
       "--unbounded",
-      "--no-record",
-      "--fps",
-      "60",
-      "--resolution",
-      "1920x1080",
-      "--out",
-      "/tmp/out",
       "--json",
     ]);
     expect(task).toBe("Open the app and create an incident");
+    expect(opts.target).toBe("window-3");
+    expect(opts.kind).toBe("window");
     expect(opts.model).toBe("openai-compatible:llama3:8b");
     expect(opts.baseUrl).toBe("http://localhost:11434/v1");
     expect(opts.maxSteps).toBe("12");
     expect(opts.timeout).toBe("90");
+    expect(opts.maxBatch).toBe("4");
     expect(opts.unbounded).toBe(true);
-    expect(opts.record).toBe(false);
     expect(opts.json).toBe(true);
 
     const params = buildRunOperatorParams(task as string, opts);
-    expect(params.guardrails).toEqual({ maxSteps: 12, timeoutSeconds: 90, unbounded: true });
-    expect(params.recording).toEqual({
-      video: {
-        fps: 60,
-        codec: "h264",
-        container: "mp4",
-        resolution: { width: 1920, height: 1080 },
-        quality: "high",
-        // commander's `--no-cursor` option defaults to `cursor: true`.
-        showCursor: true,
-      },
-      outputDir: "/tmp/out",
-      disabled: true,
+    expect(params.target).toEqual({ targetId: "window-3" });
+    expect(params.guardrails).toEqual({
+      maxSteps: 12,
+      timeoutSeconds: 90,
+      maxBatchActions: 4,
+      unbounded: true,
     });
+    expect(params).not.toHaveProperty("recording");
+  });
+
+  // Phase 21 removed every recording flag from `operate`. They stay
+  // *registered* (hidden) so passing one produces the caller-side recipe
+  // instead of commander's bare "unknown option".
+  it("still accepts removed recording flags at parse time, then rejects them with the recipe", () => {
+    const { task, opts } = parseOperateArgv([
+      "t",
+      "--target",
+      "d1",
+      "--model",
+      "anthropic:claude-sonnet-5",
+      "--no-record",
+    ]);
+    expect(() => buildRunOperatorParams(task as string, opts)).toThrow(/--no-record/);
+    expect(() => buildRunOperatorParams(task as string, opts)).toThrow(/windower start/);
   });
 
   it("routes a bare task to the run action and `status`/`list` to their subcommands", () => {
@@ -203,12 +220,36 @@ describe("renderOperatorRun", () => {
     expect(output).toContain("[INPUT_OUT_OF_BOUNDS]");
   });
 
-  it("shows the recording session and transcript when present", () => {
+  it("shows the transcript when present, and never a recording session", () => {
     const output = renderOperatorRun(
-      run({ sessionId: "sess-7", transcriptPath: "/tmp/demo.operator.json" }),
+      run({ transcriptPath: "/home/u/.windower/operator-runs/op-1/transcript.json" }),
     );
-    expect(output).toContain("Session: sess-7");
-    expect(output).toContain("Transcript: /tmp/demo.operator.json");
+    expect(output).toContain("Transcript: /home/u/.windower/operator-runs/op-1/transcript.json");
+    expect(output).not.toMatch(/Session/);
+  });
+
+  // contracts/operator.md §"How they surface": the `done`/`fail` summary lands
+  // on `OperatorRun.summary`, and polling is the only way to read it.
+  it("renders the run's summary when the run reported one", () => {
+    const output = renderOperatorRun(
+      run({
+        state: "succeeded",
+        endedAt: "2026-08-09T10:01:05.000Z",
+        summary: "Created the incident and confirmed it in the list.",
+      }),
+    );
+    expect(output).toContain("Summary: Created the incident and confirmed it in the list.");
+  });
+
+  it("omits the summary line for a run that never reported one", () => {
+    const output = renderOperatorRun(
+      run({
+        state: "failed",
+        endedAt: "2026-08-09T10:00:30.000Z",
+        error: { code: "OPERATOR_LOOP_CRASHED", message: "Operator loop crashed." },
+      }),
+    );
+    expect(output).not.toMatch(/Summary/);
   });
 });
 
@@ -270,7 +311,7 @@ describe("jsonFlag (operate subcommands)", () => {
     program.exitOverride();
     program.configureOutput({ writeErr: () => {} });
     const operate = program.command("operate").argument("[task]");
-    addOperateFlags(addSharedRecordingFlags(operate)).action(() => {});
+    addOperateFlags(operate).action(() => {});
     operate
       .command("status <runId>")
       .option("--json", "output JSON")
@@ -328,7 +369,11 @@ describe("runBlocking (operate's default local/blocking path)", () => {
     process.exitCode = undefined;
   });
 
-  const params = { task: "t", model: { provider: "anthropic" as const, model: "claude-sonnet-5" } };
+  const params = {
+    task: "t",
+    target: { targetId: "d1" },
+    model: { provider: "anthropic" as const, model: "claude-sonnet-5" },
+  };
 
   it("prints the terminal OperatorRun as JSON on stdout and exits 0 on success", async () => {
     mockedRunOperatorBlocking.mockResolvedValue(run({ state: "succeeded" }));
@@ -367,8 +412,8 @@ describe("runBlocking (operate's default local/blocking path)", () => {
       (_params, options) =>
         new Promise((resolve) => {
           capturedSignal = options.signal;
-          // `sessionStore.load()`'s real filesystem I/O (this mock is only
-          // reached after it resolves) means the SIGINT emitted synchronously
+          // The real filesystem I/O `runBlocking` does before this mock is
+          // reached means the SIGINT emitted synchronously
           // below can — and does — win the race and abort the signal before
           // this executor even runs; check `aborted` up front rather than
           // relying on the `abort` event firing after the fact (mirrors
@@ -437,7 +482,16 @@ describe("registerOperateCommand --detach (daemon-backed, non-blocking, regressi
 
     const { calls, restore } = spyOnWrite(process.stdout);
     await program.parseAsync(
-      ["operate", "Open the app", "--model", "anthropic:claude-sonnet-5", "--detach", "--json"],
+      [
+        "operate",
+        "Open the app",
+        "--target",
+        "d1",
+        "--model",
+        "anthropic:claude-sonnet-5",
+        "--detach",
+        "--json",
+      ],
       { from: "user" },
     );
     restore();
@@ -446,5 +500,165 @@ describe("registerOperateCommand --detach (daemon-backed, non-blocking, regressi
     expect(fakeClient.runOperator).toHaveBeenCalled();
     expect(JSON.parse(calls.join(""))).toEqual({ runId: "op-42" });
     expect(fakeClient.dispose).toHaveBeenCalled();
+  });
+
+  /**
+   * Regression: `--detach` used to call `ensureDaemonRunning()` with no
+   * options, so `hello` carried no `env` — a daemon spawned by an earlier
+   * shell then resolved the run's API key from its own frozen `process.env`
+   * and failed `OPERATOR_MISSING_API_KEY` even though THIS shell had the key.
+   * Driven through the real command registration (not the param builder in
+   * isolation), because that is the layer that was broken.
+   */
+  describe("hello env snapshot", () => {
+    const KEY_VARS = ["ANTHROPIC_API_KEY", "MY_CUSTOM_KEY", "DEMO_USER"] as const;
+    const saved = new Map<string, string | undefined>();
+
+    beforeEach(() => {
+      for (const key of KEY_VARS) {
+        saved.set(key, process.env[key]);
+        delete process.env[key];
+      }
+    });
+
+    afterEach(() => {
+      for (const key of KEY_VARS) {
+        const previous = saved.get(key);
+        if (previous === undefined) delete process.env[key];
+        else process.env[key] = previous;
+      }
+    });
+
+    async function detach(argv: string[]): Promise<void> {
+      const fakeClient = {
+        runOperator: vi.fn().mockResolvedValue({ runId: "op-42" } satisfies RunOperatorResult),
+        dispose: vi.fn(),
+      };
+      // biome-ignore lint/suspicious/noExplicitAny: minimal fake DaemonClient
+      mockedEnsureDaemonRunning.mockResolvedValue(fakeClient as any);
+
+      const program = new Command();
+      program.exitOverride();
+      program.configureOutput({ writeErr: () => {} });
+      registerOperateCommand(program);
+
+      const { restore } = spyOnWrite(process.stdout);
+      await program.parseAsync(argv, { from: "user" });
+      restore();
+    }
+
+    it("forwards this shell's provider-default API key to the daemon in hello", async () => {
+      process.env.ANTHROPIC_API_KEY = "fake-key-value";
+      await detach([
+        "operate",
+        "Open the app",
+        "--target",
+        "d1",
+        "--model",
+        "anthropic:claude-sonnet-5",
+        "--detach",
+        "--json",
+      ]);
+
+      expect(mockedEnsureDaemonRunning).toHaveBeenCalledWith(
+        expect.objectContaining({
+          clientName: "windower-cli",
+          env: expect.objectContaining({
+            apiKeyEnvVar: "ANTHROPIC_API_KEY",
+            apiKeyValue: "fake-key-value",
+          }),
+        }),
+      );
+    });
+
+    it("forwards env:-sourced --secret values by value alongside the key", async () => {
+      process.env.ANTHROPIC_API_KEY = "fake-key-value";
+      process.env.DEMO_USER = "fake-user-value";
+      await detach([
+        "operate",
+        "Log in as {{user}}",
+        "--target",
+        "d1",
+        "--model",
+        "anthropic:claude-sonnet-5",
+        "--secret",
+        "user=env:DEMO_USER",
+        "--detach",
+        "--json",
+      ]);
+
+      const call = mockedEnsureDaemonRunning.mock.calls[0]?.[0];
+      expect(call?.env?.secretRefs).toEqual([{ name: "user", value: "fake-user-value" }]);
+    });
+
+    it("sends no env at all when this shell has nothing to scope", async () => {
+      await detach([
+        "operate",
+        "Open the app",
+        "--target",
+        "d1",
+        "--model",
+        "anthropic:claude-sonnet-5",
+        "--detach",
+        "--json",
+      ]);
+
+      const call = mockedEnsureDaemonRunning.mock.calls[0]?.[0];
+      expect(call?.env).toBeUndefined();
+    });
+  });
+});
+
+/**
+ * `operate status` is a plain disk read, and it is the ONLY channel an
+ * orchestrator has for a run's outcome (contracts/operator.md §Ownership) —
+ * so the `done`/`fail` summary has to come back out of both renderings.
+ */
+describe("registerOperateCommand status (summary surfaces to a poller)", () => {
+  let home: string;
+  let originalHome: string | undefined;
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "windower-operate-status-test-"));
+    originalHome = process.env[WINDOWER_HOME_ENV];
+    process.env[WINDOWER_HOME_ENV] = home;
+  });
+
+  afterEach(async () => {
+    if (originalHome === undefined) delete process.env[WINDOWER_HOME_ENV];
+    else process.env[WINDOWER_HOME_ENV] = originalHome;
+    await rm(home, { recursive: true, force: true });
+  });
+
+  async function statusOutput(persisted: OperatorRun, argv: string[]): Promise<string> {
+    const store = new OperatorRunStore();
+    await store.save(persisted);
+
+    const program = new Command();
+    program.exitOverride();
+    program.configureOutput({ writeErr: () => {} });
+    registerOperateCommand(program);
+
+    const { calls, restore } = spyOnWrite(process.stdout);
+    await program.parseAsync(argv, { from: "user" });
+    restore();
+    return calls.join("");
+  }
+
+  const finished = run({
+    id: "op-77",
+    state: "succeeded",
+    endedAt: "2026-08-09T10:01:05.000Z",
+    summary: "Created the incident and confirmed it in the list.",
+  });
+
+  it("includes the summary in --json", async () => {
+    const output = await statusOutput(finished, ["operate", "status", "op-77", "--json"]);
+    expect(JSON.parse(output).summary).toBe("Created the incident and confirmed it in the list.");
+  });
+
+  it("includes the summary in human output", async () => {
+    const output = await statusOutput(finished, ["operate", "status", "op-77"]);
+    expect(output).toContain("Summary: Created the incident and confirmed it in the list.");
   });
 });

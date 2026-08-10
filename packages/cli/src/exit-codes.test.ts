@@ -29,9 +29,9 @@ describe("exitCodeForError", () => {
   });
 
   it("maps DAEMON_BUSY to its own distinct code", () => {
-    expect(
-      exitCodeForError(new DaemonError("DAEMON_BUSY", "session abc123 still recording")),
-    ).toBe(EXIT_DAEMON_BUSY);
+    expect(exitCodeForError(new DaemonError("DAEMON_BUSY", "session abc123 still recording"))).toBe(
+      EXIT_DAEMON_BUSY,
+    );
   });
 
   it("maps DAEMON_VERSION_MISMATCH to its own distinct code", () => {

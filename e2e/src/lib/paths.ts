@@ -40,11 +40,24 @@ export function demoAppBinaryExists(): boolean {
   return existsSync(resolveDemoAppBinaryPath());
 }
 
-/** Whether the macOS sidecar's dev build has been built (`swift build --package-path native/macos`). */
+/**
+ * Whether the macOS capture-surface binary's dev build has been built
+ * (`swift build --package-path native/macos`). Phase 21 split the sidecar
+ * into two binaries; this gate keeps its old name/meaning (capture is what
+ * "the sidecar" meant to every existing e2e test) — see
+ * `controlBinaryExists` for the control surface.
+ */
 export function sidecarBinaryExists(): boolean {
   const override = process.env.WINDOWER_SIDECAR_BINARY_PATH;
   if (override && override.trim().length > 0) return existsSync(override);
-  return existsSync(join(repoRoot(), "native/macos/.build/debug/windower-sidecar-macos"));
+  return existsSync(join(repoRoot(), "native/macos/.build/debug/windower-capture-macos"));
+}
+
+/** Whether the macOS control-surface binary's dev build has been built. */
+export function controlBinaryExists(): boolean {
+  const override = process.env.WINDOWER_CONTROL_BINARY_PATH;
+  if (override && override.trim().length > 0) return existsSync(override);
+  return existsSync(join(repoRoot(), "native/macos/.build/debug/windower-control-macos"));
 }
 
 /** Resolves the daemon's node entrypoint, same resolution `@windower/core`'s connect.ts uses. */

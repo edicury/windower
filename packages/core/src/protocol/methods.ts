@@ -75,10 +75,13 @@ export type DescribeResult = z.infer<typeof DescribeResultSchema>;
 
 /**
  * The sidecar `version` (from `describe`'s result) the daemon/CLI are tested
- * against — must track `sidecarVersion` in
- * `native/macos/Sources/windower-sidecar-macos/main.swift`. Used for a
- * simple exact-match compatibility check (Phase 14 "version compatibility");
- * bump both together when the sidecar's build version changes.
+ * against — must track `sidecarVersion` in both
+ * `native/macos/Sources/windower-capture-macos/main.swift` and
+ * `native/macos/Sources/windower-control-macos/main.swift` (Phase 21 split
+ * the single binary into one per protocol surface; both report the same
+ * version). Used for a simple exact-match compatibility check (Phase 14
+ * "version compatibility"); bump all of them together when the sidecar's
+ * build version changes.
  */
 export const EXPECTED_SIDECAR_VERSION = "0.1.0";
 
@@ -185,8 +188,26 @@ export const CaptureFrameParamsSchema = z.object({
   format: z.enum(["png", "jpeg"]),
   maxWidth: z.number().positive().optional(),
   quality: z.number().optional(),
+  /**
+   * Phase 21 frame-sharing opt-out (contracts/sidecar-protocol.md
+   * §captureFrame). When the capture sidecar already has a live stream
+   * covering the requested target it MAY serve that stream's most recently
+   * delivered frame instead of a fresh one-shot capture — observable only as
+   * lower latency plus staleness bounded by the stream's frame interval.
+   * `fresh: true` forces a real one-shot capture regardless. Defaults to
+   * `false`; the operator's observation loop leaves it unset.
+   */
+  fresh: z.boolean().default(false),
 });
-export type CaptureFrameParams = z.infer<typeof CaptureFrameParamsSchema>;
+/**
+ * Deliberately `z.input` rather than `z.infer`: `fresh` has a schema-level
+ * default, so callers may omit it (every pre-Phase-21 `captureFrame` call site
+ * still type-checks unchanged) while anything that *parses* the params sees
+ * the resolved `fresh: false`. Use `CaptureFrameParamsParsed` for the
+ * post-parse shape.
+ */
+export type CaptureFrameParams = z.input<typeof CaptureFrameParamsSchema>;
+export type CaptureFrameParamsParsed = z.output<typeof CaptureFrameParamsSchema>;
 
 export const CaptureFrameResultSchema = z.object({
   imageBase64: z.string(),

@@ -6,11 +6,38 @@ import { fileURLToPath } from "node:url";
 const require = createRequire(import.meta.url);
 
 /**
- * Env var override for the sidecar binary path. Checked before any other
- * resolution strategy — useful for tests, CI, and (later) a packaged build
- * that wants to pin an exact binary without touching resolution logic.
+ * Which method-ownership surface of the sidecar protocol a binary implements
+ * (`contracts/sidecar-protocol.md` — capture surface: `describe`,
+ * `enumerateTargets`, `startCapture`, `stopCapture`, `cancelCapture`,
+ * `captureFrame`; control surface: `describe`, `performInput`,
+ * `resizeWindow`). This selector is deliberately platform-neutral: it names a
+ * protocol surface, not an OS. Whether a platform implements the two surfaces
+ * with two binaries (macOS, Phase 21), one binary, or any other topology is a
+ * per-platform detail confined to the lookup tables below.
+ */
+export type SidecarSurface = "capture" | "control";
+
+/**
+ * Env var override for the capture-surface binary path. Checked before any
+ * other resolution strategy — useful for tests, CI, and (later) a packaged
+ * build that wants to pin an exact binary without touching resolution logic.
+ *
+ * Kept under its pre-Phase-21 name (`WINDOWER_SIDECAR_BINARY_PATH`) rather
+ * than renamed: it's documented in `README.md`'s env-var table and used by
+ * existing e2e/CLI tests, and the capture surface is what it always pointed
+ * at. The control surface gets its own var (below) rather than sharing this
+ * one — a single var pointing at one binary can't describe two.
  */
 export const SIDECAR_BINARY_PATH_ENV = "WINDOWER_SIDECAR_BINARY_PATH";
+
+/** Env var override for the control-surface binary path (Phase 21). */
+export const CONTROL_BINARY_PATH_ENV = "WINDOWER_CONTROL_BINARY_PATH";
+
+/** Per-surface env-var override name. */
+const BINARY_PATH_ENV_BY_SURFACE: Record<SidecarSurface, string> = {
+  capture: SIDECAR_BINARY_PATH_ENV,
+  control: CONTROL_BINARY_PATH_ENV,
+};
 
 /**
  * Walks up from a starting directory looking for `pnpm-workspace.yaml`,
@@ -39,14 +66,21 @@ function thisModuleDir(): string {
 }
 
 /**
- * Per-platform dev-build relative path (from repo root) to the sidecar
- * binary produced by that platform's native build. Only macOS exists in
- * MVP (Phase 2); windows/linux are Phase 16/17 and have no binary to
+ * Per-(platform, surface) dev-build relative path (from repo root) to the
+ * sidecar binary produced by that platform's native build. Only macOS exists
+ * in MVP (Phase 2); windows/linux are Phase 16/17 and have no binary to
  * resolve to yet, so they're intentionally absent from this table rather
  * than mapped to a guessed path.
+ *
+ * A platform that implements both surfaces in one binary simply maps both
+ * keys to the same path — the two-binary split is macOS's answer to Phase
+ * 21's single-ScreenCaptureKit-writer invariant, not a protocol requirement.
  */
-const DEV_BUILD_RELATIVE_PATH: Partial<Record<NodeJS.Platform, string>> = {
-  darwin: "native/macos/.build/debug/windower-sidecar-macos",
+const DEV_BUILD_RELATIVE_PATH: Partial<Record<NodeJS.Platform, Record<SidecarSurface, string>>> = {
+  darwin: {
+    capture: "native/macos/.build/debug/windower-capture-macos",
+    control: "native/macos/.build/debug/windower-control-macos",
+  },
 };
 
 /**
@@ -65,9 +99,18 @@ const SIDECAR_PACKAGE_BY_PLATFORM_ARCH: Partial<
   },
 };
 
-/** The binary's filename within its platform-sidecar npm package. */
-const SIDECAR_BINARY_FILENAME_BY_PLATFORM: Partial<Record<NodeJS.Platform, string>> = {
-  darwin: "windower-sidecar-macos",
+/**
+ * The binary's filename within its platform-sidecar npm package, per surface.
+ * The npm package ships both binaries side by side under `bin/` (see
+ * `packages/sidecar-macos-{arm64,x64}/README.md`).
+ */
+const SIDECAR_BINARY_FILENAME_BY_PLATFORM: Partial<
+  Record<NodeJS.Platform, Record<SidecarSurface, string>>
+> = {
+  darwin: {
+    capture: "windower-capture-macos",
+    control: "windower-control-macos",
+  },
 };
 
 /**
@@ -85,15 +128,17 @@ export interface ResolvedSidecarBinary {
 }
 
 /**
- * Resolves the filesystem path to the native sidecar binary, tagged with
- * which resolution strategy produced it. `resolveSidecarBinaryPath` below is
- * a thin wrapper over this that drops the tag — kept as the single place
- * this resolution order is implemented so the two can't drift.
+ * Resolves the filesystem path to the native sidecar binary implementing a
+ * given protocol surface, tagged with which resolution strategy produced it.
+ * `resolveSidecarBinaryPath` below is a thin wrapper over this that drops the
+ * tag — kept as the single place this resolution order is implemented so the
+ * two can't drift.
  *
- * Resolution order:
- * 1. `WINDOWER_SIDECAR_BINARY_PATH` env var, if set — an explicit override,
- *    also the natural extension point for a packaged build that wants to
- *    pin an exact binary without touching resolution logic.
+ * Resolution order (all per-surface):
+ * 1. The surface's env var (`WINDOWER_SIDECAR_BINARY_PATH` for capture,
+ *    `WINDOWER_CONTROL_BINARY_PATH` for control), if set — an explicit
+ *    override, also the natural extension point for a packaged build that
+ *    wants to pin an exact binary without touching resolution logic.
  * 2. The dev build output under `native/<os>/.build/debug/...`, relative to
  *    the monorepo root — used when working inside the monorepo, so local
  *    dev builds keep working unchanged.
@@ -105,21 +150,24 @@ export interface ResolvedSidecarBinary {
  * This function decides *which file* to spawn for the current OS/arch —
  * that's platform-dependent I/O (like picking a file extension), not a
  * capability decision, so it does not violate the "packages/core never
- * branches on platform" rule from CLAUDE.md. Callers above this (daemon,
- * CLI, MCP server) never call this with a platform they're branching logic
- * on; they just ask "give me the sidecar binary" and react to capabilities
- * from `describe()` afterward.
+ * branches on platform" rule from CLAUDE.md. `surface` is likewise not a
+ * platform branch: it names a protocol method group that exists on every
+ * platform, and the mapping from surface to filename (one binary or two) is
+ * confined to the per-platform tables above. Callers above this (daemon,
+ * CLI, MCP server) ask for "the capture binary" or "the control binary" and
+ * react to capabilities from `describe()` afterward.
  */
 export function resolveSidecarBinaryPathWithSource(
+  surface: SidecarSurface = "capture",
   platform: NodeJS.Platform = process.platform,
   arch: NodeJS.Architecture = process.arch,
 ): ResolvedSidecarBinary {
-  const override = process.env[SIDECAR_BINARY_PATH_ENV];
+  const override = process.env[BINARY_PATH_ENV_BY_SURFACE[surface]];
   if (override && override.trim().length > 0) {
     return { path: override, source: "env-override" };
   }
 
-  const relativePath = DEV_BUILD_RELATIVE_PATH[platform];
+  const relativePath = DEV_BUILD_RELATIVE_PATH[platform]?.[surface];
   if (relativePath) {
     try {
       const repoRoot = findRepoRoot(thisModuleDir());
@@ -134,7 +182,7 @@ export function resolveSidecarBinaryPathWithSource(
   }
 
   const packageName = SIDECAR_PACKAGE_BY_PLATFORM_ARCH[platform]?.[arch];
-  const binaryFilename = SIDECAR_BINARY_FILENAME_BY_PLATFORM[platform];
+  const binaryFilename = SIDECAR_BINARY_FILENAME_BY_PLATFORM[platform]?.[surface];
   if (packageName && binaryFilename) {
     try {
       return {
@@ -148,15 +196,16 @@ export function resolveSidecarBinaryPathWithSource(
   }
 
   throw new Error(
-    `No sidecar available for platform "${platform}"/arch "${arch}" yet (windows/linux backends are post-MVP — see specs/001-windower-mvp/tasks/phase-16-windows-backend.md and phase-17-linux-backend.md). ` +
-      `Set ${SIDECAR_BINARY_PATH_ENV} to point at a binary explicitly if you're testing a custom build.`,
+    `No sidecar available for platform "${platform}"/arch "${arch}" (${surface} surface) yet (windows/linux backends are post-MVP — see specs/001-windower-mvp/tasks/phase-16-windows-backend.md and phase-17-linux-backend.md). ` +
+      `Set ${BINARY_PATH_ENV_BY_SURFACE[surface]} to point at a binary explicitly if you're testing a custom build.`,
   );
 }
 
 /** `resolveSidecarBinaryPathWithSource(...).path` — see that function for resolution order/doc. */
 export function resolveSidecarBinaryPath(
+  surface: SidecarSurface = "capture",
   platform: NodeJS.Platform = process.platform,
   arch: NodeJS.Architecture = process.arch,
 ): string {
-  return resolveSidecarBinaryPathWithSource(platform, arch).path;
+  return resolveSidecarBinaryPathWithSource(surface, platform, arch).path;
 }

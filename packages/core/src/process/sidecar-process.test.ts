@@ -3,7 +3,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { SidecarError } from "../protocol/errors.js";
-import { SIDECAR_BINARY_PATH_ENV, findRepoRoot, resolveSidecarBinaryPath } from "./sidecar-path.js";
+import {
+  CONTROL_BINARY_PATH_ENV,
+  SIDECAR_BINARY_PATH_ENV,
+  findRepoRoot,
+  resolveSidecarBinaryPath,
+} from "./sidecar-path.js";
 import { type SidecarProcess, spawnSidecar } from "./sidecar-process.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -14,42 +19,83 @@ function spawnFixture(args: string[] = [], env: NodeJS.ProcessEnv = process.env)
   return spawnSidecar({ binaryPath: process.execPath, args: [FIXTURE_PATH, ...args], env });
 }
 
+/**
+ * Runs `fn` with exactly the given sidecar-path env vars set (every other
+ * surface's override cleared), restoring the ambient environment afterward.
+ * Both surfaces have their own var since Phase 21, so a test that only
+ * cleared one could pick up the other from the developer's shell.
+ */
+function withEnv(vars: Record<string, string>, fn: () => void): void {
+  const managed = [SIDECAR_BINARY_PATH_ENV, CONTROL_BINARY_PATH_ENV];
+  const original = new Map(managed.map((name) => [name, process.env[name]]));
+  try {
+    for (const name of managed) delete process.env[name];
+    for (const [name, value] of Object.entries(vars)) process.env[name] = value;
+    fn();
+  } finally {
+    for (const [name, value] of original) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+}
+
 describe("resolveSidecarBinaryPath / findRepoRoot", () => {
   it("finds the monorepo root by walking up to pnpm-workspace.yaml", () => {
     const root = findRepoRoot(__dirname);
     expect(existsSync(join(root, "pnpm-workspace.yaml"))).toBe(true);
   });
 
-  it("honors the WINDOWER_SIDECAR_BINARY_PATH env var override", () => {
-    const original = process.env[SIDECAR_BINARY_PATH_ENV];
-    process.env[SIDECAR_BINARY_PATH_ENV] = "/custom/path/to/sidecar";
-    try {
-      expect(resolveSidecarBinaryPath("darwin")).toBe("/custom/path/to/sidecar");
-    } finally {
-      if (original === undefined) delete process.env[SIDECAR_BINARY_PATH_ENV];
-      else process.env[SIDECAR_BINARY_PATH_ENV] = original;
-    }
+  it("honors the WINDOWER_SIDECAR_BINARY_PATH env var override (capture surface)", () => {
+    withEnv({ [SIDECAR_BINARY_PATH_ENV]: "/custom/path/to/capture" }, () => {
+      expect(resolveSidecarBinaryPath("capture", "darwin")).toBe("/custom/path/to/capture");
+    });
   });
 
-  it("resolves the dev-build path for darwin relative to the repo root", () => {
-    const original = process.env[SIDECAR_BINARY_PATH_ENV];
-    delete process.env[SIDECAR_BINARY_PATH_ENV];
-    try {
-      const resolved = resolveSidecarBinaryPath("darwin");
-      expect(resolved.endsWith("native/macos/.build/debug/windower-sidecar-macos")).toBe(true);
-    } finally {
-      if (original !== undefined) process.env[SIDECAR_BINARY_PATH_ENV] = original;
-    }
+  it("honors the WINDOWER_CONTROL_BINARY_PATH env var override (control surface)", () => {
+    withEnv({ [CONTROL_BINARY_PATH_ENV]: "/custom/path/to/control" }, () => {
+      expect(resolveSidecarBinaryPath("control", "darwin")).toBe("/custom/path/to/control");
+    });
+  });
+
+  it("keeps the two surfaces' overrides independent", () => {
+    withEnv({ [SIDECAR_BINARY_PATH_ENV]: "/custom/path/to/capture" }, () => {
+      // The legacy var names the capture binary only — it must not be picked
+      // up for the control surface, which would spawn the wrong binary.
+      expect(resolveSidecarBinaryPath("control", "darwin")).not.toBe("/custom/path/to/capture");
+    });
+  });
+
+  it("defaults to the capture surface when none is given", () => {
+    withEnv({ [SIDECAR_BINARY_PATH_ENV]: "/custom/path/to/capture" }, () => {
+      expect(resolveSidecarBinaryPath()).toBe("/custom/path/to/capture");
+    });
+  });
+
+  it("resolves the dev-build paths for darwin relative to the repo root", () => {
+    withEnv({}, () => {
+      expect(
+        resolveSidecarBinaryPath("capture", "darwin").endsWith(
+          "native/macos/.build/debug/windower-capture-macos",
+        ),
+      ).toBe(true);
+      expect(
+        resolveSidecarBinaryPath("control", "darwin").endsWith(
+          "native/macos/.build/debug/windower-control-macos",
+        ),
+      ).toBe(true);
+    });
   });
 
   it("throws a clear error for platforms with no sidecar yet", () => {
-    const original = process.env[SIDECAR_BINARY_PATH_ENV];
-    delete process.env[SIDECAR_BINARY_PATH_ENV];
-    try {
-      expect(() => resolveSidecarBinaryPath("win32")).toThrow(/no sidecar available for platform/i);
-    } finally {
-      if (original !== undefined) process.env[SIDECAR_BINARY_PATH_ENV] = original;
-    }
+    withEnv({}, () => {
+      expect(() => resolveSidecarBinaryPath("capture", "win32")).toThrow(
+        /no sidecar available for platform/i,
+      );
+      expect(() => resolveSidecarBinaryPath("control", "win32")).toThrow(
+        /no sidecar available for platform/i,
+      );
+    });
   });
 });
 

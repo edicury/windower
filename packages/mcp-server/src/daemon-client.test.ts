@@ -152,6 +152,8 @@ describe("connectForOperatorRun (Phase 20 env-scoped operator connection)", () =
 
     await connectForOperatorRun(undefined);
 
-    expect(ensureDaemonRunningMock).toHaveBeenCalledWith(expect.objectContaining({ env: undefined }));
+    expect(ensureDaemonRunningMock).toHaveBeenCalledWith(
+      expect.objectContaining({ env: undefined }),
+    );
   });
 });

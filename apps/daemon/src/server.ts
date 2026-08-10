@@ -194,9 +194,20 @@ export class DaemonServer {
     await this.stop();
   }
 
+  /**
+   * `contracts/operator-loop-protocol.md` §Shutdown, "Daemon graceful
+   * shutdown": `abort({reason:"daemon-shutdown"})` to every live loop child
+   * **first**, then the drain — and the two drains below run as **peers**,
+   * concurrently and unordered with respect to each other. Live recordings are
+   * finalized by the recording pass on its own; the loop's shutdown neither
+   * triggers nor waits on the recording's, which is what keeps "the operator
+   * never touches a recording" true even here.
+   */
   private async drainGraceful(): Promise<void> {
     let timedOut = false;
-    const work = (async () => {
+    this.operatorRunManager.signalDaemonShutdown();
+
+    const drainRuns = (async () => {
       const activeRuns = this.operatorRunManager
         .listOperatorRuns({})
         .runs.filter((run) => !isTerminalOperatorRunState(run.state));
@@ -208,7 +219,9 @@ export class DaemonServer {
           console.error(`[DaemonServer] graceful shutdown: aborting run ${run.id} failed:`, err);
         }
       }
+    })();
 
+    const drainRecordings = (async () => {
       const recording = this.sessionManager.listSessions({ state: "recording" }).sessions;
       for (const session of recording) {
         try {
@@ -221,6 +234,8 @@ export class DaemonServer {
         }
       }
     })();
+
+    const work = Promise.all([drainRuns, drainRecordings]).then(() => undefined);
 
     const timeout = new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
@@ -246,9 +261,11 @@ export class DaemonServer {
   }
 
   private checkIdle(): void {
-    // An `operate --no-record` run has no recording session — counting only
-    // `activeSessionCount` would let idle-shutdown race an in-flight run out
-    // from under itself (phase-20-daemon-optional.md "checkIdle").
+    // An operator run has no recording session — it is a peer capability that
+    // records nothing (contracts/operator.md §Recording independence), so
+    // counting only `activeSessionCount` would let idle-shutdown race an
+    // in-flight run out from under itself (phase-20-daemon-optional.md
+    // "checkIdle").
     const active = this.sessionManager.activeSessionCount + this.operatorRunManager.activeRunCount;
     if (active > 0) {
       this.idleSince = undefined;

@@ -73,7 +73,7 @@ CI-strategy note.
 
 ```sh
 # from repo root
-pnpm test:e2e     # golden path + both crash-injection tests, a few minutes
+pnpm test:e2e     # golden path + the crash/orphan-injection tests, a few minutes
 pnpm test:soak    # 30-minute continuous recording, ~35-40 min wall clock
 
 # or directly against this package
@@ -118,6 +118,18 @@ WINDOWER_SOAK_DURATION_MS=60000 pnpm test:soak
   `failed` with no hung state. Real-process complement to
   `apps/daemon/src/session-manager.test.ts`'s existing fake-sidecar test for
   `handleSidecarExit` — does not duplicate or modify it.
+- **`src/orphan-capture-child.e2e.test.ts`**: the mirror image of the test
+  above — `kill -9` the *parent* (the daemon) mid-recording and assert via
+  `ps` that the `windower-capture-macos` child does **not** survive it. Per
+  `specs/001-windower-mvp/contracts/screen-capture-exclusivity.md`
+  §Process ownership, the child's stdin-EOF exit path is the *only*
+  orphan-prevention mechanism (no pid tracking, no reaper, no supervisor), so
+  this is what keeps that claim falsifiable. Complements
+  `native/macos/Tests/WindowerCaptureCoreTests/CaptureEofCleanupTests.swift`,
+  which drives the same EOF path directly (close stdin → process exits, and
+  the video file it leaves behind is finalized/decodable rather than
+  truncated) but closes stdin itself instead of proving the OS delivers that
+  EOF when a real parent is killed.
 - **`src/crash-daemon-restart.e2e.test.ts`**: kills the daemon process
   itself mid-recording, restarts it against the same `WINDOWER_HOME`,
   asserts Phase 6's `recoverCrashedSessions` marks the orphaned session

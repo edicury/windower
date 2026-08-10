@@ -97,35 +97,51 @@ Reads/writes `~/.windower/config.json` — output folder, filename template, dae
 Explicit daemon lifecycle control, mostly for debugging. All three subcommands are `attach` mode — they act on a daemon that is already listening and never spawn one. The daemon itself auto-starts only for `start`, `stop`/`cancel` (attaching to whatever `start` spawned), and `operate --detach`/`operate abort` — see Daemon policy above; it is no longer true that any other command brings a daemon up.
 
 - `daemon status`: reports the same `daemon` block as `windower doctor` (`{running, pid, version, protocolVersion, startedAt, ageSeconds, socketPath, versionMatchesClient}`), or `running: false` if nothing is listening.
-- `daemon stop`: graceful by default — stops accepting new connections, **finalizes** every in-flight recording and operator run (video, manifest, and event timeline all land, exactly as if each had received an explicit `stop`) before closing the socket and exiting. `--discard` cancels those in-flight recordings/runs instead of finalizing them, mirroring `record --discard`. Errors with `DAEMON_UNREACHABLE` if nothing is listening.
+- `daemon stop`: graceful by default — stops accepting new connections, **finalizes** every in-flight recording (video, manifest, and event timeline all land, exactly as if each had received an explicit `stop`) and aborts every in-flight operator run independently of that, before closing the socket and exiting. `--discard` cancels those in-flight recordings instead of finalizing them, mirroring `record --discard`. Errors with `DAEMON_UNREACHABLE` if nothing is listening.
 - `daemon restart`: stops the running daemon (same finalize semantics as `daemon stop`, respecting `--discard`) and starts a fresh one. Refuses with `DAEMON_BUSY` (naming the active session/run ids) if a recording or operator run is in flight, unless `--force` is passed to override the busy check and finalize/discard anyway. Errors with `DAEMON_UNREACHABLE` if nothing is running to restart.
 
 ## `windower list [--state recording|finalized|...] [--json]`
 Lists known sessions (from `~/.windower/sessions/`), most recent first — lets an agent recover context after a restart ("what was I recording?").
 
-## `windower operate "<task>" [recording flags] [--model p:m] [--base-url u] [--secret name=source:ref]... [--max-steps n] [--timeout s] [--unbounded] [--no-record] [--detach] [--json]`
-Starts a guided operator run: an LLM-driven loop that perceives the screen (`captureFrame`), synthesizes mouse/keyboard input (`performInput`), and drives `<task>` to completion. `[recording flags]` reuse the exact shared video/audio flag block documented under `windower start` above (`--fps`, `--codec`, `--resolution`, `--audio-mic`, `--out`, etc.) — not redefined here. Recording is auto-started alongside the run unless `--no-record` is passed. `--model p:m` selects a provider:model pair (e.g. `openai:gpt-4o`, `anthropic:claude-sonnet-5`, `openai-compatible:llama3` for a local server via `--base-url`); the operator's model is independent of and unrelated to whatever agent/model is calling the CLI. `--secret name=source:ref` (repeatable) resolves a named secret (e.g. `password=keychain:waroom`) at call time and substitutes it into typed input — the raw value is never written to the CLI's own argv logging or the operator's transcript. `--max-steps`/`--timeout` bound the run; `--unbounded` explicitly opts out of both (use with care).
+## `windower operate "<task>" --target <id> [--kind window|display|region] [--region x,y,w,h] [--model p:m] [--base-url u] [--secret name=source:ref]... [--max-steps n] [--timeout s] [--max-batch n] [--unbounded] [--detach] [--json]`
+Starts a guided operator run: an LLM-driven loop that perceives the screen (`captureFrame`), synthesizes mouse/keyboard input (`performInput`), and drives `<task>` to completion.
 
-**Blocks by default**, `local` mode: the operator engine runs in-process against the invoking CLI's own environment, so the API key is read from the invoking shell — the run can never end up driven by a different, frozen environment than the one that started it. Step-by-step progress (`onStep`) streams to **stderr** as it happens; the terminal `OperatorRun` is written to **stdout** when `--json` is passed (plain text otherwise). The emitted object is the `OperatorRun` as-is, with its `id` field — there is no `runId` alias, since blocking is the only mode `operate` has ever shipped with a stable stdout contract for. Ctrl-C aborts the run and finalizes (not discards) any active recording, same as a normal completion. Any terminal state other than `succeeded` (e.g. `failed`, `aborted`, timed out) causes the command to **exit 1**, reusing the existing `0`/`1`/`2`/`3` exit-code scheme documented above — no new codes are introduced.
+`--target`/`--kind`/`--region` are **the exact same target flags `windower start` takes**, reusing the same selector — not an operator-specific parallel set. They name what the operator perceives and drives, and what its bounds clamp is evaluated against.
+
+`--model p:m` selects a provider:model pair (e.g. `openai:gpt-4o`, `anthropic:claude-sonnet-5`, `openai-compatible:llama3` for a local server via `--base-url`); the operator's model is independent of and unrelated to whatever agent/model is calling the CLI. `--secret name=source:ref` (repeatable) resolves a named secret (e.g. `password=keychain:waroom`) at call time and substitutes it into typed input — the raw value is never written to the CLI's own argv logging or the operator's transcript. `--max-steps`/`--timeout` bound the run and `--max-batch` bounds actions per turn; `--unbounded` explicitly opts out of the step and time bounds (use with care).
+
+**Recording independence (Phase 21, normative).** `operate` is completely unaware of recording: the run never knows whether a recording exists, never starts, stops, cancels, or looks one up, never routes frames through a recording session, and never carries a session id. **The same run behaves identically whether the screen is being recorded or not.** An orchestrator that wants video sequences `windower start` and `windower stop` around it — see the three-call example below.
+
+**Breaking change (Phase 21) to Phase 19's shipped surface.** `operate` previously accepted the shared video/audio recording flags and auto-started a recording it owned, with `--no-record` to opt out; a Phase 21 draft additionally proposed `--session <sessionId>` to attach a run to an existing session. **All of it is removed** — the recording flags, `--no-record`, `--session`, and the `INVALID_ARGS` mutual-exclusivity between them. Rationale: owning a recording required the Operator to start one and attaching required it to hold a session id; each independently violates the prohibitions above. Scripts using the old all-in-one form migrate to the three-call flow below.
+
+The twelve removed flags — `--no-record`, `--session`, `--fps`, `--codec`, `--container`, `--resolution`, `--quality`, `--audio-system`, `--audio-mic`, `--mic-device`, `--separate-tracks`, `--out` — stay **registered but hidden** on `operate`, absent from `--help`, so that passing one is not swallowed as an unknown option. Doing so fails with `INVALID_ARGS` naming the specific flag *and* printing the caller-side recipe (`windower start --target <id> [recording flags]` → `windower operate "<task>" --target <id>` → `windower stop <sessionId>`), so a script written against the old surface is told what to do rather than just what not to do. No new exit code is introduced for this — it is an ordinary argument-validation failure. There is likewise **no** `--api-key` flag, in this command or any other (`contracts/operator.md` §Model configuration).
+
+**Blocks by default**, `local` mode: the operator engine runs in-process against the invoking CLI's own environment, so the API key is read from the invoking shell — the run can never end up driven by a different, frozen environment than the one that started it. Step-by-step progress (`onStep`) streams to **stderr** as it happens; the terminal `OperatorRun` is written to **stdout** when `--json` is passed (plain text otherwise). The emitted object is the `OperatorRun` as-is, with its `id` field — there is no `runId` alias, since blocking is the only mode `operate` has ever shipped with a stable stdout contract for. Ctrl-C aborts the run; any recording running concurrently is untouched and keeps recording until its own owner stops it. Any terminal state other than `succeeded` (e.g. `failed`, `aborted`, timed out) causes the command to **exit 1**, reusing the existing `0`/`1`/`2`/`3` exit-code scheme documented above — no new codes are introduced.
 
 `--detach` opts out of the default and restores the original non-blocking two-call shape: `daemon` mode, auto-starting a daemon if needed, returns immediately with `{ runId }`, and `windower operate status`/`operate abort` are then used to poll and control it — identical to `start`/`stop` for recordings. This is the shape MCP's `run_operator` always uses (see `contracts/mcp-tools.md`); `--detach` is how a terminal user opts into the same non-blocking behavior.
 
 Examples:
 ```
-# blocking (default) — streams progress to stderr, final OperatorRun on stdout
+# blocking (default) — streams progress to stderr, final OperatorRun on stdout. No recording.
 windower operate "Open waroom.co, log in as {{user}}/{{password}}, create an incident" \
-  --secret password=keychain:waroom --resolution 1920x1080 --out ~/Desktop --json
+  --target <id> --secret password=keychain:waroom --json
 
 # detached — returns { runId } immediately, poll with `operate status`
 windower operate "Open waroom.co, log in as {{user}}/{{password}}, create an incident" \
-  --secret password=keychain:waroom --detach --json
+  --target <id> --secret password=keychain:waroom --detach --json
+
+# three-call orchestrated flow — the caller owns the recording end to end, and
+# passes the SAME target flags to `start` and `operate`
+SESSION=$(windower start --target <id> --json | jq -r .sessionId)
+windower operate "Open waroom.co and create an incident" --target <id> --json
+windower stop "$SESSION" --json
 ```
 
 ## `windower operate status <runId>`
 Returns the current `OperatorRun` — state, steps so far, elapsed time. `local` mode: reads the run store directly, no daemon required — works for both a still-detached run and a finished blocking run's persisted record.
 
 ## `windower operate abort <runId>`
-Aborts an in-progress operator run mid-flight; any active recording is stopped/finalized rather than discarded. `daemon` mode — only meaningful against a detached run, which is the only kind with an id that outlives the invoking process.
+Aborts an in-progress operator run mid-flight. No recording is stopped, canceled, or otherwise touched — a run never owns one. `daemon` mode — only meaningful against a detached run, which is the only kind with an id that outlives the invoking process.
 
 ## `windower operate list [--state <state>]`
 Lists known operator runs, most recent first — same recovery-after-restart affordance as `windower list` for sessions. `local` mode: reads the run store directly.

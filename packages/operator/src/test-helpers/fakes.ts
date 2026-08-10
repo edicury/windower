@@ -8,6 +8,23 @@ import { MockLanguageModelV4 } from "ai/test";
  * every test in this package runs offline and deterministically.
  */
 
+/**
+ * The resolved target a fake run drives. It is the run's *only* notion of what
+ * it operates: there is no session id beside it, and nothing here says whether
+ * anything is recording that window (contracts/operator.md §Recording
+ * independence).
+ */
+export const FAKE_TARGET: CaptureTarget = {
+  kind: "window",
+  id: "window:1",
+  title: "Demo",
+  appName: "Demo",
+  appBundleId: "co.windower.demo",
+  bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+  isFocused: true,
+  resizable: true,
+};
+
 export interface FakeDepsCalls {
   captureFrame: Array<{ format: string; maxWidth?: number }>;
   performInput: InputAction[][];
@@ -33,18 +50,7 @@ export function createFakeDeps(
     resizeWindow: [],
   };
 
-  const targets: CaptureTarget[] = [
-    {
-      kind: "window",
-      id: "window:1",
-      title: "Demo",
-      appName: "Demo",
-      appBundleId: "co.windower.demo",
-      bounds: { x: 0, y: 0, width: 1920, height: 1080 },
-      isFocused: true,
-      resizable: true,
-    },
-  ];
+  const targets: CaptureTarget[] = [FAKE_TARGET];
 
   const deps: FakeDeps = {
     calls,

@@ -16,13 +16,22 @@ export const OPERATOR_PACKAGE_NAME = "@windower/operator";
 
 export { runOperator, type OperatorRunInternals } from "./run.js";
 export {
+  OPERATOR_ACTION_TOOL_NAMES,
   OPERATOR_TOOL_NAMES,
   ToolInputSchemas,
   buildToolSet,
+  isActionToolName,
   isOperatorToolName,
   type OperatorToolName,
   type ToolInput,
 } from "./tools.js";
+export {
+  runLoopChild,
+  type LoopChildInternals,
+  type LoopChildResult,
+} from "./loop/child.js";
+export { createLoopDeps } from "./loop/deps.js";
+export { LoopRpcPeer, type LoopPeerHandlers, type LoopStreams } from "./loop/rpc.js";
 export {
   PROVIDER_REGISTRY,
   knownProviders,
@@ -30,8 +39,10 @@ export {
   type ProviderEntry,
 } from "./providers.js";
 export {
+  NON_TERMINAL_OPERATOR_ERROR_CODES,
   OPERATOR_ERROR_CODES,
   OperatorError,
+  isTerminalOperatorErrorCode,
   type OperatorErrorCode,
 } from "./errors.js";
 export {
@@ -57,4 +68,4 @@ export {
   hashFrame,
   type TranscriptWriter,
 } from "./transcript.js";
-export { buildSystemPrompt } from "./prompt.js";
+export { buildSystemPrompt, formatPlanReminder } from "./prompt.js";

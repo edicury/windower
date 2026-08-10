@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { OPERATOR_TOOL_NAMES, buildToolSet, isOperatorToolName } from "./tools.js";
+import {
+  OPERATOR_ACTION_TOOL_NAMES,
+  OPERATOR_TOOL_NAMES,
+  buildToolSet,
+  isActionToolName,
+  isOperatorToolName,
+} from "./tools.js";
 
 describe("tool surface", () => {
-  it("offers exactly the 13 tools in contracts/operator.md, and nothing else", () => {
+  it("offers exactly the 15 tools in contracts/operator.md, and nothing else", () => {
     expect([...OPERATOR_TOOL_NAMES]).toEqual([
       "screenshot",
       "move_mouse",
@@ -15,10 +21,38 @@ describe("tool surface", () => {
       "wait",
       "list_targets",
       "resize_window",
+      "plan",
+      "checkpoint",
       "done",
       "fail",
     ]);
     expect(Object.keys(buildToolSet()).sort()).toEqual([...OPERATOR_TOOL_NAMES].sort());
+  });
+
+  it("counts only performInput/resizeWindow tools against the batch budget", () => {
+    // contracts/operator-loop-protocol.md §"Batches inside a step": observations
+    // and bookkeeping calls are not actions and never consume `maxBatchActions`.
+    expect([...OPERATOR_ACTION_TOOL_NAMES]).toEqual([
+      "move_mouse",
+      "click",
+      "double_click",
+      "drag",
+      "scroll",
+      "type_text",
+      "press_key",
+      "resize_window",
+    ]);
+    for (const name of [
+      "screenshot",
+      "list_targets",
+      "wait",
+      "plan",
+      "checkpoint",
+      "done",
+      "fail",
+    ] as const) {
+      expect(isActionToolName(name), name).toBe(false);
+    }
   });
 
   it("offers no shell, filesystem, process, or network tool under any name", () => {

@@ -1,5 +1,7 @@
 import { daemonSocketPath, spawnSidecar, windowerHome } from "@windower/core";
 import {
+  CaptureLock,
+  ControlEngine,
   FileTargetLock,
   OperatorRunEngine,
   OperatorRunStore,
@@ -20,6 +22,8 @@ export interface RunningDaemon {
   server: DaemonServer;
   sessionManager: RecordingEngine;
   operatorRunManager: OperatorRunEngine;
+  /** The daemon's single control-surface owner — shared by `resize_window`, `performInput`, and the operator. */
+  controlEngine: ControlEngine;
   /** Closes the socket server and unlinks the socket file (and daemon.json). Does not exit the process. */
   stop: () => Promise<void>;
   /**
@@ -50,16 +54,46 @@ export async function runDaemon(options: RunDaemonOptions = {}): Promise<Running
   const store = new SessionStore();
   await store.load();
 
+  // Phase 21, `contracts/screen-capture-exclusivity.md` §"Enforcement, in two
+  // tiers": ONE `CaptureLock` handed to every capture-surface consumer in this
+  // process. That is what makes "the daemon owns exactly one capture sidecar
+  // and never starts a second one" true *by construction* rather than by which
+  // sidecar happens to get reused — `list_targets`, `check_permissions`, a
+  // recording's `startCapture`, and the operator's proxied `captureFrame` all
+  // resolve to the same in-process object (row 1 of the acquire-or-wait table:
+  // no file I/O, no spawn, no arbitration between in-daemon callers).
+  //
+  // The daemon takes the lock file itself even though its own callers never
+  // need it, so the invariant stays honest against daemon-free processes
+  // (Phase 20's `LocalWindower`, `windower record` with no daemon).
+  const captureLock = new CaptureLock({ spawnSidecar });
+
+  // The control surface is an independent peer: a different binary, no
+  // ScreenCaptureKit linkage, and therefore no capture lock — ever. Any number
+  // of control processes may run concurrently with each other and with the
+  // capture sidecar, and `performInput`/`resizeWindow` are never serialized
+  // against a recording or a `captureFrame`.
+  const controlEngine = new ControlEngine({
+    spawnControl: spawnSidecar,
+    // Without this, `SpawnSidecarOptions.surface` defaults to `"capture"` and
+    // the "control" engine would spawn a second ScreenCaptureKit process.
+    spawnOptions: { surface: "control" },
+  });
+
   const sessionManager = new RecordingEngine({
     store,
     spawnSidecar,
     targetLock: new FileTargetLock(),
+    captureLock,
     muxNarration,
     validateNarrationFile,
   });
   await sessionManager.recoverCrashedSessions();
 
-  const passthrough = new PassthroughService(spawnSidecar);
+  const passthrough = new PassthroughService(spawnSidecar, {
+    capture: captureLock,
+    control: controlEngine,
+  });
 
   // Phase 19: operator runs replay from disk and crash-recover on the same
   // startup path as recording sessions — an in-flight run cannot survive the
@@ -68,9 +102,14 @@ export async function runDaemon(options: RunDaemonOptions = {}): Promise<Running
   await operatorRunStore.load();
   const operatorRunManager = new OperatorRunEngine({
     store: operatorRunStore,
-    sessionManager,
     passthrough,
     spawnSidecar,
+    // The same two peers everything else in the daemon uses: an operator
+    // `captureFrame` during a live recording is row 1 (reuse this process's
+    // capture sidecar), and its `performInput` goes to the shared control
+    // process without touching the capture lock.
+    capture: captureLock,
+    control: controlEngine,
   });
   await operatorRunManager.recoverCrashedRuns();
 
@@ -96,7 +135,14 @@ export async function runDaemon(options: RunDaemonOptions = {}): Promise<Running
     server,
     sessionManager,
     operatorRunManager,
+    controlEngine,
     stop: () => server.stop(),
-    shutdown: (mode) => server.shutdown(mode),
+    shutdown: async (mode) => {
+      await server.shutdown(mode);
+      // The control process is respawn-on-demand and holds no capture state,
+      // so it has nothing to finalize — but it is still a child of this
+      // process, and leaving it alive past teardown would orphan it.
+      await controlEngine.shutdown();
+    },
   };
 }

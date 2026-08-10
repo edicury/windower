@@ -58,10 +58,17 @@ export class Deadline {
   readonly timeoutMs: number;
   private readonly now: () => number;
 
-  constructor(timeoutMs: number, now: () => number = Date.now) {
+  /**
+   * `startedAtMs` defaults to "now", but a loop child passes the daemon's
+   * authoritative run-start epoch so the child's `tMs` and the daemon's
+   * `timeoutMs` are measured from one instant rather than from two independent
+   * clock reads separated by a process spawn
+   * (contracts/operator-loop-protocol.md §Handshake, `startedAtMs`).
+   */
+  constructor(timeoutMs: number, now: () => number = Date.now, startedAtMs?: number) {
     this.timeoutMs = timeoutMs;
     this.now = now;
-    this.startedAtMs = now();
+    this.startedAtMs = startedAtMs ?? now();
   }
 
   elapsedMs(): number {

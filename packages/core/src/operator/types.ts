@@ -48,11 +48,36 @@ export interface OperatorRunOptions {
   maxSteps: number;
   /** Guardrail; `DEFAULT_OPERATOR_TIMEOUT_MS` applied by the caller. */
   timeoutMs: number;
+  /**
+   * Guardrail; `DEFAULT_OPERATOR_MAX_BATCH_ACTIONS` (8) applied by the caller.
+   * Bounds how many *action* tool calls (`performInput`/`resizeWindow`) one
+   * step may execute — observations don't count. Exceeding it is
+   * `OPERATOR_BATCH_LIMIT_EXCEEDED` and is NOT run-terminating: the remaining
+   * actions are recorded as `BATCH_ABORTED_RESULT` and the step closes
+   * normally (contracts/operator.md §Action batching).
+   */
+  maxBatchActions: number;
   /** `--unbounded`: disables the target-bounds coordinate clamp. */
   unbounded: boolean;
-  /** The recorded target's rect — coordinate clamp source when `!unbounded`. */
+  /**
+   * The resolved target this run operates — the same selector shape
+   * `start_recording` takes, already resolved through `enumerateTargets`
+   * (contracts/operator.md §Inputs). It is the run's *only* notion of what it
+   * is driving: a run carries no recording or session identifier of any kind,
+   * and behaves identically whether the screen is being recorded or not
+   * (contracts/operator.md §Recording independence).
+   */
+  target: CaptureTarget;
+  /** The operator's own target's rect — coordinate clamp source when `!unbounded`. */
   bounds?: Rect;
-  /** Where to write `<recording>.operator.json`; frames go next to it. */
+  /**
+   * Where to write the run's transcript —
+   * `~/.windower/operator-runs/<runId>/transcript.json`, with observation
+   * frames in `~/.windower/operator-runs/<runId>/frames/`. Operator-owned
+   * storage: it is never written next to a video file, because locating one
+   * would require knowing a recording exists (contracts/operator.md
+   * §Transcript format).
+   */
   transcriptPath?: string;
   /** Kill switch — `abort_operator_run` / `windower operate abort <runId>`. */
   signal: AbortSignal;

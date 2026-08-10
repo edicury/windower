@@ -26,7 +26,7 @@ never shell out to a `windower` CLI binary from inside this skill.
 1. **Enumerate targets** — `list_targets` to find the window/display/app to record.
 2. **Optionally resize** — `resize_window` if you want deterministic framing (e.g. exactly 1280x720) before recording.
 3. **Start recording** — `start_recording`. Returns `{ sessionId }` immediately.
-4. **Perform the actions being demoed** — click, type, run commands, navigate — whatever the demo is about.
+4. **Perform the actions being demoed** — click, type, run commands, navigate — whatever the demo is about. Do it with your own tools, or delegate it to `run_operator` and poll it to completion (see "You are the orchestrator" below). Either way, *you* sequence this step between start and stop.
 5. **Stop recording** — `stop_recording` with the `sessionId` (and `narration` if applicable).
 6. **Report to the user** — the output video path, and that a manifest/event timeline were also written.
 
@@ -55,6 +55,71 @@ stop_recording({ sessionId: "abc123" })      # → { outputPath, manifestPath, .
 
 If you find yourself calling `stop_recording` in the same turn as `start_recording` with no real work in between, stop — you have not actually recorded anything worth keeping.
 
+## You are the orchestrator
+
+Windower gives you **independent capabilities**, not a workflow. There are
+three peers — **capture** (`start_recording`/`stop_recording`), the
+**operator** (`run_operator`), and **control** (`resize_window`) — and none of
+them owns or even knows about another. **You** sequence them.
+
+Concretely, this is what that means in practice:
+
+- **The operator does not know a recording exists.** It never starts one,
+  never stops one, never looks one up, and carries no `sessionId`. The *same*
+  `run_operator` call behaves identically whether the screen is being recorded
+  or not.
+- **The recording does not know or care what is driving the screen** — you, a
+  human, the Windower operator, Playwright, or nothing at all. Nothing in a
+  session record says.
+- **Recording is a deterministic capability you sequence**, not a
+  `RecordingAgent` and not something the operator owns. `start_recording` arms
+  it; `stop_recording` finalizes it; that's the whole contract.
+- **Polling `get_operator_run` is the only way to learn a run finished.**
+  There is no callback, no event stream, and nothing an operator run writes
+  onto a recording that you could read instead.
+
+The two capabilities share only a `target` — the same selector value, passed
+twice. That is not a link: Windower never correlates them by it, and passing
+different targets is legal (it just means the video shows something other than
+what the operator is driving).
+
+### The recipe: record around an operator run
+
+When you want both a video *and* the operator driving, issue four independent
+calls in this order:
+
+```
+start_recording({ target })                 # → { sessionId }
+run_operator({ target, task })              # → { runId } — same target, immediately, no waiting
+poll get_operator_run({ runId }) until state is terminal
+                                            # succeeded | failed | aborted | timed_out
+# optionally allow a short settle period so the final UI state lands on video
+stop_recording({ sessionId })               # → { outputPath, manifestPath, ... }
+```
+
+Nothing in Windower performs that sequence for you — there is no tool that
+does all four. That is deliberate: it is a recipe *for the caller*, so other
+agents (Codex, a CI job, a shell script, a human at a terminal) can compose
+the same primitives in a different order without fighting the design.
+
+Notes that matter while running it:
+
+- `run_operator` returns immediately. Don't treat the return as "the task is
+  done" any more than you'd treat `start_recording` as "the demo is recorded."
+- The operator reaching a terminal state does **not** stop the recording.
+  Under every outcome — `succeeded`, `failed`, `aborted`, `timed_out`, or the
+  operator's own loop crashing (`OPERATOR_LOOP_CRASHED`) — the recording keeps
+  recording until *you* stop it. Likewise `abort_operator_run` touches no
+  recording, ever.
+- If a recording fails, the operator run is unaffected and keeps going.
+- The order above is a convention, not a constraint. Recording only part of a
+  run, running the operator with no recording at all, or recording while you
+  drive the UI yourself are all equally valid.
+- **If you use a subagent** to manage recording lifecycle while you do
+  something else — for concurrency or context isolation — that is a **Claude
+  Code implementation detail, explicitly not Windower architecture.** Windower
+  has no concept of it, and nothing about the calls above changes.
+
 ## Driving the UI yourself vs. delegating to the operator
 
 **The two-call flow above, where *you* perform the on-screen actions with your
@@ -70,11 +135,13 @@ demoed" is something you genuinely cannot do:
   Electron app's OS-level chrome, a menu bar item, a system dialog — you have
   no way to click those. The operator does: it perceives the screen with
   `captureFrame` and drives real mouse/keyboard input through the sidecar.
-- **The user handed you one instruction to be executed and recorded
-  end-to-end.** "Open the app, log in with these creds, create an incident to
-  showcase, record it in 1080p" is a single natural-language task with a video
-  as the deliverable. Passing it through verbatim is both simpler and closer
-  to what was asked than decomposing it into a dozen tool calls of your own.
+- **The user handed you one instruction to be executed end-to-end.** "Open the
+  app, log in with these creds, create an incident to showcase" is a single
+  natural-language task; passing it through verbatim is both simpler and
+  closer to what was asked than decomposing it into a dozen tool calls of your
+  own. If a video is also wanted, you wrap it in `start_recording` /
+  `stop_recording` per the recipe above — the operator itself produces no
+  video.
 
 Keep driving it yourself when:
 
@@ -89,27 +156,29 @@ Keep driving it yourself when:
 
 ### Using it
 
+`run_operator`'s input is exactly five members — `task`, `target`, `model`,
+and optional `secrets` / `guardrails`. There is no recording member of any
+kind:
+
 ```
 run_operator({
   task: "Open the app, log in as {{user}} / {{password}}, create an incident called 'Checkout latency'",
+  target: { targetId: "42" },     // the same selector start_recording takes
   model: { provider: "anthropic", model: "claude-sonnet-5" },
   secrets: [
     { name: "user", source: "env", ref: "DEMO_USER" },
     { name: "password", source: "keychain", ref: "waroom-demo" }
   ],
-  recording: {
-    video: { resolution: { width: 1920, height: 1080 }, fps: 30 },
-    outputDir: "~/Desktop"
-  },
-  guardrails: { maxSteps: 40, timeoutSeconds: 300 }
+  guardrails: { maxSteps: 40, timeoutSeconds: 300, maxBatchActions: 8 }
 })
 # → { runId: "op_9c31" } — returns immediately, same non-blocking shape as start_recording
 ```
 
 Then poll `get_operator_run({ runId })` for `state`
-(`running|succeeded|failed|aborted`) and the step transcript, and
-`abort_operator_run({ runId })` to stop a run that's gone wrong — an active
-recording is finalized rather than discarded.
+(`running|succeeded|failed|aborted|timed_out`), the plan, and the step
+transcript, and `abort_operator_run({ runId })` to stop a run that's gone
+wrong. Aborting touches **no** recording — if you started one, it keeps
+recording until you stop it yourself.
 
 **`run_operator` is always non-blocking.** It returns `{ runId }` immediately
 and the run continues in Windower's daemon; you get the result by polling
@@ -137,17 +206,23 @@ credential to you directly, tell them to store it in the keychain or an env
 var and pass the ref instead.
 
 **Guardrails are real, not advisory.** The step cap (default 40), the
-wall-clock timeout (default 5 min), the clamp of every coordinate to the
-recorded target's bounds, and abort are all enforced by the Windower runtime,
-not requested in the model's prompt. A run that hits one ends as `failed` with
-a structured error — you don't need to police the operator yourself, but you
-should report those failures to the user plainly rather than retrying blindly.
+wall-clock timeout (default 5 min), the batch cap (default 8 actions per
+turn), the clamp of every coordinate to the **operator's own target** bounds
+(nothing to do with recording), and abort are all enforced by the Windower
+runtime, not requested in the model's prompt. A run that hits one ends as
+`failed` (or `timed_out`) with a structured error — you don't need to police
+the operator yourself, but you should report those failures to the user
+plainly rather than retrying blindly.
 
-**Reporting.** An operator run writes the usual video + `manifest.json` +
-event timeline, plus `<recording>.operator.json` — the step-by-step transcript
-of what it saw and did. Mention it alongside the other paths. Synthetic input
-is tagged `source: "operator"` in the event timeline, so a later editing pass
-can tell operator clicks from a human's.
+**Reporting.** An operator run produces **no video and no manifest** — those
+come from the `start_recording`/`stop_recording` pair, if you ran one. What a
+run writes is its own transcript, at
+`~/.windower/operator-runs/<runId>/transcript.json`, with its observation
+frames in that directory's `frames/`. Nothing in a recording's manifest points
+at it; you hold both paths because you made both calls, so report both. If a
+recording was running, synthetic input is tagged `source: "operator"` in its
+event timeline, so a later editing pass can tell operator clicks from a
+human's.
 
 ## Recipes
 

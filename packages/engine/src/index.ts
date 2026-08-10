@@ -28,12 +28,19 @@ export const ENGINE_PACKAGE_NAME = "@windower/engine";
 export * from "./session-store.js";
 export * from "./recording-engine.js";
 export * from "./target-lock.js";
+export * from "./screen-capture-lock.js";
+export * from "./control-engine.js";
 export * from "./manifest.js";
 export * from "./passthrough.js";
 export * from "./secret-resolver.js";
 export * from "./request-context.js";
 export * from "./operator-run-store.js";
 export * from "./operator-run-engine.js";
+export * from "./operator-loop-host.js";
+// Exported for the same reason `@windower/core` exports its fake sidecar: a
+// host that wants to exercise the daemon-side loop protocol end to end needs
+// the fake peer, and duplicating it per consumer is how the two drift apart.
+export * from "./test-helpers/fake-loop-child.js";
 export * from "./local-windower.js";
 export * from "./output-resolver.js";
 export * from "./event-timeline-writer.js";

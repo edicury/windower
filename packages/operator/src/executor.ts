@@ -1,4 +1,4 @@
-import type { InputAction, OperatorDeps, ResolvedSecret } from "@windower/core";
+import type { InputAction, OperatorCheckpoint, OperatorDeps, ResolvedSecret } from "@windower/core";
 import { inputActionCoordinates } from "@windower/core";
 import type { z } from "zod";
 import { OPERATOR_ERROR_CODES, OperatorError, toOperatorError } from "./errors.js";
@@ -10,7 +10,8 @@ import { type OperatorToolName, type ToolInput, ToolInputSchemas } from "./tools
 /**
  * The single path between a model tool call and the sidecar. Every tool maps
  * 1:1 onto a `deps` method (contracts/operator.md §Tool surface); `wait`,
- * `done`, and `fail` are the only ones that make no RPC at all.
+ * `plan`, `checkpoint`, `done`, and `fail` are the only ones that make no RPC
+ * at all.
  */
 
 export interface ExecutionContext {
@@ -26,6 +27,19 @@ export interface ExecutionContext {
 
 export type ToolOutcome =
   | { kind: "result"; result: unknown }
+  /**
+   * The model called `plan`. Only the *content* is produced here — the
+   * revision/`atStepIndex`/`tMs` identity is assigned by the loop (in-process)
+   * or by the daemon (`reportPlan`, contracts/operator-loop-protocol.md), never
+   * by the model.
+   */
+  | { kind: "plan"; steps: string[]; rationale?: string }
+  /**
+   * The model called `checkpoint`. The verification is stated by the turn that
+   * observed the screen and recorded verbatim — the runtime never derives,
+   * defaults, or infers an outcome (contracts/operator.md §Execution model).
+   */
+  | { kind: "checkpoint"; checkpoint: OperatorCheckpoint }
   | { kind: "done"; summary: string }
   | { kind: "fail"; reason: string };
 
@@ -192,6 +206,26 @@ export async function executeToolCall(
       } catch (err) {
         throw toOperatorError(err, OPERATOR_ERROR_CODES.DEPENDENCY_ERROR);
       }
+    }
+
+    case "plan": {
+      const input = parseInput("plan", rawInput);
+      // No RPC, no guardrail budget: planning is a bookkeeping call.
+      return { kind: "plan", steps: [...input.steps], rationale: input.rationale };
+    }
+
+    case "checkpoint": {
+      const input = parseInput("checkpoint", rawInput);
+      // No RPC, no native capability, no guardrail budget — verification is a
+      // bookkeeping call, exactly like `plan`.
+      return {
+        kind: "checkpoint",
+        checkpoint: {
+          expectation: input.expectation,
+          outcome: input.outcome,
+          ...(input.detail === undefined ? {} : { detail: input.detail }),
+        },
+      };
     }
 
     case "done": {

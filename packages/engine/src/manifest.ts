@@ -40,7 +40,6 @@ export interface BuildManifestParams {
   actualDurationMs: number;
   narration?: OutputManifest["narration"];
   eventTimelinePath?: string;
-  operatorRunPath?: string;
   /** Defaults to `new Date().toISOString()` — injectable for tests. */
   createdAt?: string;
 }
@@ -55,7 +54,6 @@ export function buildManifest(params: BuildManifestParams): OutputManifest {
     actualDurationMs,
     narration,
     eventTimelinePath,
-    operatorRunPath,
     createdAt,
   } = params;
 
@@ -83,7 +81,6 @@ export function buildManifest(params: BuildManifestParams): OutputManifest {
       container: session.video.container,
     },
     ...(eventTimelinePath ? { eventTimelinePath } : {}),
-    ...(operatorRunPath ? { operatorRunPath } : {}),
   };
 }
 

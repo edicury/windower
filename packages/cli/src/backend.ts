@@ -3,6 +3,7 @@ import {
   type CommandId,
   type DaemonClient,
   DaemonError,
+  type DaemonHelloEnv,
   type ResolveBackendModeOptions,
   type SessionState,
   type WindowerBackend,
@@ -39,7 +40,20 @@ import { printError, printResult } from "./output.js";
 export interface WithBackendOptions extends ResolveBackendModeOptions {
   /** Resolved `--daemon`/`--no-daemon`/`WINDOWER_BACKEND` override, or `undefined` if none applies. Ignored when the command's policy mode is `attach`. */
   forcedMode?: "local" | "daemon";
+  /**
+   * Scoped env snapshot to carry in `hello` (`contracts/daemon-rpc.md`'s
+   * `env` section) — this CLI process's own API key / `env:`-sourced secrets,
+   * built by `@windower/core`'s `buildOperatorHelloEnv`. Required for
+   * `operate --detach`: the daemon may have been spawned by a different shell
+   * and its `process.env` frozen then, so without this it answers the run's
+   * key lookup out of its own (possibly keyless) environment. Only meaningful
+   * in `daemon` mode — a `local` backend already reads this process's env.
+   */
+  env?: DaemonHelloEnv;
 }
+
+/** `hello`/`daemon_info`'s `clientName` convention (`data-model.md`'s `DaemonHelloRequest` doc). */
+const CLI_CLIENT_NAME = "windower-cli";
 
 export interface AcquiredBackend {
   mode: BackendMode;
@@ -69,7 +83,10 @@ export async function acquireBackend(
     return { mode, instance: new LocalWindower(), dispose: () => {} };
   }
   if (mode === "daemon") {
-    const client = await ensureDaemonRunning();
+    const client = await ensureDaemonRunning({
+      clientName: CLI_CLIENT_NAME,
+      env: options.env,
+    });
     return { mode, instance: client, dispose: () => client.dispose() };
   }
   const client = await connectToDaemon();

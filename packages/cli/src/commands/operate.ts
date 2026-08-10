@@ -4,11 +4,11 @@ import {
   type ListOperatorRunsResult,
   type OperatorRun,
   type RunOperatorResult,
+  buildOperatorHelloEnv,
   formatModelConfig,
   readRawConfig,
-  spawnSidecar as realSpawnSidecar,
 } from "@windower/core";
-import { FileTargetLock, OperatorRunStore, RecordingEngine, SessionStore } from "@windower/engine";
+import { OperatorRunStore } from "@windower/engine";
 import type { Command } from "commander";
 import { resolveForcedMode, withBackend } from "../backend.js";
 import { EXIT_GENERIC_FAILURE } from "../exit-codes.js";
@@ -21,19 +21,25 @@ import {
   parseSecretRefs,
   secretWarnings,
 } from "./operate-params.js";
-import { addSharedRecordingFlags } from "./record-params.js";
 
 /**
- * `windower operate "<task>" [recording flags] [--model p:m] [--base-url u]
- * [--secret name=source:ref]... [--max-steps n] [--timeout s] [--unbounded]
- * [--no-record] [--detach] [--json]` plus `operate status|abort|list` —
- * contracts/cli.md.
+ * `windower operate "<task>" --target <id> [--kind window|display|region]
+ * [--region x,y,w,h] [--model p:m] [--base-url u] [--secret name=source:ref]...
+ * [--max-steps n] [--timeout s] [--max-batch n] [--unbounded] [--detach]
+ * [--json]` plus `operate status|abort|list` — contracts/cli.md.
+ *
+ * **The operator records nothing.** It is a peer capability alongside
+ * capture: it drives `--target` and emits its own run record, and behaves
+ * identically whether or not something is recording the screen
+ * (contracts/operator.md §Recording independence). A caller who wants video
+ * around a run sequences three independent commands itself —
+ * `windower start` → `windower operate` → `windower stop`.
  *
  * **Blocks by default, `local` mode** (`phase-20-daemon-optional.md` "operate
  * blocking by default"): the operator engine (`@windower/operator`'s
- * `runOperator`, loaded lazily via `operate-blocking.ts`) runs in-process
- * against a `RecordingEngine` this command owns for the run's whole life — no
- * daemon, no socket, no RPC. Step-by-step progress streams to **stderr**
+ * `runOperator`, loaded lazily via `operate-blocking.ts`) runs in-process for
+ * the run's whole life — no daemon, no socket, no RPC. Step-by-step progress
+ * streams to **stderr**
  * (`renderOperatorStepLine`); the terminal `OperatorRun` goes to **stdout**
  * under `--json` (human-readable text otherwise). A terminal state other than
  * `succeeded` exits `1` (`contracts/cli.md`: "reusing the existing 0/1/2/3
@@ -42,15 +48,11 @@ import { addSharedRecordingFlags } from "./record-params.js";
  * `--detach` restores the original non-blocking, `daemon`-mode, `{ runId }`
  * shape via `withBackend`/`resolveBackendMode("operate", { detach: true })` —
  * unchanged from Phase 19 (see `renderRunOperatorResult`).
- *
- * The recording flags are `addSharedRecordingFlags` verbatim (per the phase
- * brief — not redefined here); `operate`-only flags come from
- * `addOperateFlags`.
  */
 /**
  * Resolves `--json` for an `operate` **subcommand**.
  *
- * `operate` itself declares `--json` (via `addSharedRecordingFlags`), and each
+ * `operate` itself declares `--json` (via `addOperateFlags`), and each
  * subcommand declares its own. When a parent and child declare the same flag,
  * Commander binds the parsed value to the *parent* — so a subcommand's own
  * `opts.json` is always `undefined` and `operate status --json` would silently
@@ -64,12 +66,12 @@ export function jsonFlag(opts: { json?: boolean }, cmd: Command): boolean {
 export function registerOperateCommand(program: Command): void {
   const operate = program
     .command("operate")
-    .description("Run a guided operator: one natural-language task, driven and recorded end-to-end")
+    .description("Run a guided operator: one natural-language task, driven on one target")
     // Optional (not `<task>`) so `operate status|abort|list` dispatch cleanly;
     // emptiness is validated in `buildRunOperatorParams`.
     .argument("[task]", "the natural-language instruction to carry out");
 
-  addOperateFlags(addSharedRecordingFlags(operate)).action(
+  addOperateFlags(operate).action(
     async (task: string | undefined, opts: OperateOpts, cmd: Command) => {
       const json = Boolean(opts.json);
 
@@ -95,7 +97,15 @@ export function registerOperateCommand(program: Command): void {
         // `--detach`: original Phase 19 shape, unchanged. `daemon` mode
         // (`resolveBackendMode("operate", { detach: true })`), auto-starts a
         // daemon if needed, returns `{ runId }` immediately.
+        //
+        // `env` carries THIS shell's API key / `env:`-sourced secrets in
+        // `hello` (`contracts/daemon-rpc.md`'s `env` section). Without it a
+        // daemon spawned by some earlier, differently-configured shell
+        // resolves the run's key from its own frozen `process.env` and the
+        // run fails `OPERATOR_MISSING_API_KEY` even though this shell has the
+        // key. Same helper the MCP server's `run_operator` uses.
         const forcedMode = resolveForcedMode(cmd.optsWithGlobals());
+        const env = buildOperatorHelloEnv({ model: params.model, secrets: params.secrets });
         await withBackend(
           "operate",
           json,
@@ -103,7 +113,7 @@ export function registerOperateCommand(program: Command): void {
             const result = await backend.runOperator(params);
             printResult(json, result, renderRunOperatorResult);
           },
-          { detach: true, forcedMode },
+          { detach: true, forcedMode, env },
         );
         return;
       }
@@ -138,7 +148,7 @@ export function registerOperateCommand(program: Command): void {
 
   operate
     .command("abort <runId>")
-    .description("Abort an in-progress operator run (any active recording is finalized, not lost)")
+    .description("Abort an in-progress operator run (never touches any recording)")
     .option("--json", "output JSON")
     .action(async (runId: string, opts: { json?: boolean }, cmd: Command) => {
       const json = jsonFlag(opts, cmd);
@@ -175,11 +185,9 @@ export function registerOperateCommand(program: Command): void {
 }
 
 /**
- * The blocking (default) path: owns a fresh `RecordingEngine` for the run's
- * whole life (mirrors `record.ts`'s `withBackend("record", ...)`, which does
- * the same for `start`/sleep/`stop`), wires SIGINT to the operator loop's
- * `AbortSignal` — one Ctrl-C aborts the run and finalizes (not discards) any
- * active recording, `contracts/cli.md`'s "same as a normal completion" — and
+ * The blocking (default) path: wires SIGINT to the operator loop's
+ * `AbortSignal` — one Ctrl-C aborts the run and nothing else; a recording the
+ * caller started separately keeps recording until the caller stops it — and
  * maps a non-`succeeded` terminal state to exit `1`.
  *
  * Exported for tests, which fire a synthetic `SIGINT` instead of waiting out
@@ -190,7 +198,7 @@ export async function runBlocking(
   json: boolean,
 ): Promise<void> {
   // Registered before any `await` so a SIGINT that arrives while this
-  // function's own setup (`sessionStore.load()`, etc.) is still in flight is
+  // function's own setup (store load, target resolution) is still in flight is
   // never dropped — an `await` suspends this async function and returns
   // control to the event loop, and `process.on` only starts catching signals
   // once it has actually run.
@@ -199,17 +207,8 @@ export async function runBlocking(
   process.on("SIGINT", onSigint);
 
   try {
-    const sessionStore = new SessionStore();
-    await sessionStore.load();
-    const recordingEngine = new RecordingEngine({
-      store: sessionStore,
-      spawnSidecar: realSpawnSidecar,
-      targetLock: new FileTargetLock(),
-    });
-
     const run = await runOperatorBlocking(params, {
       signal: controller.signal,
-      recordingEngine,
       onStep: (step) => {
         process.stderr.write(`${renderOperatorStepLine(step)}\n`);
       },
@@ -259,7 +258,7 @@ export function renderOperatorRun(run: OperatorRun): string {
     `  Steps: ${run.steps.length}`,
     `  Elapsed: ${elapsed}`,
   ];
-  if (run.sessionId) lines.push(`  Session: ${run.sessionId}`);
+  if (run.summary) lines.push(`  Summary: ${run.summary}`);
   if (run.error) lines.push(`  Error: [${run.error.code}] ${run.error.message}`);
   if (run.transcriptPath) lines.push(`  Transcript: ${run.transcriptPath}`);
   return lines.join("\n");

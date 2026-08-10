@@ -1,11 +1,11 @@
 import {
   type ApiKeyEnvVarReport,
+  type CaptureLockReport,
   DAEMON_PROTOCOL_VERSION,
   type DaemonIdentity,
   type DaemonReport,
   EXPECTED_SIDECAR_VERSION,
   type PermissionReport,
-  type PermissionStatus,
   type SidecarReport,
   WINDOWER_HOME_ENV,
   connectToDaemon,
@@ -14,11 +14,21 @@ import {
   readConfig,
   readDaemonState,
   readRawConfig,
+  spawnSidecar as realSpawnSidecar,
   resolveSidecarBinaryPathWithSource,
-  spawnSidecar,
   windowerHome,
 } from "@windower/core";
-import { OperatorRunStore, SessionStore, ensureWritableOutputDir } from "@windower/engine";
+import {
+  type CaptureHold,
+  CaptureLock,
+  OperatorRunStore,
+  ScreenCaptureBusyError,
+  SessionStore,
+  type SidecarFactory,
+  type SidecarHandle,
+  captureLockPath,
+  ensureWritableOutputDir,
+} from "@windower/engine";
 import type { Command } from "commander";
 import { printResult } from "../output.js";
 
@@ -35,6 +45,27 @@ const DEFAULT_API_KEY_ENV_VARS = [
   "OPENAI_API_KEY",
   "OPENAI_COMPATIBLE_API_KEY",
 ];
+
+/**
+ * Diagnostic view of `~/.windower/capture.lock`
+ * (`contracts/screen-capture-exclusivity.md` §Lock file). Purely a *report* of
+ * what the mutex looked like while `doctor` ran — it is not a new coordination
+ * object, carries no state of its own, and nothing branches on it.
+ *
+ * `CaptureLockReport` is defined in `packages/core` and carried on
+ * `PermissionReportSchema` itself, per `data-model.md`: there is deliberately
+ * no sibling `DoctorReport` type, and keeping the field on the one report
+ * schema is what keeps `doctor --json` schema-validated rather than merely
+ * schema-tolerated.
+ */
+export type DoctorReport = PermissionReport;
+
+export interface DoctorProbeOptions {
+  /** Injectable for tests — defaults to `@windower/core`'s real `spawnSidecar`. */
+  spawnSidecar?: SidecarFactory;
+  /** Bounded-wait budget override for the capture lock; defaults to `CaptureLock`'s. */
+  captureWaitMs?: number;
+}
 
 /** `windower doctor [--json]` — PermissionReport + daemon/sidecar/environment health, read-only, never prompts. */
 export function registerDoctorCommand(program: Command): void {
@@ -62,15 +93,25 @@ export function registerDoctorCommand(program: Command): void {
  * tautological bug this rewrite exists to fix) and only *probes* an
  * already-running daemon via `readDaemonState()` + a live RPC, never
  * spawning one.
+ *
+ * Phase 21: the capture-surface probe goes through `~/.windower/capture.lock`
+ * (`contracts/screen-capture-exclusivity.md` §Acquire-or-wait) like every
+ * other capture caller — a `doctor` run during a live recording must never be
+ * a second ScreenCaptureKit process. A busy lock is a *diagnostic*, not a
+ * crash: the capture-derived fields go unknown, the report is otherwise
+ * intact, and `captureLock` names the holder. The control surface is probed
+ * separately and takes **no** lock (§What never takes this lock).
  */
-export async function buildDoctorReport(): Promise<PermissionReport> {
-  const [sidecar, permissions, daemon, config, rawConfig] = await Promise.all([
-    probeSidecar(),
-    probeSidecarPermissions(),
+export async function buildDoctorReport(options: DoctorProbeOptions = {}): Promise<DoctorReport> {
+  const spawnSidecar = options.spawnSidecar ?? realSpawnSidecar;
+  const [capture, controlPermissions, daemon, config, rawConfig] = await Promise.all([
+    probeCaptureSurface(spawnSidecar, options.captureWaitMs),
+    probeControlSurface(spawnSidecar),
     probeDaemon(),
     readConfig().catch(() => undefined),
     readRawConfig().catch(() => undefined),
   ]);
+  const sidecar = capture.sidecar;
 
   const client = {
     name: CLIENT_NAME,
@@ -100,10 +141,18 @@ export async function buildDoctorReport(): Promise<PermissionReport> {
 
   const apiKeyEnvVars = buildApiKeyEnvVarsReport(rawConfig?.operator?.apiKeyEnvVar);
 
-  const report: PermissionReport = {
-    screenRecording: permissions.screenRecording,
-    accessibility: permissions.accessibility,
-    microphone: permissions.microphone,
+  const report: DoctorReport = {
+    // Merged capture + control view. `getPermissions` lives on BOTH surfaces
+    // and each reports only its own kinds — capture: `screenRecording`/
+    // `microphone`, control: `accessibility` (`contracts/sidecar-protocol.md`
+    // §Method-ownership surfaces) — so a caller holding both connections
+    // merges the two. An absent kind is **unknown, not denied**, which is
+    // exactly what `"not_determined"` means here; no gap ever falls back to
+    // `"denied"`.
+    screenRecording: capture.permissions.screenRecording ?? "not_determined",
+    accessibility:
+      controlPermissions.accessibility ?? capture.permissions.accessibility ?? "not_determined",
+    microphone: capture.permissions.microphone ?? "not_determined",
     // Legacy top-level fields, kept for backward compat — mirror the new
     // nested `daemon`/`sidecar` blocks below rather than being independently
     // tautological (this is the exact bug phase-20 exists to fix:
@@ -120,73 +169,136 @@ export async function buildDoctorReport(): Promise<PermissionReport> {
     activeSessions,
     activeRuns,
     apiKeyEnvVars,
+    captureLock: capture.lock,
   };
   return report;
 }
 
-interface SidecarPermissions {
-  screenRecording: PermissionStatus;
-  accessibility: PermissionStatus;
-  microphone: PermissionStatus;
+interface CaptureSurfaceProbe {
+  sidecar: SidecarReport;
+  /** Capture-owned kinds only; an absent kind is unknown, never denied. */
+  permissions: Partial<PermissionReport>;
+  lock: CaptureLockReport;
 }
 
-/** Spawns a one-shot transient sidecar, calls `describe()`, and reports version/path/availability — never throws. */
-async function probeSidecar(): Promise<SidecarReport> {
+/**
+ * The single capture-surface probe: `describe()` + `getPermissions()` under
+ * **one** hold of `~/.windower/capture.lock`, i.e. one capture process for the
+ * whole command (it used to be two unlocked ones).
+ *
+ * The acquire-or-wait table is `CaptureLock`'s, unchanged: reuse this
+ * process's capture sidecar if it somehow has one, else acquire and spawn,
+ * else wait bounded, else `SCREEN_CAPTURE_BUSY` — and a holder from a foreign
+ * `windowerHome` fails immediately. `doctor` never routes to the holder,
+ * never steals a live lock, and never spawns a second ScreenCaptureKit
+ * process; a busy lock simply becomes a diagnostic. Never throws.
+ */
+async function probeCaptureSurface(
+  spawnSidecar: SidecarFactory,
+  waitMs: number | undefined,
+): Promise<CaptureSurfaceProbe> {
   let resolvedPath: string | undefined;
   let source: SidecarReport["source"];
   try {
-    const resolved = resolveSidecarBinaryPathWithSource();
+    const resolved = resolveSidecarBinaryPathWithSource("capture");
     resolvedPath = resolved.path;
     source = resolved.source;
   } catch {
     // No binary resolvable for this platform/arch at all.
   }
 
-  if (!resolvedPath) {
-    return { available: false, resolvedPath, source, expectedVersion: EXPECTED_SIDECAR_VERSION };
+  const sidecar: SidecarReport = {
+    available: false,
+    resolvedPath,
+    source,
+    expectedVersion: EXPECTED_SIDECAR_VERSION,
+  };
+  const free: CaptureLockReport = { path: captureLockPath(), held: false, busy: false };
+  if (!resolvedPath) return { sidecar, permissions: {}, lock: free };
+
+  const lock = new CaptureLock({
+    spawnSidecar,
+    ...(waitMs !== undefined ? { waitMs } : {}),
+    // `doctor` renders its own diagnostics; a stray `[CaptureLock] …` line on
+    // stderr would just be noise next to the report.
+    onLog: () => {},
+  });
+
+  let hold: CaptureHold;
+  try {
+    hold = await lock.acquireCaptureHold({
+      // `surface: "capture"` is explicit even though `binaryPath` already
+      // pins the file: `SpawnSidecarOptions.surface` silently defaults to
+      // `"capture"`, and a spawn whose surface is only implied is exactly the
+      // shape of the bug this probe used to have.
+      spawn: { surface: "capture", binaryPath: resolvedPath },
+    });
+  } catch (err) {
+    if (err instanceof ScreenCaptureBusyError) {
+      return { sidecar, permissions: {}, lock: busyLockReport(err) };
+    }
+    // Spawn failure (missing/unrunnable binary) — the lock is already
+    // released by `CaptureLock`; report the surface as unavailable.
+    return { sidecar, permissions: {}, lock: free };
   }
 
-  const handle = spawnSidecar({ binaryPath: resolvedPath });
   try {
-    const describeResult = await handle.client.describe();
+    const describeResult = await hold.client.describe();
+    const permissions = await hold.client
+      .getPermissions()
+      .catch(() => ({}) as Partial<PermissionReport>);
     return {
-      available: true,
-      version: describeResult.version,
-      resolvedPath,
-      source,
-      expectedVersion: EXPECTED_SIDECAR_VERSION,
+      sidecar: { ...sidecar, available: true, version: describeResult.version },
+      permissions,
+      lock: free,
     };
   } catch {
-    return { available: false, resolvedPath, source, expectedVersion: EXPECTED_SIDECAR_VERSION };
+    return { sidecar, permissions: {}, lock: free };
   } finally {
-    await handle.terminate().catch(() => {});
+    await hold.release().catch(() => {});
   }
 }
 
-/** Spawns its own one-shot transient sidecar to read permission status — never throws (unknown on failure). */
-async function probeSidecarPermissions(): Promise<SidecarPermissions> {
-  const fallback: SidecarPermissions = {
-    screenRecording: "not_determined",
-    accessibility: "not_determined",
-    microphone: "not_determined",
+function busyLockReport(err: ScreenCaptureBusyError): CaptureLockReport {
+  return {
+    path: captureLockPath(),
+    held: true,
+    busy: true,
+    pid: err.holder?.pid,
+    acquiredAt: err.holder?.acquiredAt,
+    windowerHome: err.holder?.windowerHome,
+    message: err.message,
   };
-  let resolvedPath: string | undefined;
+}
+
+/**
+ * Control-surface probe — the only source of a real `accessibility` status,
+ * which `performInput`/`resizeWindow` need and the capture surface cannot
+ * answer for (`contracts/sidecar-protocol.md` §Method-ownership surfaces).
+ *
+ * Takes **no** capture lock and is deliberately not serialized against one:
+ * control spawns touch no ScreenCaptureKit state, and locking them would
+ * reintroduce the coupling Phase 21 deletes
+ * (`contracts/screen-capture-exclusivity.md` §What never takes this lock).
+ * Never throws — an unreachable control surface leaves `accessibility`
+ * unknown, not denied.
+ */
+async function probeControlSurface(
+  spawnSidecar: SidecarFactory,
+): Promise<Partial<PermissionReport>> {
+  let handle: SidecarHandle;
   try {
-    resolvedPath = resolveSidecarBinaryPathWithSource().path;
+    const resolvedPath = resolveSidecarBinaryPathWithSource("control").path;
+    handle = spawnSidecar({ surface: "control", binaryPath: resolvedPath });
   } catch {
-    return fallback;
+    // No control binary for this platform, or it could not be spawned.
+    return {};
   }
 
-  const handle = spawnSidecar({ binaryPath: resolvedPath });
   try {
-    const partial = await handle.client.getPermissions();
-    return {
-      screenRecording: partial.screenRecording ?? "not_determined",
-      accessibility: partial.accessibility ?? "not_determined",
-      microphone: partial.microphone ?? "not_determined",
-    };
+    return await handle.client.getPermissions();
   } catch {
-    return fallback;
+    return {};
   } finally {
     await handle.terminate().catch(() => {});
   }
@@ -323,7 +435,7 @@ const PERMISSION_HINTS: Array<{
   { key: "microphone", label: "Microphone" },
 ];
 
-export function renderReport(report: PermissionReport): string {
+export function renderReport(report: DoctorReport): string {
   const lines = ["windower doctor"];
   for (const { key, label } of PERMISSION_HINTS) {
     const status = report[key];
@@ -335,6 +447,7 @@ export function renderReport(report: PermissionReport): string {
 
   renderDaemonSection(lines, report);
   renderSidecarSection(lines, report);
+  renderCaptureLockSection(lines, report);
 
   if (report.client) {
     lines.push(
@@ -405,6 +518,30 @@ function renderSidecarSection(lines: string[], report: PermissionReport): void {
       `      ⚠ version mismatch: this CLI expects v${EXPECTED_SIDECAR_VERSION} — reinstall/rebuild the sidecar to match, or you may see confusing protocol errors`,
     );
   }
+}
+
+/**
+ * Only rendered when the capture surface was actually unreachable because
+ * another live process owned it — the diagnosis a user runs `doctor` to get.
+ * A free lock is the normal case and prints nothing.
+ */
+function renderCaptureLockSection(lines: string[], report: DoctorReport): void {
+  const lock = report.captureLock;
+  if (!lock?.busy) return;
+
+  const holder = lock.pid !== undefined ? `pid ${lock.pid}` : "another process";
+  const acquired = lock.acquiredAt ? `, acquired ${lock.acquiredAt}` : "";
+  lines.push(`  ⚠ Screen capture busy: held by ${holder}${acquired} — ${lock.path}`);
+  const ownHome = report.windowerHome?.path;
+  if (lock.windowerHome && ownHome && lock.windowerHome !== ownHome) {
+    lines.push(
+      `      holder's WINDOWER_HOME is ${lock.windowerHome}, this process resolved ${ownHome} — run both callers through the same home`,
+    );
+  }
+  lines.push(
+    "      Screen Recording, Microphone and the sidecar version could not be checked (unknown, not denied); " +
+      "no second screen-capture process was started. Stop the holding recording and re-run `windower doctor`.",
+  );
 }
 
 function renderApiKeySection(lines: string[], report: PermissionReport): void {

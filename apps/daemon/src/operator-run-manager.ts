@@ -5,8 +5,4 @@
  * one minor version for backward compat; import `OperatorRunEngine` from
  * `@windower/engine` directly going forward.
  */
-export {
-  OperatorRunEngine,
-  type OperatorRunEngineOptions,
-  type OperatorRunnerLoader,
-} from "@windower/engine";
+export { OperatorRunEngine, type OperatorRunEngineOptions } from "@windower/engine";

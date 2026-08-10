@@ -38,6 +38,12 @@
 |---|---|---|
 | 20 | Daemon-Optional (`npx windower record` with zero daemon management) | `phase-20-daemon-optional.md` |
 
+## v1.4
+
+| Phase | Title | File |
+|---|---|---|
+| 21 | Capture/Control Broker Split (single-writer ScreenCaptureKit architecture) | `phase-21-capture-control-broker.md` |
+
 ## Post-MVP
 
 | Phase | Title | File |
@@ -58,3 +64,5 @@ Ordering is mostly sequential (0 → 14) since each phase's sidecar/daemon surfa
 Phase 20 came out of Phase 19's live testing, where the daemon's frozen-at-spawn environment broke `windower operate` from a shell that *had* the API key. It depends on **Phase 19** (it changes `operate`'s blocking semantics and routes its secret/env resolution) and on **Phase 12** (output management — the engine extraction moves `output-resolver.ts`), and it carries Phase 19's unmet live-verification exit criteria as its own final task. It should land before **Phase 14**'s clean-machine install verification, since "install to first recording" is exactly the path Phase 20 rewrites.
 
 Phase 19 depends on **Phase 10** (event timeline — needed for the `TimelineEvent.source` tag) and **Phase 12** (output management — needed for path conventions its `OperatorRun`/manifest fields reuse), but is otherwise independent of 15/16/17 and can be built in parallel with them. If Phase 19 lands before Phase 15 (Post-Processing), Phase 15 should consume Phase 19's `source` tag directly — e.g. zooming specifically on operator-driven clicks, distinct from human ones — rather than treating all clicks uniformly.
+
+Phase 21 depends on **Phase 19** (operator) and **Phase 20** (the `@windower/engine` extraction and daemon lifecycle hardening it builds on directly — the broker lock and `ControlEngine` are new peers of `RecordingEngine` inside that package). It is the architectural follow-up to `bugs.spec.md` #6, found during Phase 20's live verification and chased across several follow-up sessions before this phase was written — see the phase file's "Context / why now" for the full evidence chain (OS-level `log stream` tracing, external research on ScreenCaptureKit's `replayd` behavior, and a file:line map of which native calls do and don't touch ScreenCaptureKit). It supersedes bug #6's stopgap fix (operator reusing the recording's sidecar as a special case) with a general, construction-enforced invariant. Should land before Phase 14 (Packaging) if at all possible — it changes `native/macos`'s binary topology, and packaging/notarization work is cheaper to do once against the final shape than twice.

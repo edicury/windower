@@ -75,7 +75,10 @@ describe.skipIf(skipReasons.length > 0)("soak: 30-minute continuous recording", 
         outputDir: workDir,
       });
 
-      const sidecarPid = await findChildPidByCommand(harness.pid, "windower-sidecar-macos");
+      // Phase 21: the recording's sidecar is the capture-surface binary.
+      // (A long-run RSS soak of `windower-control-macos` would need an
+      // operator/control workload driving it — not this test's scenario.)
+      const sidecarPid = await findChildPidByCommand(harness.pid, "windower-capture-macos");
       expect(sidecarPid).toBeDefined();
 
       const sampleIntervalMs = Math.max(1000, Math.floor(durationMs / 180)); // ~180 samples over the run

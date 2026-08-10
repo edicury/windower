@@ -8,19 +8,26 @@ import {
   parseModelConfig,
   parseSecretRef,
 } from "@windower/core";
-import type { Command } from "commander";
-import { type SharedRecordingOpts, buildAudio, buildVideo } from "./record-params.js";
+import { type Command, Option } from "commander";
+import { buildTargetSelector } from "./record-params.js";
 
 /**
  * Flag parsing for `windower operate "<task>"` (contracts/cli.md). Kept in
  * its own module — like `record-params.ts` for `start`/`record` — so every
  * flag is testable as a pure function without spawning a daemon.
  *
- * The recording half of the flag surface is *not* redefined here: `operate`
- * registers `addSharedRecordingFlags` verbatim and reuses that module's
- * `buildVideo`/`buildAudio`.
+ * Phase 21: `operate` has **no recording flags**. The operator is a peer
+ * capability that records nothing (contracts/operator.md §Recording
+ * independence), so the flag surface is task + target + model + guardrails.
+ * It does take `start`'s target flags, because the operator's target is its
+ * own — it is not "the primary display", and it has nothing to do with what,
+ * if anything, is being recorded.
  */
-export interface OperateOpts extends SharedRecordingOpts {
+export interface OperateOpts {
+  /** `--target`/`--kind`/`--region` — the same selector `windower start` takes. */
+  target?: string;
+  kind?: string;
+  region?: string;
   /** `<provider>:<model>`, e.g. `anthropic:claude-sonnet-5`, `openai-compatible:llama3:8b`. */
   model?: string;
   baseUrl?: string;
@@ -29,12 +36,43 @@ export interface OperateOpts extends SharedRecordingOpts {
   maxSteps?: string;
   /** Wall-clock bound in **seconds** at the CLI boundary. */
   timeout?: string;
+  /** `--max-batch <n>` — how many action tool calls one step may execute. */
+  maxBatch?: string;
   unbounded?: boolean;
-  /** commander's `--no-record` sets this to `false`; undefined when not passed. */
-  record?: boolean;
   /** Opts out of the default blocking/`local` shape — see `operate.ts`. */
   detach?: boolean;
+  json?: boolean;
 }
+
+/**
+ * Flags Phase 21 removed from `operate`. Registered (hidden) rather than left
+ * unknown so passing one produces the caller-side recipe instead of
+ * commander's bare "unknown option" — the phase brief's "make the error
+ * message for a removed flag point at the caller-side recipe rather than just
+ * rejecting the flag".
+ */
+const REMOVED_FLAGS = [
+  ["--no-record", "record"],
+  ["--session <id>", "session"],
+  ["--fps <fps>", "fps"],
+  ["--codec <codec>", "codec"],
+  ["--container <container>", "container"],
+  ["--resolution <WxH>", "resolution"],
+  ["--quality <quality>", "quality"],
+  ["--audio-system", "audioSystem"],
+  ["--audio-mic", "audioMic"],
+  ["--mic-device <id>", "micDevice"],
+  ["--separate-tracks", "separateTracks"],
+  ["--out <dir>", "out"],
+] as const;
+
+const REMOVED_FLAG_HELP =
+  "`windower operate` no longer records — the operator drives a target and records nothing " +
+  "(contracts/operator.md §Recording independence). You orchestrate the two capabilities " +
+  "yourself:\n" +
+  "  windower start --target <id> [recording flags]   # prints a sessionId\n" +
+  '  windower operate "<task>" --target <id>\n' +
+  "  windower stop <sessionId>";
 
 /** `~/.windower/config.json`'s `operator` block — fallbacks for omitted flags. */
 export type OperatorConfigDefaults = NonNullable<WindowerConfig["operator"]>;
@@ -46,7 +84,13 @@ export type OperatorConfigDefaults = NonNullable<WindowerConfig["operator"]>;
  * history + process listings).
  */
 export function addOperateFlags(command: Command): Command {
+  for (const [flags] of REMOVED_FLAGS) {
+    command.addOption(new Option(flags).hideHelp());
+  }
   return command
+    .option("--target <id>", "target id from `windower targets` — the target the operator drives")
+    .option("--kind <kind>", "window|display|region")
+    .option("--region <x,y,w,h>", "region bounds, only with --kind region")
     .option("--model <provider:model>", "operator model, e.g. anthropic:claude-sonnet-5")
     .option("--base-url <url>", "base URL for the model provider (e.g. a local server)")
     .option(
@@ -57,8 +101,9 @@ export function addOperateFlags(command: Command): Command {
     )
     .option("--max-steps <n>", "maximum operator steps before the run fails")
     .option("--timeout <s>", "wall-clock timeout in seconds")
+    .option("--max-batch <n>", "maximum action tool calls executed in one step")
     .option("--unbounded", "disable the target-bounds coordinate clamp (use with care)")
-    .option("--no-record", "run the operator without recording a video")
+    .option("--json", "output JSON")
     .option(
       "--detach",
       "don't block — start the run in a daemon and return { runId } immediately (original non-blocking shape)",
@@ -151,39 +196,30 @@ function buildGuardrails(
     opts.timeout !== undefined
       ? parsePositiveNumber(opts.timeout, "--timeout")
       : fromConfig.timeoutSeconds;
+  const maxBatchActions =
+    opts.maxBatch !== undefined
+      ? parsePositiveInt(opts.maxBatch, "--max-batch")
+      : fromConfig.maxBatchActions;
   const unbounded = opts.unbounded === true ? true : fromConfig.unbounded;
 
   const guardrails: OperatorGuardrails = {
     ...(maxSteps !== undefined ? { maxSteps } : {}),
     ...(timeoutSeconds !== undefined ? { timeoutSeconds } : {}),
+    ...(maxBatchActions !== undefined ? { maxBatchActions } : {}),
     ...(unbounded !== undefined ? { unbounded } : {}),
   };
   return Object.keys(guardrails).length > 0 ? guardrails : undefined;
-}
-
-function buildRecording(opts: OperateOpts): RunOperatorParams["recording"] {
-  const disabled = opts.record === false;
-  const video = buildVideo(opts);
-  const audio = buildAudio(opts);
-  const recording = {
-    ...(video !== undefined ? { video } : {}),
-    ...(audio !== undefined ? { audio } : {}),
-    ...(opts.out !== undefined ? { outputDir: opts.out } : {}),
-    ...(disabled ? { disabled: true } : {}),
-  };
-  return Object.keys(recording).length > 0 ? recording : undefined;
 }
 
 /**
  * Builds `run_operator` params from `operate`'s flags, layering
  * `~/.windower/config.json`'s `operator` block underneath them.
  *
- * `run_operator` takes no target (contracts/mcp-tools.md §run_operator — the
- * daemon targets the primary display, and the operator can re-target itself
- * through its own `list_targets`/`resize_window` tools), so the
- * target-selection third of the shared recording flag block is rejected
- * rather than silently dropped: silently ignoring a `--target` the user set
- * would record the wrong thing.
+ * An operator run is fully specified by `{ task, target, model, secrets?,
+ * guardrails? }` and nothing else (contracts/operator.md §Inputs). `target` is
+ * the same selector `windower start` takes and is resolved by the daemon
+ * exactly the same way; a caller that wants video around the run issues
+ * `windower start` and `windower stop` itself.
  */
 export function buildRunOperatorParams(
   task: string,
@@ -193,28 +229,32 @@ export function buildRunOperatorParams(
   if (task.trim().length === 0) {
     throw new DaemonError("INVALID_ARGS", "A non-empty <task> is required");
   }
-  for (const [flag, value] of [
-    ["--target", opts.target],
-    ["--kind", opts.kind],
-    ["--region", opts.region],
-  ] as const) {
-    if (value !== undefined) {
-      throw new DaemonError(
-        "INVALID_ARGS",
-        `${flag} is not supported by \`windower operate\` — the operator records the primary display and re-targets itself via its own list_targets/resize_window tools`,
-      );
-    }
-  }
+  rejectRemovedFlags(opts);
 
   const secrets = parseSecretRefs(opts.secret ?? []);
   const guardrails = buildGuardrails(opts, defaults);
-  const recording = buildRecording(opts);
 
   return {
     task,
+    target: buildTargetSelector(opts),
     model: buildModel(opts, defaults),
-    ...(recording !== undefined ? { recording } : {}),
     ...(secrets.length > 0 ? { secrets } : {}),
     ...(guardrails !== undefined ? { guardrails } : {}),
   };
+}
+
+/** Removed-flag rejection — points at the three-call recipe, not just "unknown option". */
+function rejectRemovedFlags(opts: OperateOpts): void {
+  const bag = opts as unknown as Record<string, unknown>;
+  for (const [flags, key] of REMOVED_FLAGS) {
+    const value = bag[key];
+    // `--no-record` binds `record: false`; every other removed flag is
+    // undefined unless it was passed.
+    if (value === undefined || (key === "record" && value !== false)) continue;
+    const name = flags.split(" ")[0];
+    throw new DaemonError(
+      "INVALID_ARGS",
+      `${name} is no longer a \`windower operate\` flag.\n${REMOVED_FLAG_HELP}`,
+    );
+  }
 }

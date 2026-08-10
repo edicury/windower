@@ -16,13 +16,17 @@ describe("buildOperatorHelloEnv", () => {
 
   it("returns undefined when nothing relevant is present in process.env", () => {
     clearEnv();
-    const env = buildOperatorHelloEnv({ model: { provider: "anthropic", model: "claude-sonnet-5" } });
+    const env = buildOperatorHelloEnv({
+      model: { provider: "anthropic", model: "claude-sonnet-5" },
+    });
     expect(env).toBeUndefined();
   });
 
   it("resolves the provider's default API key env var when present", () => {
     process.env.ANTHROPIC_API_KEY = "sk-abc";
-    const env = buildOperatorHelloEnv({ model: { provider: "anthropic", model: "claude-sonnet-5" } });
+    const env = buildOperatorHelloEnv({
+      model: { provider: "anthropic", model: "claude-sonnet-5" },
+    });
     expect(env).toEqual({
       apiKeyEnvVar: "ANTHROPIC_API_KEY",
       apiKeyValue: "sk-abc",
@@ -81,7 +85,9 @@ describe("buildOperatorHelloEnv", () => {
 
   it("never touches unrelated env vars (only the resolved API-key var and named secret refs)", () => {
     process.env.OPENAI_API_KEY = "unrelated-should-not-appear";
-    const env = buildOperatorHelloEnv({ model: { provider: "anthropic", model: "claude-sonnet-5" } });
+    const env = buildOperatorHelloEnv({
+      model: { provider: "anthropic", model: "claude-sonnet-5" },
+    });
     expect(env).toBeUndefined();
   });
 });

@@ -24,7 +24,10 @@ function spyOnWrite(stream: Writable): { calls: string[]; restore: () => void } 
 }
 
 function fakeDaemonClient(): DaemonClient {
-  return { dispose: () => {}, shutdown: vi.fn().mockResolvedValue({ shuttingDown: true }) } as unknown as DaemonClient;
+  return {
+    dispose: () => {},
+    shutdown: vi.fn().mockResolvedValue({ shuttingDown: true }),
+  } as unknown as DaemonClient;
 }
 
 async function runDaemon(args: string[]): Promise<void> {

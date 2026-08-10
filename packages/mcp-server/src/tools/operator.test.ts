@@ -21,8 +21,15 @@ const validRun: OperatorRun = {
   id: runId,
   state: "running",
   task: "Open the app, log in as {{user}}, create an incident",
+  target: {
+    kind: "display",
+    id: "d1",
+    name: "Built-in",
+    isPrimary: true,
+    bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+    scaleFactor: 2,
+  },
   model: { provider: "anthropic", model: "claude-sonnet-5" },
-  sessionId: "11111111-1111-1111-1111-111111111111",
   steps: [
     {
       index: 0,
@@ -60,14 +67,10 @@ async function connectServer(
   options: { onConnectForRun?: (env: unknown) => void } = {},
 ) {
   const server = new McpServer({ name: "windower-test", version: "0.0.0" });
-  registerOperatorTools(
-    server,
-    (async () => fake) as unknown as GetBackend,
-    async (env) => {
-      options.onConnectForRun?.(env);
-      return fake as unknown as DaemonClient;
-    },
-  );
+  registerOperatorTools(server, (async () => fake) as unknown as GetBackend, async (env) => {
+    options.onConnectForRun?.(env);
+    return fake as unknown as DaemonClient;
+  });
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test-client", version: "0.0.0" });
@@ -98,6 +101,7 @@ describe("registerOperatorTools (round-trip via an in-memory MCP client)", () =>
       name: "run_operator",
       arguments: {
         task: "Open the app and create an incident",
+        target: { targetId: "d1" },
         model: { provider: "anthropic", model: "claude-sonnet-5" },
       },
     });
@@ -108,7 +112,7 @@ describe("registerOperatorTools (round-trip via an in-memory MCP client)", () =>
     expect(elapsedMs).toBeLessThan(1000);
   });
 
-  it("accepts the full CLI-equivalent param shape (recording + secrets + guardrails)", async () => {
+  it("accepts the full CLI-equivalent param shape (target + secrets + guardrails)", async () => {
     let seen: unknown;
     const c = await connectServer(
       fakeDaemonClient({
@@ -121,20 +125,17 @@ describe("registerOperatorTools (round-trip via an in-memory MCP client)", () =>
 
     const args = {
       task: "Open waroom.co, log in as {{user}}/{{password}}, create an incident",
+      target: { targetId: "window-3" },
       model: {
         provider: "openai-compatible",
         model: "llama3:8b",
         baseUrl: "http://localhost:11434/v1",
       },
-      recording: {
-        video: { fps: 30, resolution: { width: 1920, height: 1080 } },
-        outputDir: "/tmp/out",
-      },
       secrets: [
         { name: "user", source: "env", ref: "DEMO_USER" },
         { name: "password", source: "keychain", ref: "waroom" },
       ],
-      guardrails: { maxSteps: 20, timeoutSeconds: 120 },
+      guardrails: { maxSteps: 20, timeoutSeconds: 120, maxBatchActions: 4 },
     };
 
     const result = await c.callTool({ name: "run_operator", arguments: args });
@@ -150,6 +151,7 @@ describe("registerOperatorTools (round-trip via an in-memory MCP client)", () =>
       name: "run_operator",
       arguments: {
         task: "t",
+        target: { targetId: "d1" },
         model: { provider: "anthropic", model: "claude-sonnet-5" },
         secrets: [{ name: "p", source: "vault", ref: "x" }],
       },
@@ -222,7 +224,11 @@ describe("registerOperatorTools error path", () => {
 
     const result = await c.callTool({
       name: "run_operator",
-      arguments: { task: "t", model: { provider: "anthropic", model: "claude-sonnet-5" } },
+      arguments: {
+        task: "t",
+        target: { targetId: "d1" },
+        model: { provider: "anthropic", model: "claude-sonnet-5" },
+      },
     });
 
     expect(result.isError).toBe(true);
@@ -256,6 +262,7 @@ describe("registerOperatorTools backend routing (Phase 20)", () => {
       name: "run_operator",
       arguments: {
         task: "t",
+        target: { targetId: "d1" },
         model: { provider: "anthropic", model: "claude-sonnet-5" },
       },
     });
@@ -297,6 +304,7 @@ describe("registerOperatorTools backend routing (Phase 20)", () => {
         name: "run_operator",
         arguments: {
           task: "t",
+          target: { targetId: "d1" },
           model: { provider: "anthropic", model: "claude-sonnet-5" },
         },
       });
@@ -322,7 +330,11 @@ describe("registerOperatorTools backend routing (Phase 20)", () => {
 
     await client.callTool({
       name: "run_operator",
-      arguments: { task: "t", model: { provider: "anthropic", model: "claude-sonnet-5" } },
+      arguments: {
+        task: "t",
+        target: { targetId: "d1" },
+        model: { provider: "anthropic", model: "claude-sonnet-5" },
+      },
     });
     expect(disposed).toBe(1);
 
@@ -335,7 +347,11 @@ describe("registerOperatorTools backend routing (Phase 20)", () => {
     const failingClient = await connectServer(failingFake);
     await failingClient.callTool({
       name: "run_operator",
-      arguments: { task: "t", model: { provider: "anthropic", model: "claude-sonnet-5" } },
+      arguments: {
+        task: "t",
+        target: { targetId: "d1" },
+        model: { provider: "anthropic", model: "claude-sonnet-5" },
+      },
     });
     expect(disposed).toBe(2);
   });
@@ -354,5 +370,32 @@ describe("operator tool descriptions steer the calling agent", () => {
     expect(description).toMatch(/never|no shell/i);
     expect(description).toMatch(/guardrail/i);
     expect(description).toMatch(/immediately/i);
+  });
+
+  // Phase 21: the operator is a peer capability that records nothing, and the
+  // calling agent is the orchestrator (contracts/operator.md §Ownership).
+  it("run_operator's description says the operator records nothing and names the caller-side recipe", async () => {
+    const client = await connectServer(fakeDaemonClient());
+    const { tools } = await client.listTools();
+    const description = tools.find((t) => t.name === "run_operator")?.description ?? "";
+
+    expect(description).toMatch(/records nothing/i);
+    expect(description).toMatch(/peer capability/i);
+    expect(description).toMatch(/you are the orchestrator/i);
+    expect(description).toMatch(/poll `get_operator_run`/i);
+    // No trace of the removed recording surface.
+    expect(description).not.toMatch(/recording\.disabled|--no-record|\.operator\.json/);
+  });
+
+  it("get_operator_run and abort_operator_run descriptions carry no recording ownership", async () => {
+    const client = await connectServer(fakeDaemonClient());
+    const { tools } = await client.listTools();
+    const get = tools.find((t) => t.name === "get_operator_run")?.description ?? "";
+    const abort = tools.find((t) => t.name === "abort_operator_run")?.description ?? "";
+
+    expect(get).not.toMatch(/sessionId/);
+    expect(get).toMatch(/only way to learn a run has finished/i);
+    expect(abort).toMatch(/keeps recording, untouched/i);
+    expect(abort).not.toMatch(/FINALIZED/);
   });
 });

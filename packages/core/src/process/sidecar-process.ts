@@ -2,14 +2,20 @@ import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { Duplex } from "node:stream";
 import type { Readable, Writable } from "node:stream";
 import { SidecarClient } from "../protocol/sidecar-client.js";
-import { resolveSidecarBinaryPath } from "./sidecar-path.js";
+import { type SidecarSurface, resolveSidecarBinaryPath } from "./sidecar-path.js";
 
 /** How long to wait after SIGTERM before escalating to SIGKILL. */
 const DEFAULT_KILL_TIMEOUT_MS = 3000;
 
 export interface SpawnSidecarOptions {
-  /** Explicit binary path; defaults to `resolveSidecarBinaryPath()`. */
+  /** Explicit binary path; defaults to `resolveSidecarBinaryPath(surface)`. */
   binaryPath?: string;
+  /**
+   * Which protocol surface's binary to spawn when `binaryPath` isn't given
+   * (`contracts/sidecar-protocol.md`). Defaults to `"capture"` — the surface
+   * every pre-Phase-21 caller meant when it said "the sidecar".
+   */
+  surface?: SidecarSurface;
   /** Args passed to the sidecar binary. Empty by default (contract defines none for MVP). */
   args?: string[];
   /** Forwarded to `child_process.spawn`'s `env`; defaults to `process.env`. */
@@ -121,7 +127,7 @@ export class SidecarProcess {
 
   /** Spawns the sidecar binary and returns a `SidecarProcess` wrapping it. */
   static spawn(options: SpawnSidecarOptions = {}): SidecarProcess {
-    const binaryPath = options.binaryPath ?? resolveSidecarBinaryPath();
+    const binaryPath = options.binaryPath ?? resolveSidecarBinaryPath(options.surface ?? "capture");
     const child = spawn(binaryPath, options.args ?? [], {
       stdio: ["pipe", "pipe", "pipe"],
       env: options.env ?? process.env,

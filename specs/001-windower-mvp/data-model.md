@@ -72,6 +72,8 @@ type RecordingSession = {
 
 Persisted at `~/.windower/sessions/<id>.json`, updated on every state transition — this is what makes `windower status <id>` and crash recovery work without the daemon holding all state only in memory.
 
+**Invariant — a `RecordingSession` must not know what it is recording.** It carries no field describing whether it is recording a human, Windower Operator, Claude Code, Playwright, another agent, or nothing at all. The Capture plane never depends on the Reasoning plane (see `spec.md` §1.1). The reverse holds too and is stated on `OperatorRun` below: **there is no operator↔session relationship in any persisted model, in either direction.** An orchestrator that wants to know when a run finished polls `get_operator_run`; it holds the `runId` and the `sessionId` independently, because it created both, and the two ids are never joined by Windower. Ephemeral wall-clock correlation of the two event streams may live in daemon memory; it must never be persisted onto either record. If persistent orchestration state ever becomes *genuinely* required, the answer is a neutral third concept owned by the orchestration plane, referencing both `recordingSessionId` and `operatorRunId` and depended on by neither peer — deliberately **not** introduced now, because current behavior does not require persisted orchestration state.
+
 - `owner` (Phase 20, optional so 0.1.x session files without it still parse): identifies the process that created the session, so a process only mutates (transitions/finalizes) sessions it owns or whose owner pid is confirmed dead. This is what makes the `attach`-mode local `stop`/`cancel` fallback safe — if nothing is listening on the socket at `stop` time, the CLI checks `owner.pid` liveness itself before marking the session `failed`/`canceled` locally, instead of spawning a fresh daemon that would just answer `SESSION_NOT_FOUND`. `startedAt` here is the owner process's start time (not the session's), used to disambiguate a dead pid from a live unrelated process that happens to have been assigned the same pid after reuse.
 
 ## OutputManifest (`manifest.json`, written next to the video file)
@@ -85,11 +87,12 @@ type OutputManifest = {
   audio: { tracks: Array<{ source: string; trackIndex: number }> };
   narration?: { filePath: string; offsetMs: number; trackIndex: number };
   eventTimelinePath?: string;           // relative path to the .events.json file
-  operatorRunPath?: string;             // relative path to the OperatorRun record, when this recording was operator-driven
   createdAt: string;
   file: { path: string; sizeBytes: number; codec: string; container: string };
 }
 ```
+
+**Removed in Phase 21: `operatorRunPath`.** A manifest is a Capture-plane artifact and must not reference the Reasoning plane; with the Operator no longer aware of recordings at all (`spec.md` §1.2), nothing can populate it. Readers must tolerate the key still being present in manifests written by earlier versions — an unknown extra key never fails validation.
 
 ## EventTimeline (`<recording>.events.json`)
 
@@ -112,7 +115,7 @@ Cursor-move sampling rate is capped (default 30Hz) to bound file size on long re
 
 ## OperatorRun (Phase 19, `~/.windower/operator-runs/<id>.json`)
 
-The daemon's live/persisted record of a guided operator run — deliberately parallel to `RecordingSession` so `OperatorRunManager` can reuse `SessionManager`'s persist-on-every-transition pattern.
+The daemon's live/persisted record of a guided operator run — deliberately parallel to `RecordingSession` so `OperatorRunManager` can reuse `SessionManager`'s persist-on-every-transition pattern. "Parallel to" is the whole relationship: the two are peers owned by orchestration, and neither references the other (`spec.md` §1.2).
 
 ```ts
 type OperatorRunState = "pending" | "running" | "succeeded" | "failed" | "aborted" | "timed_out";
@@ -121,21 +124,56 @@ type OperatorRun = {
   id: string;                  // uuid
   state: OperatorRunState;
   task: string;                // the natural-language instruction
+  target: CaptureTarget;       // the RESOLVED target this run perceives and drives. `run_operator`'s *input*
+                               //   accepts the same `CaptureTarget | { targetId: string }` selector shape
+                               //   `start_recording` takes (reused verbatim, not a parallel operator-only
+                               //   type); the daemon resolves it once, before the run starts, and the
+                               //   persisted record holds the resolution. A persisted record MUST NOT hold
+                               //   an unresolved selector — the bounds clamp is evaluated against this
+                               //   target's own `Rect` (`contracts/operator.md` §Guardrails).
   model: ModelConfig;
-  sessionId?: string;          // present when recording was not disabled — the RecordingSession this run drives
+  plan?: OperatorPlan;         // the CURRENT (highest-revision) plan; absent until the run's first `plan` tool call
   steps: OperatorStep[];
   startedAt: string;           // ISO 8601
   endedAt?: string;
+  summary?: string;            // the `done`/`fail` summary — the run's own statement of what it accomplished
+                               //   or why it stopped, persisted on the terminal transition so a consumer
+                               //   polling `get_operator_run` reads the outcome's payload without
+                               //   subscribing to anything (`contracts/operator.md` §"How they surface").
+                               //   Optional because a crashed run (`OPERATOR_LOOP_CRASHED`) died without
+                               //   reporting one — an absent summary is never fabricated.
   error?: { code: string; message: string };
-  transcriptPath?: string;     // full reasoning/tool-call transcript, written next to the recording if any
+  transcriptPath?: string;     // full reasoning/tool-call transcript, written under ~/.windower/operator-runs/
 }
 ```
 
 State machine: `pending → running → succeeded | failed | aborted | timed_out` — deliberately parallel to `SessionState` above.
 
+**Invariant — an `OperatorRun` must not know whether anything is recording.** It carries no recording identifier, in any field, at any state. The run MUST NOT start, stop, cancel, or look up a recording, and MUST NOT route its frames through a recording session. **The same `OperatorRun` must behave identically whether the screen is being recorded or not** — a recording is neither an input to nor an output of a run. Correlating a run's `plan`/`action`/`checkpoint`/`narration`/`result` events with a recording's `EventTimeline` is the orchestration plane's job, done by wall-clock in daemon memory, and is deliberately not modeled here.
+
+**Breaking change (Phase 21) — `sessionId` removed.** Phase 19 shipped `OperatorRun.sessionId` as the id of the recording the run started and owned ("standalone mode"); a Phase 21 draft additionally proposed populating it from a `sessionId` *input* ("attach mode"). Both are removed together, along with the field itself. Rationale: standalone mode required the Operator to start a recording and attach mode required it to hold a recording identifier — either one reintroduces the lifecycle coupling the peer model exists to eliminate, and keeping the field "just as an output" would keep the Reasoning plane depending on the Capture plane for no remaining reason. Already-written `<id>.json` files carrying `sessionId` must still parse: an unknown extra key never fails validation.
+
+`OperatorRun.plan` is always the highest-revision `OperatorPlan` and is redundant with the last `step.plan` by construction — it exists so a consumer polling `get_operator_run` reads the current plan without walking the transcript.
+
+## OperatorPlan (Phase 21)
+
+One revision of the run's action plan — the explicit planning stage of `contracts/operator.md`'s `task → plan → execute → verify` model. Produced by the model's `plan` tool call; there is no plan until the model makes one, and a run with no plan is well-formed.
+
+```ts
+type OperatorPlan = {
+  revision: number;            // 0 for the initial plan, +1 per replan; never reused, never edited in place
+  steps: string[];             // ordered, one concise line of intent per planned step — never dispatched mechanically
+  rationale?: string;          // why this plan, or (on a replan) what invalidated the previous one
+  atStepIndex: number;         // index of the OperatorStep whose turn produced this revision
+  tMs: number;                 // ms since run start
+}
+```
+
+The model supplies only the *content* (`steps`, `rationale`); the daemon assigns the *identity* (`revision`, `atStepIndex`, `tMs`) when it accepts a `reportPlan` (see `contracts/operator-loop-protocol.md`), so a revision cannot be renumbered, backdated, or overwritten. There is no separate plan-history array: the ordered `step.plan` values **are** the history, which makes it impossible to record replanning inconsistently.
+
 ## OperatorStep
 
-One perceive/decide/act cycle within an `OperatorRun`.
+One perceive/decide/act cycle within an `OperatorRun`. A step is one observation/decision turn regardless of how many actions it executed — see `contracts/operator.md` §Action batching, bounded by the `maxBatchActions` guardrail (default 8).
 
 ```ts
 type OperatorStep = {
@@ -143,9 +181,17 @@ type OperatorStep = {
   observationRef: string;      // reference to the captured frame (e.g. a path or in-memory handle) this step reasoned over
   toolCalls: Array<{ name: string; args: unknown; result?: unknown }>;
   reasoning?: string;          // model's stated rationale, when the provider exposes one
+  plan?: OperatorPlan;         // set only on a step whose turn called `plan`; the ordered step.plan values are the full history
+  checkpoint?: {               // the verification this step's batch was checked against (contracts/operator.md
+    expectation: string;       //   §Execution model). Absent on a step that executed no batch. Only
+    outcome: "held" | "failed-plan-sound" | "failed-plan-invalid";  //   `failed-plan-invalid` is a replan;
+    detail?: string;           //   `failed-plan-sound` means retry/adjust within the current plan.
+  };
   tMs: number;                 // ms since run start
 }
 ```
+
+`toolCalls[].result` for an action the loop never issued because an earlier action in the same batch failed (or the batch hit `maxBatchActions`) is the literal `{ skipped: "BATCH_ABORTED" }` — a skipped action stays a row rather than a missing one, so "ran / failed / never ran" is stated, never inferred from array length.
 
 ## InputAction
 
@@ -162,6 +208,22 @@ type InputAction =
   | { kind: "type_text"; text: string }
   | { kind: "key_press"; key: string; modifiers?: ("cmd" | "shift" | "ctrl" | "alt")[] }
   | { kind: "wait"; durationMs: number }
+```
+
+## CaptureFrameParams
+
+Params of the sidecar protocol's `captureFrame` method (see `contracts/sidecar-protocol.md`). Dimensions are pixels.
+
+```ts
+type CaptureFrameParams = {
+  target: CaptureTarget;
+  format: "png" | "jpeg";
+  maxWidth?: number;         // downscale the longest edge to at most this, preserving aspect ratio
+  quality?: number;          // jpeg only, 0..1
+  fresh?: boolean;           // default false. false: the backend MAY serve the newest frame of an already-live
+                             //   capture stream covering `target` (staleness bounded by that stream's frame
+                             //   interval). true: force a real single-shot capture regardless of any live stream.
+}
 ```
 
 ## SecretRef
@@ -246,6 +308,25 @@ type PermissionReport = {
     presentInClient: boolean;
     presentInDaemon: boolean;         // false/omitted-effectively-false when no daemon is running
   }>;
+
+  // Phase 21 addition — ScreenCaptureKit exclusivity diagnostics
+  // (contracts/screen-capture-exclusivity.md). A *diagnostic*, not a
+  // permission; it lives here for the same single-schema reason as
+  // `apiKeyEnvVars` (see below), which is what keeps `doctor --json`
+  // schema-validated. It records only what the lock file already says, and is
+  // NOT a discovery or routing mechanism: `doctor` never connects to the
+  // holder, never steals a live lock, and never spawns a second
+  // ScreenCaptureKit process to work around one.
+  captureLock?: {
+    path: string;                     // ~/.windower/capture.lock, per this process's WINDOWER_HOME
+    held: boolean;                    // another live process held it while doctor ran
+    busy: boolean;                    // doctor could not probe capture — capture-derived fields
+                                      //   above are therefore UNKNOWN, not denied
+    pid?: number;                     // holder identity, verbatim from the lock payload
+    acquiredAt?: string;              // ISO 8601
+    windowerHome?: string;            // holder's home; differing from ours is the split-brain case
+    message?: string;                 // the SCREEN_CAPTURE_BUSY message, verbatim
+  };
 }
 ```
 

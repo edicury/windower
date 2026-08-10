@@ -1,3 +1,4 @@
+import { OperatorCheckpointSchema } from "@windower/core";
 import type { ToolSet } from "ai";
 import { z } from "zod";
 
@@ -21,11 +22,35 @@ export const OPERATOR_TOOL_NAMES = [
   "wait",
   "list_targets",
   "resize_window",
+  "plan",
+  "checkpoint",
   "done",
   "fail",
 ] as const;
 
 export type OperatorToolName = (typeof OPERATOR_TOOL_NAMES)[number];
+
+/**
+ * The tools that consume the per-step batch budget (`maxBatchActions`) — i.e.
+ * exactly those that map onto `performInput`/`resizeWindow`
+ * (contracts/operator-loop-protocol.md §"Batches inside a step": "`captureFrame`
+ * and `enumerateTargets` are observations, not actions, and do not count").
+ * `wait`, `plan`, `checkpoint`, `done`, and `fail` make no RPC at all.
+ */
+export const OPERATOR_ACTION_TOOL_NAMES = [
+  "move_mouse",
+  "click",
+  "double_click",
+  "drag",
+  "scroll",
+  "type_text",
+  "press_key",
+  "resize_window",
+] as const satisfies readonly OperatorToolName[];
+
+export function isActionToolName(name: OperatorToolName): boolean {
+  return (OPERATOR_ACTION_TOOL_NAMES as readonly string[]).includes(name);
+}
 
 const RectInputSchema = z.object({
   x: z.number(),
@@ -67,6 +92,16 @@ export const ToolInputSchemas = {
     kinds: z.array(z.enum(["display", "window", "app"])).optional(),
   }),
   resize_window: z.object({ targetId: z.string().min(1), bounds: RectInputSchema }),
+  plan: z.object({
+    steps: z.array(z.string().min(1)).min(1),
+    rationale: z.string().optional(),
+  }),
+  /**
+   * `OperatorCheckpoint` (data-model.md) is the *single* representation of a
+   * checkpoint — the tool's params are that schema, imported, not a parallel
+   * shape re-declared here (contracts/operator.md §Execution model).
+   */
+  checkpoint: OperatorCheckpointSchema,
   done: z.object({ summary: z.string() }),
   fail: z.object({ reason: z.string() }),
 } as const satisfies Record<OperatorToolName, z.ZodType>;
@@ -92,6 +127,20 @@ const DESCRIPTIONS: Record<OperatorToolName, string> = {
   wait: "Wait locally for a bounded number of milliseconds before observing again.",
   list_targets: "List the capturable displays, windows, and apps, with their bounds.",
   resize_window: "Resize/move a window target to the given bounds, in pixels.",
+  plan:
+    "Record your action plan: an ordered list of one-line intents, each ending in the " +
+    "observable checkpoint that proves it landed. Call this once at the start of the run, " +
+    "before any input tool, and again only when an observation invalidates the current plan. " +
+    "Planning costs no step and no action budget. The plan is guidance you follow, never a " +
+    "script the runtime executes.",
+  checkpoint:
+    "Record the verification of a meaningful plan step or action batch, after you have seen " +
+    "the resulting screen. State `expectation` (what the plan expected to be true at this " +
+    'point) and `outcome`: "held" if it was true, "failed-plan-sound" if it was not but the ' +
+    'plan still works (retry or adjust inside it), "failed-plan-invalid" if it was not and the ' +
+    "plan itself is now wrong — only that last one warrants calling `plan` again. Add `detail` " +
+    "when it adds information, typically what you saw instead. This is not required after every " +
+    "individual action, and it costs no step and no action budget.",
   done: "End the run successfully. Provide a short summary of what was accomplished.",
   fail: "End the run unsuccessfully. Explain why the task cannot be completed.",
 };

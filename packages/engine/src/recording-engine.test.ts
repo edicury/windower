@@ -391,7 +391,11 @@ describe("RecordingEngine", () => {
     function makeFileLockedManager(targets: CaptureTarget[] = [DISPLAY_TARGET, WINDOW_TARGET]) {
       const store = new SessionStore();
       const { spawnSidecar } = createFakeSidecarFactory({ targets });
-      const manager = new RecordingEngine({ store, spawnSidecar, targetLock: new FileTargetLock() });
+      const manager = new RecordingEngine({
+        store,
+        spawnSidecar,
+        targetLock: new FileTargetLock(),
+      });
       return { manager, store };
     }
 
@@ -401,12 +405,10 @@ describe("RecordingEngine", () => {
 
       const { sessionId } = await daemonManager.startRecording({ target: DISPLAY_TARGET });
 
-      await expect(recordManager.startRecording({ target: DISPLAY_TARGET })).rejects.toMatchObject(
-        {
-          code: "TARGET_ALREADY_RECORDING",
-          message: expect.stringContaining(sessionId),
-        },
-      );
+      await expect(recordManager.startRecording({ target: DISPLAY_TARGET })).rejects.toMatchObject({
+        code: "TARGET_ALREADY_RECORDING",
+        message: expect.stringContaining(sessionId),
+      });
     });
 
     it("releasing on one instance lets a different instance acquire the same target", async () => {
@@ -416,9 +418,9 @@ describe("RecordingEngine", () => {
       const { sessionId } = await daemonManager.startRecording({ target: DISPLAY_TARGET });
       await daemonManager.stopRecording({ sessionId });
 
-      await expect(
-        recordManager.startRecording({ target: DISPLAY_TARGET }),
-      ).resolves.toMatchObject({});
+      await expect(recordManager.startRecording({ target: DISPLAY_TARGET })).resolves.toMatchObject(
+        {},
+      );
     });
 
     it("a crashed process's lock (dead pid) is stolen by a fresh RecordingEngine instead of silently double-capturing", async () => {
@@ -437,9 +439,9 @@ describe("RecordingEngine", () => {
       // A fresh process (e.g. a restarted daemon, which per the old bug
       // started with an empty in-memory map and would have silently allowed
       // a double-capture) must be able to acquire the same target.
-      await expect(
-        recordManager.startRecording({ target: DISPLAY_TARGET }),
-      ).resolves.toMatchObject({});
+      await expect(recordManager.startRecording({ target: DISPLAY_TARGET })).resolves.toMatchObject(
+        {},
+      );
     });
   });
 });

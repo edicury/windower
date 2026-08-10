@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { RectSchema } from "./rect.js";
-import { CaptureTargetSchema } from "./capture-target.js";
-import { VideoSettingsSchema } from "./video-settings.js";
 import { AudioSettingsSchema, AudioTrackConfigSchema } from "./audio-settings.js";
-import { RecordingSessionSchema, SessionStateSchema } from "./session.js";
-import { OutputManifestSchema } from "./manifest.js";
+import { CaptureTargetSchema } from "./capture-target.js";
 import { EventTimelineSchema, TimelineEventSchema } from "./event-timeline.js";
+import { OutputManifestSchema } from "./manifest.js";
 import { PermissionReportSchema, PermissionStatusSchema } from "./permissions.js";
+import { RectSchema } from "./rect.js";
+import { RecordingSessionSchema, SessionStateSchema } from "./session.js";
+import { VideoSettingsSchema } from "./video-settings.js";
 
 const validRect = { x: 0, y: 0, width: 1920, height: 1080 };
 
@@ -126,9 +126,7 @@ describe("CaptureTargetSchema", () => {
   });
 
   it("rejects an unknown kind literal", () => {
-    expect(() =>
-      CaptureTargetSchema.parse({ ...validDisplayTarget, kind: "screen" }),
-    ).toThrow();
+    expect(() => CaptureTargetSchema.parse({ ...validDisplayTarget, kind: "screen" })).toThrow();
   });
 
   it("rejects a window target missing a required field", () => {
@@ -180,14 +178,7 @@ describe("AudioTrackConfigSchema / AudioSettingsSchema", () => {
 
 describe("SessionStateSchema / RecordingSessionSchema", () => {
   it("parses all known session states", () => {
-    for (const state of [
-      "pending",
-      "recording",
-      "stopping",
-      "finalized",
-      "canceled",
-      "failed",
-    ]) {
+    for (const state of ["pending", "recording", "stopping", "finalized", "canceled", "failed"]) {
       expect(SessionStateSchema.parse(state)).toBe(state);
     }
   });
@@ -215,6 +206,43 @@ describe("SessionStateSchema / RecordingSessionSchema", () => {
   it("rejects a session missing a required field", () => {
     const { startedAt, ...rest } = validSession;
     expect(() => RecordingSessionSchema.parse(rest)).toThrow();
+  });
+
+  // Phase 21 — an on-disk session JSON written by an older build may carry
+  // keys this schema no longer declares (e.g. the reverted
+  // `operatorAttachedRunEnded`). Parsing must never fail on one; the unknown
+  // key is simply stripped.
+  it("parses an on-disk session JSON carrying an unknown extra key", () => {
+    const onDisk = JSON.parse(
+      JSON.stringify({
+        ...validSession,
+        state: "finalized",
+        stoppedAt: "2026-08-09T00:01:00.000Z",
+        outputPath: "/tmp/out.mp4",
+        manifestPath: "/tmp/manifest.json",
+        owner: { pid: 4821, startedAt: "2026-08-09T00:00:00.000Z" },
+        operatorAttachedRunEnded: "018f2c00-0000-7000-8000-000000000000",
+        someFutureField: { anything: true },
+      }),
+    );
+    const parsed = RecordingSessionSchema.parse(onDisk);
+    expect(parsed.id).toBe(validSession.id);
+    expect(parsed.state).toBe("finalized");
+    expect(parsed).not.toHaveProperty("operatorAttachedRunEnded");
+    expect(parsed).not.toHaveProperty("someFutureField");
+  });
+
+  // Phase 21 invariant: the Capture plane never depends on the Reasoning
+  // plane. `RecordingSession` carries no operator-derived field at all — and
+  // there is no relationship field in either direction, since `OperatorRun`
+  // carries no session identifier either.
+  it("declares no operator-derived field", () => {
+    const keys = Object.keys(RecordingSessionSchema.shape);
+    expect(keys).not.toContain("operatorAttachedRunEnded");
+    for (const key of keys) {
+      expect(key.toLowerCase()).not.toContain("operator");
+      expect(key.toLowerCase()).not.toContain("agent");
+    }
   });
 });
 

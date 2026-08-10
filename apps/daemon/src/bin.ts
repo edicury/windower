@@ -30,6 +30,7 @@ async function main(): Promise<void> {
   process.on("exit", () => {
     daemon.sessionManager.sigkillActiveSidecars();
     daemon.operatorRunManager.sigkillActiveSidecars();
+    daemon.controlEngine.sigkillActiveProcess();
   });
 }
 

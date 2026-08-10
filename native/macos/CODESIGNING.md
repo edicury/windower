@@ -1,4 +1,10 @@
-# Codesigning + Notarization — `windower-sidecar-macos`
+# Codesigning + Notarization — `windower-capture-macos` / `windower-control-macos`
+
+> Phase 21 split the single `windower-sidecar-macos` executable into two:
+> `windower-capture-macos` (the ScreenCaptureKit-owning capture sidecar) and
+> `windower-control-macos` (synthetic input + window control). BOTH ship, so
+> both must be signed and notarized — `scripts/codesign-notarize.sh` handles
+> one binary per invocation and the `codesign` npm script calls it twice.
 
 **Status: UNVERIFIED.** This scaffolding (`scripts/codesign-notarize.sh` +
 the `codesign` npm script) has never been run against a real Developer ID
@@ -15,7 +21,7 @@ Gatekeeper on a clean macOS machine blocks execution of an unsigned/
 unnotarized binary downloaded from the internet (quarantine attribute) unless
 the user manually overrides it via System Settings. Phase 14's exit criteria
 require `npm install -g @windower/cli` → `windower start` to work with **zero
-manual steps**, so the shipped `windower-sidecar-macos` binary must be:
+manual steps**, so each shipped sidecar binary must be:
 
 1. Signed with a **Developer ID Application** certificate (`codesign`).
 2. **Notarized** by Apple (`notarytool submit ... --wait`).
@@ -145,8 +151,8 @@ secret references that would just fail or be no-ops today.
 ## Verifying a signed/notarized binary manually
 
 ```sh
-codesign --verify --verbose /path/to/windower-sidecar-macos
-codesign -dv --verbose=4 /path/to/windower-sidecar-macos   # inspect signing details
-spctl --assess --type execute --verbose /path/to/windower-sidecar-macos
-xcrun stapler validate /path/to/windower-sidecar-macos      # only meaningful if stapling succeeded
+codesign --verify --verbose /path/to/windower-capture-macos
+codesign -dv --verbose=4 /path/to/windower-capture-macos   # inspect signing details
+spctl --assess --type execute --verbose /path/to/windower-capture-macos
+xcrun stapler validate /path/to/windower-capture-macos      # only meaningful if stapling succeeded
 ```

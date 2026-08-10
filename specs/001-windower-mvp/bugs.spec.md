@@ -344,6 +344,30 @@ This is Anthropic's own API rejecting the *next* request — the operator loop h
 
 **Status:** Fixed — `run.ts`'s tool-call loop now tracks `seenToolCallIds` and skips (with a log line) any subsequent call whose `toolCallId` repeats within the same turn, so only the first occurrence is executed and only one `tool-result` block per id is ever emitted.
 
+## 10. `windower operate --detach` fails with `OPERATOR_MISSING_API_KEY` even though the daemon's environment has the key
+
+**Found:** Phase 21 live verification (this session), on the very first caller-driven repro attempt. The bug had never been hit because Phase 20's live verification only exercised *blocking* `windower operate` (local, in-process, never sends `hello`), never the `--detach` daemon-backed path.
+
+**Symptom:** `windower operate --detach` fails within ~2s with `state: "failed"` and 0 steps:
+```
+{"code":"OPERATOR_MISSING_API_KEY","message":"Missing API key for provider \"anthropic\": set ANTHROPIC_API_KEY in the daemon's environment..."}
+```
+— even though the calling shell had `ANTHROPIC_API_KEY` exported *and* the daemon process itself had it in its environment (verified live with `ps eww` on the daemon pid).
+
+**Root cause (chain, all verified from source):** `packages/cli/src/backend.ts:72` called `ensureDaemonRunning()` with no options, so `buildHelloParams` (`packages/core/src/daemon/connect.ts:200-209`) sent `env: undefined` in `hello`. `packages/engine/src/request-context.ts:47-59` then produced `env: {}` — an empty object, not `undefined`. `packages/engine/src/operator-run-engine.ts:283` did `context ? { ...context.env } : undefined`, and `{}` is truthy, so the empty object was passed as the operator loop child's `env`. `packages/operator/src/run.ts:208` calls `resolveModel(options.model, options.env)`, so `providers.ts:65`'s `env = process.env` default never applied and the key was never found. The loop child process *did* inherit the full daemon environment (`packages/engine/src/operator-loop-host.ts:121`), so the correct value was present and deliberately ignored.
+
+**Why it escaped tests:** `packages/engine/src/operator-run-engine.test.ts` hand-constructed a `RequestContext` already containing the key and passed it straight in; there was no test for `buildRequestContext` at all (no `request-context.test.ts` existed); and `packages/cli/src/commands/operate.test.ts`'s `--detach` test asserted only that `{ runId }` came back, never anything about `hello.env`. Both halves of the contract were tested in isolation and the seam between them was untested — the same class of miss as the earlier commander `--json` parse-layer bug recorded in `STATUS.md`: asserting on a builder in isolation cannot catch a wiring bug.
+
+**Not a Phase 21 regression:** `git show HEAD:packages/engine/src/operator-run-engine.ts` has the identical `context ? {...} : undefined` line, `packages/cli/src/backend.ts` is unchanged vs `HEAD`, and `request-context.ts` landed with these semantics in Phase 20 (commit `80017c6`). This is pre-existing Phase 20 behavior, surfaced by Phase 21's verification because Phase 21's caller-orchestrated recipe (`start_recording` → `run_operator` → poll → `stop_recording`) uses the detached path.
+
+**Contract was already correct:** `specs/001-windower-mvp/contracts/daemon-rpc.md:52` already says "Only `operate --detach` and any other daemon-backed flow that needs a secret goes through this." The CLI simply did not honor it. No contract change was needed.
+
+**Fix applied:** `buildOperatorHelloEnv` lifted from `packages/mcp-server/src/operator-env.ts` into `packages/core/src/daemon/operator-env.ts` so CLI and MCP share one implementation (mcp-server's module is now a one-line re-export); `packages/cli/src/backend.ts` gained an optional `env` on `WithBackendOptions` and now calls `ensureDaemonRunning({ clientName: "windower-cli", env })`; `packages/cli/src/commands/operate.ts`'s `--detach` branch builds that env from `params.model`/`params.secrets`. Defensively, `packages/engine/src/operator-run-engine.ts:283` now treats an empty snapshot as "nothing scoped" (`context && Object.keys(context.env).length > 0 ? ... : undefined`) so it falls back to `process.env` rather than being shadowed by `{}`.
+
+**Tests added:** new `packages/engine/src/request-context.test.ts` (6 tests); 1 test in `operator-run-engine.test.ts` (empty context env must not shadow `process.env`); 3 tests in `packages/cli/src/commands/operate.test.ts` driven through the real command registration/parse, asserting the `hello` actually carries the resolved API-key var name and value. Suites after the fix: core 218, engine 161 (was 154), daemon 22, operator 101, cli 218 (was 215), mcp-server 53; `pnpm turbo run test` 19/19.
+
+**Status:** Fixed and verified live — after the fix, a real caller-driven `start_recording` → `operate --detach` → poll → `stop_recording` run reached the operator loop and executed 29 real steps against `anthropic:claude-sonnet-5`.
+
 ## 6 (continued) — Follow-up session: API key fixed, live repro of the residual ~19%-class stall obtained, correlated against operator steps, no code fix applied (evidence argues against every candidate fix)
 
 **Context:** the immediately-prior session was blocked from a live-model repro by an invalid `ANTHROPIC_API_KEY` and fell back to a synthetic raw-sidecar harness (three stress variants, zero stalls forced) plus shipped real-time per-stall `log`-notification/stderr logging (`CaptureService.swift`'s liveness-watchdog timer now diffs `writer.stallEventCount` on every tick) so the *next* live occurrence would be timestamped instead of only summarized at `stopCapture`. This session started with a working key (confirmed via a direct HTTPS call to `api.anthropic.com/v1/messages` with `model: "claude-sonnet-5"`, bypassing the CLI/SDK — 200 OK) and picked up exactly where that session left off.
