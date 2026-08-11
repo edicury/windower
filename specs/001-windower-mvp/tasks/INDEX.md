@@ -50,6 +50,12 @@
 |---|---|---|
 | 22 | Operator: AX-First Observation and the Planner/Executor Split | `phase-22-operator-ax-first.md` |
 
+## v1.6
+
+| Phase | Title | File |
+|---|---|---|
+| 23 | CI Release Automation | `phase-23-ci-release-automation.md` |
+
 ## Post-MVP
 
 | Phase | Title | File |
@@ -72,5 +78,7 @@ Phase 20 came out of Phase 19's live testing, where the daemon's frozen-at-spawn
 Phase 19 depends on **Phase 10** (event timeline — needed for the `TimelineEvent.source` tag) and **Phase 12** (output management — needed for path conventions its `OperatorRun`/manifest fields reuse), but is otherwise independent of 15/16/17 and can be built in parallel with them. If Phase 19 lands before Phase 15 (Post-Processing), Phase 15 should consume Phase 19's `source` tag directly — e.g. zooming specifically on operator-driven clicks, distinct from human ones — rather than treating all clicks uniformly.
 
 Phase 22 depends on **Phase 19** (operator) and **Phase 21** (the capture/control split — it adds a method to the *control* surface, and the whole point of putting it there is that a control-surface process is capture-free and lock-free, which only became true in Phase 21). It comes out of Phase 21's live testing, where real runs cost several dollars and consumed 29–30 of 30 steps for a task a human does in four clicks: the operator's only percept is a screenshot, so every coordinate is an estimate and every misestimate costs round trips. It is independent of Phases 14/15/16/17 and can be built in parallel with them, but it should **not** be scheduled ahead of Phase 21's six carried-over live-verification items — those still gate `bugs.spec.md` #6, and Phase 22 changes the operator loop those harnesses drive. If Phase 15 (Post-Processing) lands after it, note that `OperatorStep.observations` replaces `observationRef`, so Phase 15 consumes the new shape rather than the Phase 19 one.
+
+Phase 23 depends on **Phase 14** (Packaging) — it automates Phase 14's manual publish path and its task list traces directly to bugs and open items recorded in `phase-14-packaging.md`'s "Publish status" log (the chmod/executable-bit bug, dependency-graph publish ordering, the never-compiled `sidecar-macos-x64` binary). It is independent of Phases 15–22 and can be built in parallel with any of them, but its own live verification (a genuinely clean-machine install) is also the last unmet piece of Phase 14's exit criteria, so landing it is what finally closes Phase 14 out.
 
 Phase 21 depends on **Phase 19** (operator) and **Phase 20** (the `@windower/engine` extraction and daemon lifecycle hardening it builds on directly — the broker lock and `ControlEngine` are new peers of `RecordingEngine` inside that package). It is the architectural follow-up to `bugs.spec.md` #6, found during Phase 20's live verification and chased across several follow-up sessions before this phase was written — see the phase file's "Context / why now" for the full evidence chain (OS-level `log stream` tracing, external research on ScreenCaptureKit's `replayd` behavior, and a file:line map of which native calls do and don't touch ScreenCaptureKit). It supersedes bug #6's stopgap fix (operator reusing the recording's sidecar as a special case) with a general, construction-enforced invariant. Should land before Phase 14 (Packaging) if at all possible — it changes `native/macos`'s binary topology, and packaging/notarization work is cheaper to do once against the final shape than twice.

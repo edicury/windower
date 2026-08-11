@@ -14,7 +14,8 @@ import { DaemonError } from "./errors.js";
 import { daemonSocketPath, windowerHome } from "./paths.js";
 import { DAEMON_PROTOCOL_VERSION } from "./protocol.js";
 import type { DaemonHelloEnv, DaemonHelloRequest, DaemonHelloResult } from "./protocol.js";
-import { readDaemonState } from "./state-file.js";
+import { clearDaemonState, readDaemonState } from "./state-file.js";
+import { clearSidecarPids, readSidecarPids } from "./sidecar-pids.js";
 import { isTerminalOperatorRunState } from "../schemas/operator.js";
 
 /** Env var override for the daemon entrypoint, mirrors `WINDOWER_SIDECAR_BINARY_PATH`. */
@@ -470,4 +471,94 @@ export async function restartDaemon(options: RestartDaemonOptions = {}): Promise
   await gracefulShutdownAndWait(existing, socketPath);
   const fresh = await spawnAndConnect(socketPath, options);
   return handshake(fresh, socketPath, options, false);
+}
+
+/** Default bounded wait after SIGTERM before escalating to SIGKILL — mirrors `SidecarProcess`'s `DEFAULT_KILL_TIMEOUT_MS`. */
+const DEFAULT_FORCE_KILL_TIMEOUT_MS = 3000;
+
+/**
+ * SIGTERM, then SIGKILL if `pid` is still alive after `timeoutMs`. Returns
+ * whether `pid` was alive (and therefore signaled) to begin with — a dead or
+ * already-reaped pid is a no-op, not an error, so callers can loop over a
+ * pid list without special-casing "already gone."
+ */
+async function killPidWithEscalation(pid: number, timeoutMs: number): Promise<boolean> {
+  if (!isPidAlive(pid)) return false;
+
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch {
+    return false; // Raced with the process exiting on its own — nothing left to escalate.
+  }
+
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline && isPidAlive(pid)) {
+    await sleep(100);
+  }
+  if (isPidAlive(pid)) {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Raced with exit between the liveness check and the signal — fine.
+    }
+  }
+  return true;
+}
+
+export interface KillDaemonAndSidecarsResult {
+  /** Whether a live daemon pid was found and signaled. `false` when nothing was running — this is the idempotent "nothing to kill" case, not an error. */
+  daemonKilled: boolean;
+  /** The daemon pid that was signaled, if any (from `daemon.json`, alive or not). */
+  daemonPid: number | undefined;
+  /** Sidecar pids (from `sidecar-pids.json`) that were found alive and signaled. */
+  sidecarPidsKilled: number[];
+}
+
+export interface KillDaemonAndSidecarsOptions {
+  /** Bounded wait after SIGTERM before escalating to SIGKILL, per pid. Default 3000ms. */
+  killTimeoutMs?: number;
+}
+
+/**
+ * `windower daemon kill`'s implementation — the force-kill fallback for when
+ * `daemon stop`'s graceful RPC can't reach the daemon (unreachable socket,
+ * hung process). Unlike every other function in this file, this deliberately
+ * does NOT go through the socket at all: it reads `daemon.json` and
+ * `sidecar-pids.json` directly and signals pids by OS pid, so it still works
+ * when the socket is the very thing that's broken.
+ *
+ * Only ever targets the daemon process and the native sidecar children it
+ * recorded in `sidecar-pids.json` (`packages/core/src/daemon/sidecar-pids.ts`)
+ * — never `mcp-server` or any other Windower process, which have no presence
+ * in either state file.
+ *
+ * Idempotent: no daemon.json / no live pid / no sidecar pids all collapse to
+ * "nothing to kill", not an error — same convention as `daemon status`/`stop`
+ * reporting `running: false` on an absent daemon rather than throwing.
+ *
+ * Order: sidecars first, then the daemon — so a daemon that's still alive and
+ * watching its own children doesn't get a chance to respawn one out from
+ * under us between the two kills. Both state files are cleared afterward
+ * regardless of whether anything was actually alive to kill, since a stale
+ * state file left behind by a crash is exactly the mess this command exists
+ * to clean up.
+ */
+export async function killDaemonAndSidecars(
+  options: KillDaemonAndSidecarsOptions = {},
+): Promise<KillDaemonAndSidecarsResult> {
+  const timeoutMs = options.killTimeoutMs ?? DEFAULT_FORCE_KILL_TIMEOUT_MS;
+
+  const [state, sidecarPids] = await Promise.all([readDaemonState(), readSidecarPids()]);
+
+  const sidecarPidsKilled: number[] = [];
+  for (const pid of sidecarPids) {
+    if (await killPidWithEscalation(pid, timeoutMs)) sidecarPidsKilled.push(pid);
+  }
+
+  const daemonPid = state?.pid;
+  const daemonKilled = daemonPid !== undefined && (await killPidWithEscalation(daemonPid, timeoutMs));
+
+  await Promise.all([clearDaemonState(), clearSidecarPids()]);
+
+  return { daemonKilled, daemonPid, sidecarPidsKilled };
 }

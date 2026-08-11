@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   connectToDaemon,
   ensureDaemonRunning,
+  killDaemonAndSidecars,
   restartDaemon,
   spawnDaemonDetached,
 } from "./connect.js";
@@ -14,7 +15,35 @@ import { DaemonError } from "./errors.js";
 import { FileLock } from "../fs/file-lock.js";
 import { WINDOWER_HOME_ENV, daemonSocketPath } from "./paths.js";
 import { DAEMON_PROTOCOL_VERSION } from "./protocol.js";
-import { writeDaemonState } from "./state-file.js";
+import { addSidecarPid, readSidecarPids } from "./sidecar-pids.js";
+import { readDaemonState, writeDaemonState } from "./state-file.js";
+
+/** `process.kill(pid, 0)` — true if `pid` is still alive. Mirrors `connect.ts`'s own private `isPidAlive`, duplicated here since it isn't exported. */
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Spawns a real, long-lived (but harmless) child process to use as a stand-in daemon/sidecar pid — killDaemonAndSidecars signals real OS pids, so a fabricated number isn't enough to exercise it. */
+function spawnLongRunning(): ChildProcess {
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    stdio: "ignore",
+  });
+  return child;
+}
+
+async function waitUntilDead(pid: number, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isAlive(pid)) return;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`pid ${pid} never died`);
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = join(__dirname, "fixtures", "fake-daemon-cli.mjs");
@@ -361,4 +390,99 @@ describe("connectToDaemon / ensureDaemonRunning / restartDaemon", () => {
       client.dispose();
     }, 15_000);
   });
+});
+
+describe("killDaemonAndSidecars", () => {
+  let home: string;
+  let originalHome: string | undefined;
+  const spawned: ChildProcess[] = [];
+
+  beforeEach(async () => {
+    home = await mkdtemp(join(tmpdir(), "windower-daemon-kill-"));
+    originalHome = process.env[WINDOWER_HOME_ENV];
+    process.env[WINDOWER_HOME_ENV] = home;
+  });
+
+  afterEach(async () => {
+    for (const child of spawned) {
+      if (child.pid !== undefined && isAlive(child.pid)) child.kill("SIGKILL");
+    }
+    spawned.length = 0;
+    if (originalHome === undefined) delete process.env[WINDOWER_HOME_ENV];
+    else process.env[WINDOWER_HOME_ENV] = originalHome;
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("is idempotent — reports nothing killed when no state file exists", async () => {
+    const result = await killDaemonAndSidecars();
+    expect(result).toEqual({ daemonKilled: false, daemonPid: undefined, sidecarPidsKilled: [] });
+  });
+
+  it("kills a live daemon pid recorded in daemon.json and clears the state file", async () => {
+    const daemon = spawnLongRunning();
+    spawned.push(daemon);
+    if (daemon.pid === undefined) throw new Error("failed to spawn");
+
+    await writeDaemonState({
+      pid: daemon.pid,
+      version: "0.1.0",
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
+      startedAt: new Date().toISOString(),
+      socketPath: daemonSocketPath(),
+      windowerHome: home,
+      execPath: process.execPath,
+      entryPath: "irrelevant.js",
+    });
+
+    const result = await killDaemonAndSidecars({ killTimeoutMs: 500 });
+
+    expect(result.daemonKilled).toBe(true);
+    expect(result.daemonPid).toBe(daemon.pid);
+    await waitUntilDead(daemon.pid);
+    expect(await readDaemonState()).toBeNull();
+  }, 15_000);
+
+  it("kills sidecar pids recorded in sidecar-pids.json and clears the tracking file", async () => {
+    const sidecarA = spawnLongRunning();
+    const sidecarB = spawnLongRunning();
+    spawned.push(sidecarA, sidecarB);
+    if (sidecarA.pid === undefined || sidecarB.pid === undefined) throw new Error("failed to spawn");
+
+    await addSidecarPid(sidecarA.pid);
+    await addSidecarPid(sidecarB.pid);
+
+    const result = await killDaemonAndSidecars({ killTimeoutMs: 500 });
+
+    expect(result.sidecarPidsKilled.sort()).toEqual([sidecarA.pid, sidecarB.pid].sort());
+    await waitUntilDead(sidecarA.pid);
+    await waitUntilDead(sidecarB.pid);
+    expect(await readSidecarPids()).toEqual([]);
+  }, 15_000);
+
+  it("does not error on a dead pid left behind in the state files (already-crashed cleanup)", async () => {
+    const ghost = spawnLongRunning();
+    const ghostPid = ghost.pid;
+    if (ghostPid === undefined) throw new Error("failed to spawn");
+    ghost.kill("SIGKILL");
+    await waitUntilDead(ghostPid);
+
+    await writeDaemonState({
+      pid: ghostPid,
+      version: "0.1.0",
+      protocolVersion: DAEMON_PROTOCOL_VERSION,
+      startedAt: new Date().toISOString(),
+      socketPath: daemonSocketPath(),
+      windowerHome: home,
+      execPath: process.execPath,
+      entryPath: "irrelevant.js",
+    });
+    await addSidecarPid(ghostPid);
+
+    const result = await killDaemonAndSidecars({ killTimeoutMs: 200 });
+
+    expect(result.daemonKilled).toBe(false);
+    expect(result.sidecarPidsKilled).toEqual([]);
+    expect(await readDaemonState()).toBeNull();
+    expect(await readSidecarPids()).toEqual([]);
+  }, 10_000);
 });

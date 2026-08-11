@@ -27,6 +27,7 @@ const EXPECTED: Record<CommandId, BackendMode> = {
   "daemon status": "attach",
   "daemon stop": "attach",
   "daemon restart": "attach",
+  "daemon kill": "local",
 };
 
 describe("POLICY_TABLE", () => {

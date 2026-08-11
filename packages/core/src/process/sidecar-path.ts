@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { chmodSync, existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -185,10 +185,14 @@ export function resolveSidecarBinaryPathWithSource(
   const binaryFilename = SIDECAR_BINARY_FILENAME_BY_PLATFORM[platform]?.[surface];
   if (packageName && binaryFilename) {
     try {
-      return {
-        path: require.resolve(`${packageName}/bin/${binaryFilename}`),
-        source: "npm-package",
-      };
+      const resolved = require.resolve(`${packageName}/bin/${binaryFilename}`);
+      // npm only preserves the executable bit for files declared in a
+      // package's own `bin` field; these binaries ship under `files: ["bin"]`
+      // instead (so callers resolve them by exact filename, not npm's own PATH
+      // shimming), which means the bit is silently lost on publish/install —
+      // confirmed via a real `npm install` of a signed sidecar package.
+      chmodSync(resolved, 0o755);
+      return { path: resolved, source: "npm-package" };
     } catch {
       // Optional dependency not installed (wrong platform/arch, or not
       // installed via npm at all) — fall through to the error below.

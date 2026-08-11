@@ -1,6 +1,6 @@
 {
   "name": "@windower/cli",
-  "version": "0.1.1",
+  "version": "0.1.5",
   "license": "UNLICENSED",
   "type": "module",
   "main": "./dist/index.js",
@@ -8,7 +8,10 @@
   "bin": {
     "windower": "./dist/index.js"
   },
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "publishConfig": {
     "access": "public"
   },

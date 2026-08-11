@@ -1,11 +1,17 @@
 {
   "name": "@windower/sidecar-macos-arm64",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Prebuilt windower-capture-macos + windower-control-macos binaries (arm64) — optionalDependency of @windower/cli, resolved via npm's os/cpu fields.",
   "license": "UNLICENSED",
-  "os": ["darwin"],
-  "cpu": ["arm64"],
-  "files": ["bin"],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "arm64"
+  ],
+  "files": [
+    "bin"
+  ],
   "publishConfig": {
     "access": "public"
   }

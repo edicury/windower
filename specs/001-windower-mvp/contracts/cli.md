@@ -33,6 +33,7 @@ Windower is **daemon-optional**, not daemon-first. Every command resolves to exa
 | `daemon status` | `attach` |
 | `daemon stop` | `attach` |
 | `daemon restart` | `attach` (must find a live daemon to restart; refuses if none is running) |
+| `daemon kill` | none of the three — never opens the socket at all; reads `~/.windower/daemon.json`/`sidecar-pids.json` directly and force-kills by OS pid. Documented as `local` in the policy table purely for test-completeness bookkeeping (see `packages/core/src/daemon/policy.ts`); the real command bypasses `withBackend`/`acquireBackend` entirely. |
 
 Every registered command has an explicit entry in this table (enforced by a test in `packages/cli`) — a new command can never silently default to the wrong mode.
 
@@ -93,12 +94,13 @@ Ctrl-C semantics: the **first** Ctrl-C finalizes the in-flight recording (video,
 ## `windower config get|set <key> <value>`
 Reads/writes `~/.windower/config.json` — output folder, filename template, daemon idle-timeout, default video/audio settings.
 
-## `windower daemon status|stop|restart [--discard] [--force] [--json]`
-Explicit daemon lifecycle control, mostly for debugging. All three subcommands are `attach` mode — they act on a daemon that is already listening and never spawn one. The daemon itself auto-starts only for `start`, `stop`/`cancel` (attaching to whatever `start` spawned), and `operate --detach`/`operate abort` — see Daemon policy above; it is no longer true that any other command brings a daemon up.
+## `windower daemon status|stop|restart|kill [--discard] [--force] [--json]`
+Explicit daemon lifecycle control, mostly for debugging. `status`/`stop`/`restart` are `attach` mode — they act on a daemon that is already listening and never spawn one. The daemon itself auto-starts only for `start`, `stop`/`cancel` (attaching to whatever `start` spawned), and `operate --detach`/`operate abort` — see Daemon policy above; it is no longer true that any other command brings a daemon up.
 
 - `daemon status`: reports the same `daemon` block as `windower doctor` (`{running, pid, version, protocolVersion, startedAt, ageSeconds, socketPath, versionMatchesClient}`), or `running: false` if nothing is listening.
 - `daemon stop`: graceful by default — stops accepting new connections, **finalizes** every in-flight recording (video, manifest, and event timeline all land, exactly as if each had received an explicit `stop`) and aborts every in-flight operator run independently of that, before closing the socket and exiting. `--discard` cancels those in-flight recordings instead of finalizing them, mirroring `record --discard`. Errors with `DAEMON_UNREACHABLE` if nothing is listening.
 - `daemon restart`: stops the running daemon (same finalize semantics as `daemon stop`, respecting `--discard`) and starts a fresh one. Refuses with `DAEMON_BUSY` (naming the active session/run ids) if a recording or operator run is in flight, unless `--force` is passed to override the busy check and finalize/discard anyway. Errors with `DAEMON_UNREACHABLE` if nothing is running to restart.
+- `daemon kill`: the force-kill fallback for when `daemon stop` can't reach the daemon at all (unreachable/hung socket) — the situation that otherwise leaves stray `windower` processes behind with no cleanup path but a manual `ps`/`kill`. Does **not** use the socket or the version handshake; reads `~/.windower/daemon.json` for the daemon pid and `~/.windower/sidecar-pids.json` for any native sidecar child pids (capture/control surfaces) the daemon recorded, and force-kills each: SIGTERM, then SIGKILL if still alive after a short grace period. Also clears `daemon.json`, `sidecar-pids.json`, and `capture.lock` if its recorded holder matches the pid just killed. Idempotent — running it with nothing running reports `{daemonKilled: false, sidecarPidsKilled: []}` and exits cleanly, not an error. Scoped deliberately narrow: only the daemon process and the sidecar pids it itself recorded — never `mcp-server` or any other Windower process, which have no presence in either state file and are out of scope for this command.
 
 ## `windower list [--state recording|finalized|...] [--json]`
 Lists known sessions (from `~/.windower/sessions/`), most recent first — lets an agent recover context after a restart ("what was I recording?").

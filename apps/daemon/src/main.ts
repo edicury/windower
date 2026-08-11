@@ -1,4 +1,11 @@
-import { daemonSocketPath, spawnSidecar, windowerHome } from "@windower/core";
+import {
+  addSidecarPid,
+  daemonSocketPath,
+  removeSidecarPid,
+  spawnSidecar as coreSpawnSidecar,
+  windowerHome,
+} from "@windower/core";
+import type { SidecarProcess, SpawnSidecarOptions } from "@windower/core";
 import {
   CaptureLock,
   ControlEngine,
@@ -41,6 +48,29 @@ export interface RunDaemonOptions {
 }
 
 /**
+ * Wraps `@windower/core`'s `spawnSidecar` so every native sidecar this
+ * daemon spawns (capture or control surface) gets its pid recorded in
+ * `~/.windower/sidecar-pids.json` on spawn and removed on exit. A sidecar
+ * pid otherwise only lives in this process's memory — `windower daemon
+ * kill` runs in a fresh CLI process with none of that, so this file is the
+ * only way it can find sidecars to force-kill alongside the daemon.
+ * `main.ts` is the single place `spawnSidecar` is handed out to every engine
+ * (`CaptureLock`, `ControlEngine`, `RecordingEngine`, `PassthroughService`,
+ * `OperatorRunEngine`), so wrapping it once here covers all of them.
+ */
+function trackedSpawnSidecar(options: SpawnSidecarOptions = {}): SidecarProcess {
+  const proc = coreSpawnSidecar({
+    ...options,
+    onExit: (info) => {
+      if (proc.pid !== undefined) void removeSidecarPid(proc.pid);
+      options.onExit?.(info);
+    },
+  });
+  if (proc.pid !== undefined) void addSidecarPid(proc.pid);
+  return proc;
+}
+
+/**
  * Wires up and starts the daemon: loads config, replays persisted session
  * state (crash-recovering anything stuck `recording`/`stopping`), and starts
  * listening on the unix socket. Does not install SIGTERM/SIGINT handlers
@@ -66,7 +96,7 @@ export async function runDaemon(options: RunDaemonOptions = {}): Promise<Running
   // The daemon takes the lock file itself even though its own callers never
   // need it, so the invariant stays honest against daemon-free processes
   // (Phase 20's `LocalWindower`, `windower record` with no daemon).
-  const captureLock = new CaptureLock({ spawnSidecar });
+  const captureLock = new CaptureLock({ spawnSidecar: trackedSpawnSidecar });
 
   // The control surface is an independent peer: a different binary, no
   // ScreenCaptureKit linkage, and therefore no capture lock — ever. Any number
@@ -74,7 +104,7 @@ export async function runDaemon(options: RunDaemonOptions = {}): Promise<Running
   // capture sidecar, and `performInput`/`resizeWindow` are never serialized
   // against a recording or a `captureFrame`.
   const controlEngine = new ControlEngine({
-    spawnControl: spawnSidecar,
+    spawnControl: trackedSpawnSidecar,
     // Without this, `SpawnSidecarOptions.surface` defaults to `"capture"` and
     // the "control" engine would spawn a second ScreenCaptureKit process.
     spawnOptions: { surface: "control" },
@@ -82,7 +112,7 @@ export async function runDaemon(options: RunDaemonOptions = {}): Promise<Running
 
   const sessionManager = new RecordingEngine({
     store,
-    spawnSidecar,
+    spawnSidecar: trackedSpawnSidecar,
     targetLock: new FileTargetLock(),
     captureLock,
     muxNarration,
@@ -90,7 +120,7 @@ export async function runDaemon(options: RunDaemonOptions = {}): Promise<Running
   });
   await sessionManager.recoverCrashedSessions();
 
-  const passthrough = new PassthroughService(spawnSidecar, {
+  const passthrough = new PassthroughService(trackedSpawnSidecar, {
     capture: captureLock,
     control: controlEngine,
   });
@@ -103,7 +133,7 @@ export async function runDaemon(options: RunDaemonOptions = {}): Promise<Running
   const operatorRunManager = new OperatorRunEngine({
     store: operatorRunStore,
     passthrough,
-    spawnSidecar,
+    spawnSidecar: trackedSpawnSidecar,
     // The same two peers everything else in the daemon uses: an operator
     // `captureFrame` during a live recording is row 1 (reuse this process's
     // capture sidecar), and its `performInput` goes to the shared control

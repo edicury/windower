@@ -1,6 +1,6 @@
 {
   "name": "@windower/operator",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "license": "UNLICENSED",
   "type": "module",
   "main": "./dist/index.js",
@@ -9,7 +9,10 @@
     ".": "./dist/index.js",
     "./loop-entry": "./dist/loop-entry.js"
   },
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "publishConfig": {
     "access": "public"
   },

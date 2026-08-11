@@ -1,0 +1,122 @@
+## Phase 23 — CI Release Automation (v1.6)
+
+**Goal:** Replace the manual, error-prone publish process this session just did by hand — sign, notarize, `chmod`, version-bump, `pnpm publish` × 9 packages, all typed at a terminal with a human clicking through OTP prompts — with a CI workflow that does the same sequence unattended, in the same dependency order, without reusing a version number, and without silently shipping a binary that lost its executable bit. This phase automates Phase 14's manual publish path; it adds no new product capability.
+
+### Context / why now
+
+Phase 14 (`tasks/phase-14-packaging.md`) shipped the *shape* of the release — five workspace packages plus two platform sidecar packages, a codesigning script, a package layout keyed on `os`/`cpu` fields — but its "Publish status" log documents that shape being exercised by hand for the first time this session, and it went wrong in specific, reproducible ways. This phase's task list is not speculative hardening; every task below traces to a concrete failure this session hit and fixed (or hit and could not fix, and is deferring to CI). Treat `phase-14-packaging.md`'s publish-status log as the ground truth for what CI must replicate — this phase does not re-derive the process, it automates the process that log describes.
+
+Two bugs shipped in `@windower/core@0.1.3` this session because nothing caught them before `npm publish`:
+
+1. **The executable bit was silently stripped.** `packages/sidecar-macos-arm64`/`-x64` ship their binaries under `"files": ["bin"]`, not npm's own `"bin"` field (the binaries are resolved by exact filename via `require.resolve` in `packages/core/src/process/sidecar-path.ts`, not npm's PATH-shimming bin mechanism) — and npm only preserves the executable bit for files declared via a package's own `bin` field. A real `npm install` produced `-rw-r--r--` binaries. Nothing in CI or locally checks this before or after publish.
+2. **Publish order violated the dependency graph, twice.** `pnpm publish` rewrites `workspace:*` to the exact current published version (`"@windower/engine": "0.1.1"`, not `"^0.1.1"`) at publish time. `@windower/engine`, `@windower/operator`, and `@windower/engine-narration` had never been published even though `cli`/`daemon`/`mcp-server` already depended on them via `workspace:*`; and the `core` chmod fix landing after `cli`/`daemon`/`mcp-server` were already live required re-bumping and re-publishing every transitive dependent. Nothing enforces graph order or catches a missed link.
+
+On top of the two shipped bugs, this session hit three more things that only a real signed-and-published run surfaces, none of which are documented anywhere as operational knowledge until now:
+
+3. Notarization turnaround for the exact same binary shape was **~45 minutes on a first-ever submission** and **under 2 minutes** immediately after for a second binary — an order-of-magnitude spread with no visible cause, which breaks any workflow that assumes `notarytool submit --wait` returns quickly.
+4. `xcrun stapler staple` fails on bare (non-bundled) Mach-O executables with "Error 73" — expected, already documented in `codesign-notarize.sh`, and must not fail the job.
+5. Every `pnpm publish` this session demanded interactive browser OTP/webauthn — fine by hand, a hard blocker for an unattended job.
+
+None of this was hypothetical risk analysis; it is what happened when `native/macos/CODESIGNING.md`'s "Status: UNVERIFIED" scaffolding was run for the first time against real Apple and npm credentials this session, immediately following Phase 22's completion. `windower-site` docs, phase-14's own exit criteria ("clean-machine install through first recording"), and `@windower/sidecar-macos-x64` (still binary-less — no Intel Mac was available this session) all still depend on this phase's `x64` cross-compilation task landing before Phase 14 can be marked fully done.
+
+### Reasoning — the governing principle
+
+> **A release process a human got right once by carefully following a checklist is not a release process — it is a demonstration that the checklist is correct. CI is what makes "correct" durable.** Every bug this phase's task list targets is a class of mistake that is easy to make once, easier to make again under time pressure, and invisible until an end user's `npm install` breaks in a way the publisher never sees.
+
+Two consequences follow:
+
+- **Detection belongs before publish, not after.** The chmod bug was caught only because someone happened to run a real `npm install` and looked at file permissions by hand. A CI check that unpacks the built tarball and asserts on the entries is the same check, but it runs on every release instead of on the one release where someone thought to look.
+- **Ordering and versioning must be mechanically enforced, not remembered.** The dependency-graph violations this session hit were not caused by anyone being careless — the graph is genuinely non-obvious (7 packages, one of which fans out to 2 more) and `workspace:*` rewriting to an exact pinned version is a real npm behavior most people don't expect. A script that knows the graph and refuses to let it be violated closes this permanently; a bullet point in a runbook does not.
+
+### Settled decisions (do not relitigate during implementation)
+
+1. **Release automation is a separate workflow from PR validation.** `.github/workflows/ci.yml` stays exactly as-is (lint/typecheck/build/test on every push/PR, e2e/soak explicitly and correctly excluded per its existing comment). Signing, notarizing, and publishing have nothing to do with validating a PR and must not slow down or risk breaking that path. The new workflow lives at `.github/workflows/release.yml`.
+2. **CI must publish the full dependency graph, atomically, in strict order, every release — never a subset.** Order: `core` → `operator` → (`engine`, `engine-narration`) → `daemon` → `cli` → `mcp-server` → (`sidecar-macos-arm64`, `sidecar-macos-x64`). A dependency must be live on the registry before anything depending on it publishes. This is non-negotiable, not a default that can be overridden per release.
+3. **A version number is used exactly once, ever — no same-version retry.** This session hit `403 Forbidden — You cannot publish over the previously published versions` on first-ever `0.1.0` publishes for four different packages, despite `npm view <pkg>@0.1.0` returning `404` at the time (see item 9 below for the open question this raises). The fix each time was bumping to the next patch and republishing — never retrying the same version. CI must encode this as policy: an "already exists" publish error is **fatal, needs-investigation**, never retried with backoff on the same version number.
+4. **A staple failure on a bare binary is non-fatal, by design.** `xcrun stapler staple` on `windower-capture-macos`/`windower-control-macos` (loose executables, not `.app`/`.pkg`/`.dmg`) is expected to fail with "Error 73" per `codesign-notarize.sh`'s existing comments. The release job must not treat this as a job failure. Gatekeeper's online notarization check at launch time is what actually gates a bare binary.
+5. **The notarization step gets a generous, poll-based budget, not a fixed short timeout.** Turnaround was ~45 minutes for one binary and under 2 minutes for another in the same session, same binary shape, same account. CI must not assume `notarytool submit --wait` returns quickly; budget the signing/notarization job step at **60 minutes minimum** and treat `notarytool`'s own polling (which `--wait` already does internally) as the mechanism, not a hand-rolled poll loop layered on top of it.
+6. **Publishing requires an npm Automation token, not a Classic token.** Every `pnpm publish` this session demanded interactive OTP/webauthn, which has no answer in an unattended job. An npm **Automation**-type access token (npm account settings → Access Tokens → Automation) bypasses 2FA/OTP for publish. Stored as the `NPM_TOKEN` GitHub Actions secret, wired into `.npmrc`/`NODE_AUTH_TOKEN` for the publish steps.
+7. **The chmod regression gets a standing CI check, not a one-time fix.** The fix already shipped in `@windower/core@0.1.3`. This phase's job is a check that runs on every release, before publish, and fails the job if it ever regresses — not a note in a doc that the fix exists.
+8. **The temporary-keychain codesign-identity import pattern is standard and not a research risk.** `security create-keychain` → import the base64-decoded `.p12` → `security set-key-partition-list` → add to keychain search list → clean up after. This is the well-known GitHub Actions macOS pattern for codesign identity import; implement it directly, don't spend implementation time re-evaluating it.
+9. **`@windower/sidecar-macos-x64` cross-compilation is an open question, not a known-solved step.** Whether `swift build --arch x86_64` cross-compiles cleanly on a `macos-14` (arm64) runner is unverified — Swift/SPM is claimed to support Apple-platform cross-compilation but this repo has never tried it. Flagged explicitly in the task list below as needing investigation, with a `macos-13` (Intel) runner as the fallback if cross-compilation doesn't pan out.
+10. **A version-bump/publish-order mechanism is mandatory; the specific tool is not prescribed.** Adopt `changesets` (the standard pnpm-monorepo coordinated-versioning tool) or an equivalent script — but whichever is chosen MUST guarantee: (a) the full dependency graph publishes together, in graph order, automatically; (b) every affected package's version bumps together, so a dependency change never leaves a stale-pointing dependent; (c) a version number is never reused. The exit criteria require these three guarantees exist as tooling, not that changesets specifically is used.
+11. **Trigger strategy is posed, not settled, by this phase.** Candidates — a git tag push (`v*`), manual `workflow_dispatch`, or a merge-to-main-with-version-bump-detected trigger (changesets' own release-PR pattern, the standard pairing if decision 10 picks changesets) — are laid out with tradeoffs in the task list below. The implementing session or the product owner picks one; this phase does not silently decide it.
+
+### YAGNI — what this phase must not turn into
+
+- 🔵 **No sidecar-protocol change.** This phase is pure TS-tooling/CI infrastructure plus native macOS build/signing automation — it touches no wire format between TS and the sidecar, so unlike Phase 22 there is no Protocol section here. `CLAUDE.md`'s protocol-before-platform rule is satisfied trivially: nothing in this phase is reasoning that belongs above or below the stdio line, it's a build pipeline.
+- 🔵 **No Windows/Linux release automation.** `native/windows`/`native/linux` are post-MVP (`phase-16`/`phase-17`). This phase covers `native/macos` only.
+- 🔵 **No changesets-vs-custom-script bake-off performed here.** Decision 10 states the requirement; picking and implementing the specific mechanism is the implementing session's job, not this drafting phase's.
+- 🔵 **No trigger-strategy decision made here.** Decision 11 lays out the options; this phase does not pick one.
+- 🔵 **No telemetry, no publish-analytics, no release dashboard.** `spec.md` §7's no-network-calls rule is unaffected by this phase — GitHub Actions talking to `registry.npmjs.org` and Apple's notarization service is the existing, already-sanctioned exception for a release pipeline, not a new one.
+- 🔵 **No auto-versioning of the sidecar binaries independent of their npm package version.** `packages/sidecar-macos-{arm64,x64}`'s version tracks the same graph-order mechanism as everything else; no separate binary-versioning scheme.
+- 🔵 **No rollback/yank automation.** If a bad version publishes, unpublishing/deprecating is a manual npm operation this phase does not attempt to automate — npm's own unpublish window and policy restrictions make this genuinely out of scope, not merely deferred.
+
+### CI workflow (`.github/workflows/release.yml`)
+
+- 🔵 New workflow file, separate from `ci.yml` per decision 1. Trigger per decision 11 — implementing session/product owner picks from the three candidates and records the choice and rationale in this phase's file or `STATUS.md` when implemented.
+- 🔵 Job 1 — **build + sign + notarize** (`runs-on: macos-14`, timeout **≥ 60 minutes** per decision 5):
+  - `swift build -c release` in `native/macos/` for arm64 (native on `macos-14`).
+  - x64 build — investigate `swift build --arch x86_64` cross-compilation on the arm64 runner first (decision 9); fall back to a second job on `macos-13` if it doesn't produce a working binary. Flag whichever path is taken in the job's own comments so a future reader doesn't have to re-derive it.
+  - Import the Developer ID Application identity into a temporary CI keychain per decision 8's standard pattern, sourced from `DEVELOPER_ID_CERT_P12` (base64) + `DEVELOPER_ID_CERT_PASSWORD`.
+  - Run `native/macos/scripts/codesign-notarize.sh` against each of `windower-capture-macos` and `windower-control-macos`, per architecture, sourcing `DEVELOPER_ID_APPLICATION`, `NOTARY_API_KEY_ID`, `NOTARY_API_ISSUER_ID`, and `NOTARY_API_KEY_P8` (base64, decoded to a temp file to populate `NOTARY_API_KEY_PATH`) exactly as `CODESIGNING.md`'s "Suggested … secrets" section already lays out.
+  - Treat a `stapler staple` failure as non-fatal per decision 4 — assert the script's own PASS/FAIL summary for `codesign --verify`/`spctl --assess` instead of the staple step.
+  - Copy the signed binaries into `packages/sidecar-macos-arm64/bin/` and `packages/sidecar-macos-x64/bin/` (creating the `bin/` dirs as this session had to do by hand).
+- 🔵 Job 2 — **permissions regression check**, before any publish step runs: pack each sidecar package (`npm pack` or `pnpm pack`), unpack the resulting tarball, and assert with `tar tvf` (or an equivalent stat check post-extraction) that the `bin/windower-*-macos` entries carry executable permission bits. Fails the job on any regression of the bug fixed in `@windower/core@0.1.3`'s `sidecar-path.ts`. This is a **new** check — nothing in the repo does this today.
+- 🔵 Job 3 — **version bump + dependency-graph-ordered publish**, gated on jobs 1–2 succeeding:
+  - Runs whatever mechanism decision 10 lands on (changesets or equivalent) to bump every affected package together and confirm no version number is being reused (per decision 3 — treat "already exists" from the registry as a fatal job failure, never a same-version retry).
+  - Publishes in the exact order from decision 2, verifying each package is resolvable on the registry (or at minimum that its publish step exited 0) before starting the next stage of the graph.
+  - Authenticates via `NPM_TOKEN` (Automation-type, decision 6) — no interactive OTP step exists in this job by construction.
+- 🔵 `native/macos/CODESIGNING.md`: update its "How this fits into the release pipeline" section (currently states "there is currently no release/publish workflow") to point at `release.yml` once it exists, and add `NPM_TOKEN` to its secrets table — the doc's existing four signing secrets plus the two `DEVELOPER_ID_CERT_*` secrets are already correctly named for GitHub Actions use per decision 8; `NPM_TOKEN` is the only wholly new secret this phase introduces.
+- 🔵 `.github/workflows/ci.yml`: no functional change. A one-line comment addition pointing at `release.yml` as the release counterpart is reasonable but optional.
+
+### Version-bump / publish-order tooling
+
+- 🔵 Evaluate `changesets` (github.com/changesets/changesets) against the requirement in decision 10: does it correctly order a publish across `core → operator → (engine, engine-narration) → daemon → cli → mcp-server → (sidecar-macos-arm64, sidecar-macos-x64)` given pnpm workspace `workspace:*` dependencies, and does it refuse to reuse a version number by construction (it does, via its own changelog/version files under `.changeset/`) — confirm this against this specific 7-package graph shape, including the two-sidecar-packages-with-no-internal-dependents fan-out, not just changesets' general documentation.
+  - Note honestly if changesets' assumptions (a changelog-per-package, a release PR pattern) fit this repo's release cadence and the `sidecar-macos-*` packages' binary-artifact nature (they have no source changes to changelog in the normal sense — their "change" is a rebuilt binary, not a diff) — flag this mismatch explicitly as a reason a custom script might fit better, without prescribing the answer.
+- 🔵 If changesets doesn't fit cleanly, specify (don't yet implement) a custom script's contract: reads the same explicit dependency-graph ordering as a constant (not derived from `workspace:*` scanning alone, since that doesn't distinguish "needs graph order" from "any workspace dep"), bumps every package in one shot, checks each target version against the registry with `npm view <pkg>@<version>` before attempting a publish and refuses to proceed if it already exists, and publishes strictly in order with a hard stop (not skip-and-continue) on any failure.
+- 🔵 Either way: document the chosen mechanism's failure mode explicitly for the specific 403-before-404 registry behavior this session hit (settled decision 3) — a same-version retry must never be the automatic recovery path; the recovery path is always "bump again."
+
+### `packages/sidecar-macos-x64` (Intel)
+
+- 🔵 Investigate `swift build --arch x86_64` cross-compilation from a `macos-14` (arm64) GitHub Actions runner as the primary path — verify it actually produces a working, correctly-architected Mach-O binary (`file`/`lipo -info` check), not just that the build command exits 0.
+- 🔵 If cross-compilation doesn't work cleanly, fall back to a `macos-13` (Intel) runner as a second `runs-on` target in Job 1, building natively.
+- 🔵 Either path: the resulting binary goes through the exact same codesign/notarize/permissions-check/publish pipeline as arm64 — no separate process, no separate secrets.
+- 🔵 This closes the last open item from `phase-14-packaging.md`'s "Remaining work" list (`@windower/sidecar-macos-x64` has never had a compiled binary) and the parallel item in `CODESIGNING.md`'s pipeline sketch ("x64 via cross/Rosetta CI runner or a second job").
+
+### Docs
+
+- 🔵 `native/macos/CODESIGNING.md`: flip "Status: UNVERIFIED" to reflect that the scaffolding has now run once successfully by hand (per this session), update the "How this fits into the release pipeline" section to reference the real `release.yml` once implemented, add `NPM_TOKEN` to the secrets table, and fold in the ~45-minute-vs-under-2-minutes notarization turnaround observation as an operational note so a future implementer doesn't set an unrealistically tight timeout.
+- 🔵 `phase-14-packaging.md`: once this phase lands, its "Remaining work before all 5 packages can ship together" list (items 1–5) should be marked resolved by reference to this phase, and its exit criteria re-verified against a real CI-driven publish rather than the hand-run one this session did.
+- 🔵 `~/Documents/Development/windower-site` — per `CLAUDE.md`'s standing instruction: check install instructions reference the now-real, CI-published `@windower/sidecar-macos-{arm64,x64}` packages (both architectures, once x64 lands), and that nothing on the site still says "arm64-only" or references a manual install step this phase's automation makes unnecessary.
+- 🔵 `STATUS.md`.
+
+### Explicitly out of scope for this phase
+
+- Any change to `contracts/sidecar-protocol.md`, `data-model.md`, or any other TS↔sidecar contract — see YAGNI.
+- Windows/Linux release automation (post-MVP per `phase-16`/`phase-17`).
+- Picking the specific trigger strategy (decision 11) or the specific version-bump tool (decision 10) — this phase poses both, the implementing session settles them.
+- Automated rollback/unpublish/deprecate tooling.
+- Any change to `ci.yml`'s existing lint/typecheck/build/test job.
+- A per-run cost/telemetry surface for the release pipeline itself (consistent with `spec.md` §7's no-telemetry rule elsewhere in the product).
+
+### Exit criteria
+
+- `.github/workflows/release.yml` exists, is separate from `ci.yml`, and `ci.yml` is unchanged in its lint/typecheck/build/test behavior.
+- A CI-driven release publishes all 7 npm packages (`core`, `operator`, `engine`, `engine-narration`, `daemon`, `cli`, `mcp-server`) plus both sidecar packages (`sidecar-macos-arm64`, `sidecar-macos-x64`) in the dependency order from settled decision 2, with no manual step — verified by a real signed publish (see Live verification), not by reading the workflow YAML.
+- The permissions regression check (Job 2) fails the build when run against a deliberately-reintroduced version of the `sidecar-path.ts` chmod bug, and passes against the current fixed version — verified by test, i.e. temporarily reverting the fix locally and confirming the check catches it before restoring the fix.
+- No publish step in the release workflow can retry the same version number on an "already exists" registry error — verified by code review of the version-bump/publish script's error-handling path, per settled decision 3.
+- `NPM_TOKEN` (Automation-type) is the only publish credential used; no publish step requires interactive OTP/webauthn.
+- `@windower/sidecar-macos-x64` ships a real, correctly-architected compiled binary through the same pipeline as arm64 — verified with `lipo -info`/`file` against the published tarball's binary, not just a successful build step.
+- The signing/notarization job step has a timeout of at least 60 minutes and does not assume `notarytool submit --wait` returns quickly (settled decision 5) — verified by reading the workflow's `timeout-minutes` value.
+- A `stapler staple` failure on either bare binary does not fail the release job (settled decision 4) — verified by the job succeeding despite the known "Error 73" outcome on a real run.
+- `native/macos/CODESIGNING.md`'s secrets table matches the release workflow's actual secret references exactly, including `NPM_TOKEN`.
+- A version-bump mechanism satisfying settled decision 10's three guarantees exists and is documented — verified by an intentional test: bump `core` alone, confirm every transitive dependent (`operator`, `engine`, `engine-narration`, `daemon`, `cli`, `mcp-server`) is re-bumped and re-published automatically rather than left pointing at a stale pinned version.
+- `phase-14-packaging.md`'s "Remaining work" items 1–4 (real codesigning/notarization, a release build step, publishing the two sidecar packages, re-verifying `sidecar-path.ts`'s `require.resolve` fallback against a real installed package) are all satisfied by this phase's automation, leaving only phase-14's item 5 (clean-machine/fresh-VM verification) as the sole item still requiring a manual pass.
+
+### Live verification (final task — do this last, after everything above, real signed publish per `e2e/README.md` convention)
+
+- 🔵 **A real, end-to-end CI-triggered release**, from whatever trigger settled decision 11 lands on, through to all 9 packages live on the npm registry, with no human intervention beyond triggering it (or none at all, if the chosen trigger is automatic).
+- 🔵 **A genuinely clean-machine install** immediately after: `npm install -g @windower/cli` on a machine with no prior Windower install, `windower doctor`, grant permissions, `windower start`/`stop` produces a valid recording — this is phase-14's own long-deferred exit criterion, finally verifiable once both sidecar architectures are CI-published.
+- 🔵 **Binary permissions on the real installed package** — confirm the arm64 (and, once landed, x64) binaries under the installed `node_modules/@windower/sidecar-macos-*/bin/` are executable (`-rwxr-xr-x` or equivalent), not just that the CI tarball check (Job 2) passed.
+- 🔵 **A deliberate version-conflict drill**: attempt to re-trigger a publish of a version already live, and confirm the release workflow fails loudly and does not retry — proving settled decision 3 holds under a real registry response, not just against a mocked one.

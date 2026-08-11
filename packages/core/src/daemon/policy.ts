@@ -44,7 +44,8 @@ export type CommandId =
   | "cancel"
   | "daemon status"
   | "daemon stop"
-  | "daemon restart";
+  | "daemon restart"
+  | "daemon kill";
 
 /**
  * Flat lookup table, transcribed 1:1 from `contracts/cli.md`.
@@ -75,6 +76,16 @@ export const POLICY_TABLE: Record<CommandId, BackendMode> = {
   "daemon status": "attach",
   "daemon stop": "attach",
   "daemon restart": "attach",
+  // `daemon kill` is the one command in this table that doesn't actually fit
+  // any of the three modes' definitions above: it never opens the socket at
+  // all (that's the whole point — it's the fallback for when the socket is
+  // unreachable/hung), reading `daemon.json`/`sidecar-pids.json` directly
+  // and force-killing by OS pid instead. `local` is the closest fit ("runs
+  // entirely in the invoking process, no daemon RPC") and keeps it covered
+  // by the completeness tests (`policy.test.ts`, `cli/src/policy.test.ts`);
+  // `registerDaemonCommand` does not route it through `withBackend`/
+  // `acquireBackend` at all, so this entry is documentation/coverage only.
+  "daemon kill": "local",
 };
 
 /** Options affecting mode resolution for commands whose mode isn't a flat constant. */

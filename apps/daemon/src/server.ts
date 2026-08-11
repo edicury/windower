@@ -13,6 +13,7 @@ import {
   SidecarError,
   classifyDaemonJsonRpcLine,
   clearDaemonState,
+  clearSidecarPids,
   isTerminalOperatorRunState,
   packageVersion,
   writeDaemonState,
@@ -152,7 +153,14 @@ export class DaemonServer {
     };
   }
 
-  /** Closes the socket, unlinks the socket file, and clears `daemon.json`. Idempotent. */
+  /**
+   * Closes the socket, unlinks the socket file, and clears `daemon.json` +
+   * `sidecar-pids.json`. Idempotent. Safe to clear the sidecar-pids tracking
+   * file here unconditionally: by the time `stop()` runs, `shutdown()`
+   * (which this follows on every real path — RPC, idle, SIGTERM) has already
+   * torn down every sidecar this daemon owned, so there's nothing left for
+   * `windower daemon kill` to need it for.
+   */
   async stop(): Promise<void> {
     if (this.idleTimer) clearInterval(this.idleTimer);
     await new Promise<void>((resolve) => {
@@ -161,6 +169,7 @@ export class DaemonServer {
     });
     await unlink(this.options.socketPath).catch(() => {});
     await clearDaemonState().catch(() => {});
+    await clearSidecarPids().catch(() => {});
   }
 
   /**

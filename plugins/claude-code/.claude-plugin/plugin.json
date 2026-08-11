@@ -7,11 +7,13 @@
   },
   "mcpServers": {
     "windower": {
-      "command": "npx",
+      "command": "node",
       "args": [
-        "-y",
-        "@windower/mcp-server"
-      ]
+        "/Users/edicury/Documents/Development/windower/packages/mcp-server/dist/index.js"
+      ],
+      "env": {
+        "WINDOWER_SIDECAR_BINARY_PATH": "/Users/edicury/Documents/Development/windower/native/macos/.build/arm64-apple-macosx/debug/windower-capture-macos"
+      }
     }
   }
 }
