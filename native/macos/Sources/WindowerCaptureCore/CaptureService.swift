@@ -162,83 +162,6 @@ public struct CaptureEndedNotificationParams: Codable, Equatable {
     }
 }
 
-// MARK: - Frame sharing (phase 21)
-
-/// The most recently delivered frame of a live `SCStream`, held so
-/// `captureFrame` can serve it instead of making its own
-/// `SCShareableContent` + `SCScreenshotManager` round-trip
-/// (contracts/sidecar-protocol.md §"Frame sharing").
-///
-/// Exactly ONE `CVPixelBuffer` is retained at a time. That buffer comes out of
-/// the stream's own pool, so it is not free: `SCStreamConfiguration.queueDepth`
-/// is 5 in `startCapture`, and holding one leaves four for in-flight delivery,
-/// which is why the store is deliberately single-slot rather than a ring. A
-/// deep copy would avoid the pool cost but would have to happen on the sample
-/// queue at full frame rate for frames nobody ever asks for — strictly worse
-/// for the recording, which is the thing with the real-time deadline.
-public final class SharedFrameStore {
-    private let lock = NSLock()
-    private var latest: CVPixelBuffer?
-    private var latestAtMs: Double?
-
-    private let clockMs: () -> Double
-
-    public init(clockMs: @escaping () -> Double = { ProcessInfo.processInfo.systemUptime * 1000 })
-    {
-        self.clockMs = clockMs
-    }
-
-    public func store(_ pixelBuffer: CVPixelBuffer) {
-        lock.lock()
-        latest = pixelBuffer
-        latestAtMs = clockMs()
-        lock.unlock()
-    }
-
-    /// The parked frame, or `nil` if the stream has not delivered one yet
-    /// (the window between `startCapture` returning and the first frame
-    /// arriving — `captureFrame` must fall back to a real capture there).
-    public func latestFrame() -> CVPixelBuffer? {
-        lock.lock()
-        defer { lock.unlock() }
-        return latest
-    }
-
-    /// Age of the parked frame in milliseconds, or `nil` if there is none.
-    /// Staleness is bounded by the stream's own frame interval, which is what
-    /// the protocol note promises callers.
-    public func latestFrameAgeMs() -> Double? {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let latestAtMs = latestAtMs else { return nil }
-        return clockMs() - latestAtMs
-    }
-
-    public func clear() {
-        lock.lock()
-        latest = nil
-        latestAtMs = nil
-        lock.unlock()
-    }
-}
-
-/// What `CaptureSessionManager` hands `captureFrame` on a frame-sharing hit.
-public struct SharedFrame {
-    public let pixelBuffer: CVPixelBuffer
-    /// Width of the *source* the stream is capturing, in points — the
-    /// denominator `captureFrame` needs to report `scale` identically on the
-    /// shared path and the real-capture path.
-    public let sourcePointsWidth: Double
-    /// Which session's stream the frame came from; stderr-log only.
-    public let sessionId: String
-
-    public init(pixelBuffer: CVPixelBuffer, sourcePointsWidth: Double, sessionId: String) {
-        self.pixelBuffer = pixelBuffer
-        self.sourcePointsWidth = sourcePointsWidth
-        self.sessionId = sessionId
-    }
-}
-
 // MARK: - Stream plumbing
 
 /// Receives `CMSampleBuffer`s from `SCStream` on a dedicated serial queue
@@ -252,10 +175,6 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput {
     /// Only ever touched from the session's serial sample-handler queue.
     private var didStartSession = false
     private let startedLock = NSLock()
-    /// Phase 21 frame sharing — every complete frame is also parked here so
-    /// `captureFrame` can serve it instead of opening its own
-    /// `SCScreenshotManager` capture. See `SharedFrameStore`.
-    let sharedFrames = SharedFrameStore()
 
     init(writer: VideoAssetWriter) {
         self.writer = writer
@@ -294,15 +213,6 @@ final class CaptureStreamOutput: NSObject, SCStreamOutput {
         // dropping the frame under backpressure is correct for live
         // capture, not an error.
         _ = writer.append(sampleBuffer: sampleBuffer)
-
-        // Park the frame for `captureFrame` (phase 21 frame sharing). Done
-        // AFTER the writer append so the recording — the thing with a hard
-        // real-time deadline — always sees the buffer first; storing a
-        // reference is a retain, not a copy, so this costs no encode work on
-        // the sample queue.
-        if let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
-            sharedFrames.store(imageBuffer)
-        }
     }
 
     /// SCStream attaches an `SCStreamFrameInfo.status` to each buffer;
@@ -385,12 +295,6 @@ final class CaptureSessionContext {
     let resolvedWidth: Int
     let resolvedHeight: Int
     let startedAt: Date
-    /// Phase 21 frame sharing — the target this stream is capturing, so
-    /// `captureFrame` can decide whether a request is covered by it
-    /// (`FrameCaptureService.streamCoversRequestedTarget`).
-    let target: CaptureTargetInput
-    /// Width of that target in points; see `SharedFrame.sourcePointsWidth`.
-    let sourcePointsWidth: Double
     /// Strong reference for the session's lifetime — `SCStream` does not
     /// retain its stream outputs (same caveat as `CaptureStreamOutput`).
     /// `nil` when `AudioTrackPlan` didn't request system audio.
@@ -420,7 +324,6 @@ final class CaptureSessionContext {
         output: CaptureStreamOutput, delegate: CaptureStreamDelegate,
         sampleQueue: DispatchQueue, outputURL: URL, resolvedWidth: Int, resolvedHeight: Int,
         startedAt: Date, livenessTimer: DispatchSourceTimer,
-        target: CaptureTargetInput, sourcePointsWidth: Double,
         systemAudioOutput: CaptureSystemAudioOutput? = nil,
         microphoneSource: MicrophoneCaptureSource? = nil,
         eventTapSource: EventTapSource? = nil
@@ -431,8 +334,6 @@ final class CaptureSessionContext {
         self.output = output
         self.delegate = delegate
         self.sampleQueue = sampleQueue
-        self.target = target
-        self.sourcePointsWidth = sourcePointsWidth
         self.outputURL = outputURL
         self.resolvedWidth = resolvedWidth
         self.resolvedHeight = resolvedHeight
@@ -536,11 +437,6 @@ public final class CaptureSessionManager {
         let nativeWidth: Double
         let nativeHeight: Double
         var sourceRect: CGRect?
-        // Phase 21 frame sharing: the pixels→points denominator for the
-        // target this stream will capture, recorded per-branch below so
-        // `captureFrame`'s shared-frame path reports the same `scale` a real
-        // `SCScreenshotManager` capture of the same target would.
-        let targetScaleFactor: Double
 
         switch params.target.kind {
         case "display":
@@ -549,8 +445,6 @@ public final class CaptureSessionManager {
             let bounds = displayPixelBounds(display)
             nativeWidth = bounds.width
             nativeHeight = bounds.height
-            targetScaleFactor = EnumerationService.backingScaleFactor(
-                forDisplayID: display.displayID)
 
         case "window":
             guard let id = params.target.id,
@@ -580,7 +474,6 @@ public final class CaptureSessionManager {
             let scaleFactor = EnumerationService.backingScaleFactor(forPoint: window.frame.origin)
             nativeWidth = window.frame.width * scaleFactor
             nativeHeight = window.frame.height * scaleFactor
-            targetScaleFactor = scaleFactor
             let windowDisplayScaleFactor = EnumerationService.backingScaleFactor(
                 forDisplayID: windowDisplay.displayID)
             let windowDisplayBounds = displayPixelBounds(windowDisplay)
@@ -611,7 +504,6 @@ public final class CaptureSessionManager {
             nativeHeight = regionBounds.height
             let displayBounds = displayPixelBounds(display)
             let scaleFactor = EnumerationService.backingScaleFactor(forDisplayID: display.displayID)
-            targetScaleFactor = scaleFactor
             sourceRect = CaptureConfigService.regionSourceRect(
                 regionPixelBounds: (
                     x: regionBounds.x, y: regionBounds.y, width: regionBounds.width,
@@ -886,13 +778,6 @@ public final class CaptureSessionManager {
             delegate: delegate, sampleQueue: sampleQueue, outputURL: outputURL,
             resolvedWidth: resolved.width, resolvedHeight: resolved.height, startedAt: startedAt,
             livenessTimer: livenessTimer,
-            target: params.target,
-            // `nativeWidth` is pixels; `targetScaleFactor` is the backing
-            // scale of the display this target lives on, recorded per-branch
-            // above. Their quotient is the source width in POINTS, which is
-            // the denominator `FrameCaptureService` needs to report `scale`
-            // identically on the shared-frame and real-capture paths.
-            sourcePointsWidth: targetScaleFactor > 0 ? nativeWidth / targetScaleFactor : nativeWidth,
             systemAudioOutput: systemAudioOutput, microphoneSource: microphoneSource,
             eventTapSource: eventTapSource)
 
@@ -1100,34 +985,6 @@ public final class CaptureSessionManager {
         lock.lock()
         defer { lock.unlock() }
         return sessions.count
-    }
-
-    /// Phase 21 frame sharing — the most recent frame from a live stream that
-    /// covers `target`, or `nil` if no such stream exists or it hasn't
-    /// delivered a frame yet. `captureFrame` calls this BEFORE touching
-    /// `SCShareableContent`/`SCScreenshotManager`, which is what removes its
-    /// per-call ScreenCaptureKit round-trip in the recording-active case.
-    ///
-    /// Coverage is decided by `FrameCaptureService.streamCoversRequestedTarget`
-    /// — deliberately a conservative exact-target match, not a geometric
-    /// containment test: serving a cropped sub-rect of a stream frame would
-    /// have to re-derive the crop from the stream's own scaled/`destinationRect`
-    /// output, and getting that subtly wrong would hand the operator a frame
-    /// whose coordinates don't map back to protocol pixels. A miss is only a
-    /// lost optimization; a wrong hit is a wrong click.
-    public func sharedFrame(for target: CaptureTargetInput) -> SharedFrame? {
-        lock.lock()
-        let match = sessions.values.first {
-            FrameCaptureService.streamCoversRequestedTarget(
-                streamTarget: $0.target, requestedTarget: target)
-        }
-        lock.unlock()
-        guard let context = match, let pixelBuffer = context.output.sharedFrames.latestFrame()
-        else { return nil }
-        return SharedFrame(
-            pixelBuffer: pixelBuffer,
-            sourcePointsWidth: context.sourcePointsWidth,
-            sessionId: context.sessionId)
     }
 
     private func removeSession(_ sessionId: String) -> CaptureSessionContext? {

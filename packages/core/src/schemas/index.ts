@@ -1,6 +1,5 @@
 export * from "./rect.js";
 export * from "./capture-target.js";
-export * from "./ui-element.js";
 export * from "./video-settings.js";
 export * from "./audio-settings.js";
 export * from "./session.js";
@@ -8,5 +7,4 @@ export * from "./manifest.js";
 export * from "./event-timeline.js";
 export * from "./permissions.js";
 export * from "./input-action.js";
-export * from "./operator.js";
 export * from "./config.js";

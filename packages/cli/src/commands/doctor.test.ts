@@ -34,8 +34,6 @@ const SIDECAR_FIXTURE_SRC = join(
 );
 const DAEMON_FIXTURE = join(repoRoot, "packages/core/src/daemon/fixtures/fake-daemon-cli.mjs");
 
-const API_KEY_VARS = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENAI_COMPATIBLE_API_KEY"];
-
 const REPORT: PermissionReport = {
   screenRecording: "granted",
   accessibility: "denied",
@@ -82,13 +80,6 @@ describe("renderReport", () => {
     expect(output).toContain("[ ] Daemon running");
   });
 
-  it("renders the api-key presence table without printing values", () => {
-    const output = renderReport({
-      ...REPORT,
-      apiKeyEnvVars: [{ name: "ANTHROPIC_API_KEY", presentInClient: true, presentInDaemon: false }],
-    });
-    expect(output).toContain("ANTHROPIC_API_KEY: present in CLI: yes / present in daemon: no");
-  });
 });
 
 describe("buildDoctorReport", () => {
@@ -96,7 +87,6 @@ describe("buildDoctorReport", () => {
   let originalHome: string | undefined;
   let originalSidecarPath: string | undefined;
   let originalControlPath: string | undefined;
-  let savedApiKeyVars: Record<string, string | undefined>;
   const spawned: ChildProcess[] = [];
 
   beforeEach(async () => {
@@ -115,12 +105,6 @@ describe("buildDoctorReport", () => {
     // build and `doctor` would probe the developer's REAL Accessibility grant.
     originalControlPath = process.env[CONTROL_BINARY_PATH_ENV];
     process.env[CONTROL_BINARY_PATH_ENV] = join(home, "no-such-control-binary");
-
-    savedApiKeyVars = {};
-    for (const name of API_KEY_VARS) {
-      savedApiKeyVars[name] = process.env[name];
-      delete process.env[name];
-    }
 
     // Always give the report a real, tmp-scoped outputDir — readConfig()'s
     // default falls back to a real `~/Movies/Windower` under the actual
@@ -142,11 +126,6 @@ describe("buildDoctorReport", () => {
     else process.env[CONTROL_BINARY_PATH_ENV] = originalControlPath;
 
     resetCaptureHoldsForTesting();
-
-    for (const name of API_KEY_VARS) {
-      if (savedApiKeyVars[name] === undefined) delete process.env[name];
-      else process.env[name] = savedApiKeyVars[name];
-    }
 
     await rm(home, { recursive: true, force: true });
   });
@@ -181,28 +160,6 @@ describe("buildDoctorReport", () => {
       startedAt: new Date().toISOString(),
     };
     await writeFile(join(dir, `${id}.json`), `${JSON.stringify(session, null, 2)}\n`, "utf8");
-  }
-
-  async function writeFakeRun(id: string, state: string): Promise<void> {
-    const dir = join(home, "operator-runs");
-    await mkdir(dir, { recursive: true });
-    const run = {
-      id,
-      state,
-      task: "fake task",
-      target: {
-        kind: "display",
-        id: "d1",
-        name: "Built-in",
-        isPrimary: true,
-        bounds: { x: 0, y: 0, width: 1920, height: 1080 },
-        scaleFactor: 2,
-      },
-      models: { planner: { provider: "anthropic", model: "claude-sonnet-5" } },
-      steps: [],
-      startedAt: new Date().toISOString(),
-    };
-    await writeFile(join(dir, `${id}.json`), `${JSON.stringify(run, null, 2)}\n`, "utf8");
   }
 
   it("produces a report that validates against PermissionReportSchema", async () => {
@@ -326,45 +283,12 @@ describe("buildDoctorReport", () => {
     expect(report.outputDir?.writable).toBe(false);
   });
 
-  it("counts active sessions and operator runs from disk, ignoring terminal ones", async () => {
+  it("counts active sessions from disk, ignoring terminal ones", async () => {
     await writeFakeSession("sess-active", "recording");
     await writeFakeSession("sess-done", "finalized");
-    await writeFakeRun("run-active", "running");
-    await writeFakeRun("run-done", "succeeded");
 
     const report = await buildDoctorReport();
     expect(report.activeSessions).toBe(1);
-    expect(report.activeRuns).toBe(1);
-  });
-
-  it("reports API key env var presence in the client without ever exposing values", async () => {
-    process.env.ANTHROPIC_API_KEY = "sk-super-secret-value";
-
-    const report = await buildDoctorReport();
-    const entry = report.apiKeyEnvVars?.find((e) => e.name === "ANTHROPIC_API_KEY");
-    expect(entry?.presentInClient).toBe(true);
-    // presentInDaemon is a documented gap — never fabricated as true.
-    expect(entry?.presentInDaemon).toBe(false);
-
-    expect(JSON.stringify(report)).not.toContain("sk-super-secret-value");
-  });
-
-  it("includes the configured operator.apiKeyEnvVar, deduplicated against the defaults", async () => {
-    await writeConfig({
-      outputDir: join(home, "output"),
-      operator: { apiKeyEnvVar: "OPENAI_API_KEY" },
-    });
-
-    const report = await buildDoctorReport();
-    const names = report.apiKeyEnvVars?.map((e) => e.name) ?? [];
-    expect(names.filter((n) => n === "OPENAI_API_KEY")).toHaveLength(1);
-
-    await writeConfig({
-      outputDir: join(home, "output"),
-      operator: { apiKeyEnvVar: "CUSTOM_KEY" },
-    });
-    const report2 = await buildDoctorReport();
-    expect(report2.apiKeyEnvVars?.map((e) => e.name)).toContain("CUSTOM_KEY");
   });
 });
 
@@ -519,7 +443,6 @@ describe("buildDoctorReport — capture lock and surface routing", () => {
     expect(report.windowerHome?.path).toBe(home);
     expect(report.outputDir?.path).toBe(join(home, "output"));
     expect(report.daemonRunning).toBe(false);
-    expect(report.apiKeyEnvVars?.length).toBeGreaterThan(0);
     expect(report.client?.name).toBe("windower-cli");
 
     const rendered = renderReport(report);

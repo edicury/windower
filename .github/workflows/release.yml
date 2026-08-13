@@ -1,0 +1,273 @@
+name: Release
+
+# Phase 23 (specs/001-windower-mvp/tasks/phase-23-ci-release-automation.md).
+# Automates the manual sign/notarize/version-bump/publish sequence that
+# phase-14's "Publish status" log documents being run by hand. Deliberately
+# separate from ci.yml (settled decision 1) — lint/typecheck/build/test on
+# every push/PR must never be slowed down or put at risk by signing,
+# notarizing, or publishing.
+#
+# Trigger (settled here, per phase doc decision 11 — a tag push is the
+# primary path; workflow_dispatch is a manual override for e.g. re-running
+# after fixing a transient failure without needing a new tag):
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+jobs:
+  # ── Job 1: build + codesign + notarize ──────────────────────────────────
+  # Wraps native/macos/scripts/ci-build-and-sign.sh, which does the actual
+  # work (temp-keychain import, swift build per arch, codesign-notarize.sh
+  # per binary per arch, copy into packages/sidecar-macos-<arch>/bin/). Split
+  # into two steps (arm64, then x64) rather than one `... both` invocation so
+  # an x64 cross-compile failure (exit 2 = build failed, exit 3 = wrong-arch
+  # binary produced — see the script's own exit-code contract in its header
+  # comment) can be caught and routed to the macos-13 fallback job below
+  # without also masking a real arm64 failure, which must still fail this job
+  # outright.
+  build-sign-notarize:
+    runs-on: macos-14
+    timeout-minutes: 60 # decision 5: notarization turnaround observed ~45min once; no fixed short timeout.
+    outputs:
+      x64_cross_compile_ok: ${{ steps.x64_attempt.outcome == 'success' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build + sign + notarize (arm64, native)
+        env:
+          DEVELOPER_ID_CERT_P12: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          DEVELOPER_ID_APPLICATION: ${{ secrets.DEVELOPER_ID_APPLICATION }}
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+          NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+        run: native/macos/scripts/ci-build-and-sign.sh arm64
+        # No special handling needed here: a `stapler staple` "Error 73" on
+        # the bare Mach-O binaries is already swallowed as non-fatal INSIDE
+        # codesign-notarize.sh (decision 4) — this step's exit code only
+        # reflects the script's real pass/fail gate (codesign --verify).
+        # arm64 is native/known-good (no cross-compilation); any failure here
+        # is a real problem and must fail the job.
+
+      - name: Build + sign + notarize (x64, cross-compile attempt)
+        id: x64_attempt
+        continue-on-error: true # decision 9 is explicitly unverified; a failure here routes to the macos-13 fallback job, it does not fail this job.
+        env:
+          DEVELOPER_ID_CERT_P12: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          DEVELOPER_ID_APPLICATION: ${{ secrets.DEVELOPER_ID_APPLICATION }}
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+          NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+        run: native/macos/scripts/ci-build-and-sign.sh x64
+        # Exit 2 = `swift build --arch x86_64` itself failed; exit 3 = build
+        # "succeeded" but `file`/`lipo -info` proved it isn't a genuine
+        # x86_64 Mach-O (the silent-fallback-to-host-arch risk flagged in the
+        # script's header comment). Either way, `continue-on-error: true`
+        # keeps this job green and `steps.x64_attempt.outcome` downstream
+        # (exposed as the `x64_cross_compile_ok` job output above) tells the
+        # build-x64-fallback job below whether it needs to run.
+
+      - name: Upload arm64 signed binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: sidecar-arm64-bin
+          path: packages/sidecar-macos-arm64/bin/*
+          if-no-files-found: error
+
+      - name: Upload x64 signed binaries (cross-compiled)
+        if: steps.x64_attempt.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: sidecar-x64-bin
+          path: packages/sidecar-macos-x64/bin/*
+          if-no-files-found: error
+
+  # ── Job 1b: x64 fallback (macos-13, native Intel) ───────────────────────
+  # Only runs when build-sign-notarize's x64 cross-compile attempt did not
+  # produce a genuine x86_64 binary. This is the exact fallback shape
+  # ci-build-and-sign.sh's header comment describes as a TODO for this task:
+  # a second job gated on the first job's x64 step failing, using the same
+  # script with `x64` on a macos-13 (Intel, native) runner instead of trying
+  # to cross-compile. Kept as a separate job (not a matrix leg on Job 1)
+  # because it needs a different `runs-on` and must be conditional on Job 1's
+  # outcome, which a same-job matrix can't express cleanly.
+  build-x64-fallback:
+    needs: build-sign-notarize
+    if: needs.build-sign-notarize.outputs.x64_cross_compile_ok != 'true'
+    runs-on: macos-13
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build + sign + notarize (x64, native on macos-13)
+        env:
+          DEVELOPER_ID_CERT_P12: ${{ secrets.DEVELOPER_ID_CERT_P12 }}
+          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          DEVELOPER_ID_APPLICATION: ${{ secrets.DEVELOPER_ID_APPLICATION }}
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+          NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+        run: native/macos/scripts/ci-build-and-sign.sh x64
+
+      - name: Upload x64 signed binaries (native macos-13 build)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sidecar-x64-bin
+          path: packages/sidecar-macos-x64/bin/*
+          if-no-files-found: error
+
+  # ── Job 2: permissions regression check ─────────────────────────────────
+  # scripts/release/check-sidecar-permissions.sh is plain bash + pnpm pack +
+  # tar — nothing macOS-specific — so it runs on ubuntu-latest, cheaper and
+  # faster than another macos-14 minute-multiplier job.
+  permissions-check:
+    needs: [build-sign-notarize, build-x64-fallback]
+    if: always() && needs.build-sign-notarize.result == 'success' && (needs.build-x64-fallback.result == 'success' || needs.build-x64-fallback.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Download arm64 signed binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: sidecar-arm64-bin
+          path: packages/sidecar-macos-arm64/bin
+
+      - name: Download x64 signed binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: sidecar-x64-bin
+          path: packages/sidecar-macos-x64/bin
+
+      - name: Restore executable bit
+        # actions/upload-artifact and actions/download-artifact preserve
+        # POSIX permissions, but do it explicitly and cheaply here anyway —
+        # this step's own correctness doesn't depend on that guarantee, and
+        # the whole point of Job 2 is to not trust permission bits blindly.
+        run: chmod +x packages/sidecar-macos-arm64/bin/* packages/sidecar-macos-x64/bin/*
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Sidecar permissions regression check
+        run: scripts/release/check-sidecar-permissions.sh
+
+  # ── Job 3: version bump + dependency-graph-ordered publish ──────────────
+  version-bump-and-publish:
+    needs: [build-sign-notarize, permissions-check]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # needed to commit the version bump back to main, see below
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Check out `main` directly rather than the triggering ref. A `v*`
+          # release tag is expected to point at a commit that's part of
+          # main's history; workflow_dispatch's default ref is already main.
+          # Doing the bump/commit/publish sequence against `main` itself
+          # (rather than a detached tag ref) is what lets the version-bump
+          # commit below be pushed with a plain `git push origin main`.
+          ref: main
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Download arm64 signed binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: sidecar-arm64-bin
+          path: packages/sidecar-macos-arm64/bin
+
+      - name: Download x64 signed binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: sidecar-x64-bin
+          path: packages/sidecar-macos-x64/bin
+
+      - name: Restore executable bit
+        run: chmod +x packages/sidecar-macos-arm64/bin/* packages/sidecar-macos-x64/bin/*
+
+      - name: Bump versions (dependency graph, one patch each)
+        run: node scripts/release/release.mjs bump
+
+      - name: Publish (dependency-graph order, hard-stop on any failure)
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: node scripts/release/release.mjs publish
+        # No OTP/webauthn step exists here by construction (decision 6):
+        # NPM_TOKEN is an Automation-type token, and publish.mjs's own
+        # setupNpmAuth() wires it into a throwaway .npmrc consumed via
+        # `pnpm publish --config.userconfig <path>`, never the interactive
+        # npm login flow. release.mjs publish already preflights every
+        # target version against the real registry and hard-stops (no
+        # same-version retry) on the first "already exists" or failed
+        # publish — see scripts/release/publish.mjs's runRelease().
+
+      - name: Commit version bump back to main
+        # bump.mjs only rewrites each package's own `version` field (pnpm
+        # rewrites `workspace:*` -> exact published version at `pnpm publish`
+        # time instead, so there's nothing else to commit for that). Without
+        # committing this back, the NEXT release's bump step would start from
+        # the same pre-bump baseline and recompute the version(s) just
+        # published, which publish.mjs's preflight would then correctly
+        # refuse as "already exists" (decision 3) -- i.e. every release after
+        # the first would hard-fail at the preflight stage. Committing the
+        # bump back to main is therefore required for correctness, not
+        # optional bookkeeping. Only runs after a successful publish, so a
+        # failed/aborted release never leaves an unpublished version bump on
+        # main.
+        run: |
+          git config user.name "windower-release-bot"
+          git config user.email "release-bot@users.noreply.github.com"
+          git add packages/*/package.json apps/daemon/package.json
+          if git diff --cached --quiet; then
+            echo "No version changes to commit (unexpected after a successful bump+publish) -- skipping."
+          else
+            git commit -m "chore(release): bump versions [skip ci]"
+            git push origin HEAD:main
+          fi

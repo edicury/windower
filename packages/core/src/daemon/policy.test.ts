@@ -17,11 +17,7 @@ const EXPECTED: Record<CommandId, BackendMode> = {
   list: "local",
   "config get": "local",
   "config set": "local",
-  operate: "local",
-  "operate status": "local",
-  "operate list": "local",
   start: "daemon",
-  "operate abort": "daemon",
   stop: "attach",
   cancel: "attach",
   "daemon status": "attach",
@@ -43,25 +39,9 @@ describe("POLICY_TABLE", () => {
 });
 
 describe("resolveBackendMode", () => {
-  it("matches POLICY_TABLE for every command when no options are passed", () => {
+  it("matches POLICY_TABLE for every command", () => {
     for (const command of Object.keys(EXPECTED) as CommandId[]) {
       expect(resolveBackendMode(command)).toBe(EXPECTED[command]);
-    }
-  });
-
-  it("operate defaults to local (blocking)", () => {
-    expect(resolveBackendMode("operate")).toBe("local");
-    expect(resolveBackendMode("operate", { detach: false })).toBe("local");
-  });
-
-  it("operate --detach forces daemon mode", () => {
-    expect(resolveBackendMode("operate", { detach: true })).toBe("daemon");
-  });
-
-  it("--detach is a no-op for every other command", () => {
-    for (const command of Object.keys(EXPECTED) as CommandId[]) {
-      if (command === "operate") continue;
-      expect(resolveBackendMode(command, { detach: true })).toBe(EXPECTED[command]);
     }
   });
 });

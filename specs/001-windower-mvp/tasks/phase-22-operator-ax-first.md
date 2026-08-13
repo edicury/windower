@@ -1,3 +1,5 @@
+**Superseded by Phase 24 — the Operator was removed.** Kept for historical record only.
+
 ## Phase 22 — Operator: AX-First Observation and the Planner/Executor Split (v1.5)
 
 **Goal:** Make an operator run cheap and fast enough to be boring. Today a run that opens Safari, types a URL, and clicks through a form costs several dollars and burns the whole step budget. This phase changes what the operator *looks at* (a compact accessibility-element list instead of a screenshot, on every step where that is sufficient) and *who does the thinking* (a strong model plans once, a cheap model executes each step, and the strong model re-enters only when a checkpoint invalidates the plan) — by freezing a new capture-free observation method on the **control** surface first, per this repo's protocol-before-platform rule.

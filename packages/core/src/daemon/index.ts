@@ -10,4 +10,3 @@ export * from "./state-file.js";
 export * from "./sidecar-pids.js";
 export * from "./backend.js";
 export * from "./policy.js";
-export * from "./operator-env.js";

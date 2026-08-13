@@ -63,8 +63,7 @@ final class ControlIntegrationTests: XCTestCase {
         XCTAssertNotNil(result["version"] as? String)
 
         let capabilities = try XCTUnwrap(result["capabilities"] as? [String])
-        XCTAssertEqual(
-            Set(capabilities), ["input.mouse", "input.keyboard", "window-control", "ui.elements"])
+        XCTAssertEqual(Set(capabilities), ["window-control"])
     }
 
     /// The whole point of the split: every capture-surface method must be
@@ -74,6 +73,25 @@ final class ControlIntegrationTests: XCTestCase {
         let methods = [
             "enumerateTargets", "startCapture", "stopCapture", "cancelCapture", "captureFrame",
         ]
+        let responses = try roundTrip(
+            methods.enumerated().map { index, method in
+                #"{"jsonrpc":"2.0","id":\#(index + 1),"method":"\#(method)","params":{}}"#
+            })
+        XCTAssertEqual(responses.count, methods.count)
+        for obj in responses {
+            let error = try XCTUnwrap(obj["error"] as? [String: Any], "unexpected success: \(obj)")
+            let data = try XCTUnwrap(error["data"] as? [String: Any])
+            XCTAssertEqual(data["code"] as? String, "UNSUPPORTED_CAPABILITY")
+        }
+    }
+
+    /// Phase 24 removed the Operator, and with it `performInput`/
+    /// `enumerateElements` — their only caller. Both methods must now fall
+    /// through to the `default` branch and answer `UNSUPPORTED_CAPABILITY`,
+    /// exactly like any other method this implementation no longer
+    /// advertises (settled decision 2, tasks/phase-24-remove-operator.md).
+    func testPerformInputAndEnumerateElementsAreNoLongerSupported() throws {
+        let methods = ["performInput", "enumerateElements"]
         let responses = try roundTrip(
             methods.enumerated().map { index, method in
                 #"{"jsonrpc":"2.0","id":\#(index + 1),"method":"\#(method)","params":{}}"#
@@ -100,78 +118,4 @@ final class ControlIntegrationTests: XCTestCase {
         XCTAssertEqual(result["sidecarAvailable"] as? Bool, true)
     }
 
-    /// `performInput`'s `sessionId` is a correlation hint the control surface
-    /// must never validate — it owns no sessions, so an unrecognized id must
-    /// not produce `SESSION_NOT_FOUND`. A `wait`-only action list posts no
-    /// events, so this needs no Accessibility grant when it is granted, and
-    /// fails with PERMISSION_DENIED (never SESSION_NOT_FOUND) when it isn't.
-    func testPerformInputNeverRejectsAnUnknownSessionId() throws {
-        let responses = try roundTrip([
-            #"{"jsonrpc":"2.0","id":1,"method":"performInput","params":{"sessionId":"no-such-session","actions":[{"kind":"wait","durationMs":0}]}}"#
-        ])
-        let obj = try XCTUnwrap(responses.first)
-        if let error = obj["error"] as? [String: Any] {
-            let data = try XCTUnwrap(error["data"] as? [String: Any])
-            XCTAssertEqual(
-                data["code"] as? String, "PERMISSION_DENIED",
-                "the only acceptable failure here is a missing Accessibility grant")
-        } else {
-            let result = try XCTUnwrap(obj["result"] as? [String: Any])
-            XCTAssertEqual(result["performed"] as? Int, 1)
-        }
-    }
-
-    /// Phase 22: `enumerateElements` must be a recognized method on the
-    /// control binary (never `UNSUPPORTED_CAPABILITY`, since `ui.elements`
-    /// is now in the static capability list) and must fail fast with
-    /// `PERMISSION_DENIED` — never a generic/internal error — when the
-    /// Accessibility grant is missing, exactly like `performInput` above.
-    /// Tolerant of either TCC state so it runs headlessly in CI.
-    func testEnumerateElementsIsRecognizedAndPermissionGated() throws {
-        let responses = try roundTrip([
-            #"{"jsonrpc":"2.0","id":1,"method":"enumerateElements","params":{"target":{"kind":"window","id":"999999999"}}}"#
-        ])
-        let obj = try XCTUnwrap(responses.first)
-        let error = try XCTUnwrap(
-            obj["error"] as? [String: Any],
-            "a bogus window id should never succeed, with or without the Accessibility grant")
-        let data = try XCTUnwrap(error["data"] as? [String: Any])
-        let code = try XCTUnwrap(data["code"] as? String)
-        // PERMISSION_DENIED when the grant is missing (CI), TARGET_NOT_FOUND
-        // when it's present but the window id doesn't exist (some local
-        // dev setups) — either is correct; UNSUPPORTED_CAPABILITY would mean
-        // "ui.elements" never made it into the static capability list.
-        XCTAssertTrue(
-            code == "PERMISSION_DENIED" || code == "TARGET_NOT_FOUND",
-            "unexpected error code: \(code)")
-    }
-
-    /// contracts/sidecar-protocol.md §Transport: a backend MAY answer out of
-    /// order, and a stalled request must not block servicing others. A
-    /// `performInput` sleeping on a long `wait` is the control surface's
-    /// equivalent of the capture surface's wedged `SCShareableContent` call.
-    func testASlowRequestDoesNotBlockAConcurrentOne() throws {
-        let responses = try roundTrip([
-            #"{"jsonrpc":"2.0","id":1,"method":"performInput","params":{"actions":[{"kind":"wait","durationMs":1500}]}}"#,
-            #"{"jsonrpc":"2.0","id":2,"method":"describe","params":{}}"#,
-        ])
-        XCTAssertEqual(responses.count, 2)
-        // `describe` is answered while the wait is still sleeping, so it comes
-        // back FIRST — the observable proof the dispatch is concurrent. (If
-        // the Accessibility grant is missing, `performInput` fails fast and
-        // this ordering is not meaningful, so only assert both arrived.)
-        let ids = responses.compactMap { $0["id"] as? Int }
-        XCTAssertEqual(Set(ids), [1, 2])
-        if responses.first?["error"] == nil, responses.count == 2 {
-            let firstId = responses[0]["id"] as? Int
-            let performInputSucceeded = responses.contains {
-                ($0["id"] as? Int) == 1 && $0["result"] != nil
-            }
-            if performInputSucceeded {
-                XCTAssertEqual(
-                    firstId, 2,
-                    "describe should be answered before the still-sleeping performInput")
-            }
-        }
-    }
 }

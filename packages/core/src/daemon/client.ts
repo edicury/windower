@@ -100,35 +100,6 @@ export class DaemonClient {
     return this.call("list_sessions", params);
   }
 
-  /**
-   * Phase 19 operator RPCs. `run_operator` mirrors `start_recording`'s
-   * non-blocking two-call shape: it returns `{ runId }` as soon as the run is
-   * accepted, and progress is polled via `get_operator_run`.
-   */
-  runOperator(
-    params: DaemonMethodMap["run_operator"]["params"],
-  ): Promise<DaemonMethodMap["run_operator"]["result"]> {
-    return this.call("run_operator", params);
-  }
-
-  getOperatorRun(
-    params: DaemonMethodMap["get_operator_run"]["params"],
-  ): Promise<DaemonMethodMap["get_operator_run"]["result"]> {
-    return this.call("get_operator_run", params);
-  }
-
-  abortOperatorRun(
-    params: DaemonMethodMap["abort_operator_run"]["params"],
-  ): Promise<DaemonMethodMap["abort_operator_run"]["result"]> {
-    return this.call("abort_operator_run", params);
-  }
-
-  listOperatorRuns(
-    params: DaemonMethodMap["list_operator_runs"]["params"] = {},
-  ): Promise<DaemonMethodMap["list_operator_runs"]["result"]> {
-    return this.call("list_operator_runs", params);
-  }
-
   /** Asks a running daemon to close its socket and exit. See methods.ts's `shutdown` note. */
   shutdown(
     params: DaemonMethodMap["shutdown"]["params"] = {},

@@ -72,7 +72,7 @@ type RecordingSession = {
 
 Persisted at `~/.windower/sessions/<id>.json`, updated on every state transition — this is what makes `windower status <id>` and crash recovery work without the daemon holding all state only in memory.
 
-**Invariant — a `RecordingSession` must not know what it is recording.** It carries no field describing whether it is recording a human, Windower Operator, Claude Code, Playwright, another agent, or nothing at all. The Capture plane never depends on the Reasoning plane (see `spec.md` §1.1). The reverse holds too and is stated on `OperatorRun` below: **there is no operator↔session relationship in any persisted model, in either direction.** An orchestrator that wants to know when a run finished polls `get_operator_run`; it holds the `runId` and the `sessionId` independently, because it created both, and the two ids are never joined by Windower. Ephemeral wall-clock correlation of the two event streams may live in daemon memory; it must never be persisted onto either record. If persistent orchestration state ever becomes *genuinely* required, the answer is a neutral third concept owned by the orchestration plane, referencing both `recordingSessionId` and `operatorRunId` and depended on by neither peer — deliberately **not** introduced now, because current behavior does not require persisted orchestration state.
+**Invariant — a `RecordingSession` must not know what it is recording.** It carries no field describing whether it is recording a human, Claude Code driving via its own tools, Playwright, another agent, or nothing at all. Capture and Control are peer capabilities, and neither depends on who — or what — is driving the screen (see `spec.md` §1.1).
 
 - `owner` (Phase 20, optional so 0.1.x session files without it still parse): identifies the process that created the session, so a process only mutates (transitions/finalizes) sessions it owns or whose owner pid is confirmed dead. This is what makes the `attach`-mode local `stop`/`cancel` fallback safe — if nothing is listening on the socket at `stop` time, the CLI checks `owner.pid` liveness itself before marking the session `failed`/`canceled` locally, instead of spawning a fresh daemon that would just answer `SESSION_NOT_FOUND`. `startedAt` here is the owner process's start time (not the session's), used to disambiguate a dead pid from a live unrelated process that happens to have been assigned the same pid after reuse.
 
@@ -92,7 +92,7 @@ type OutputManifest = {
 }
 ```
 
-**Removed in Phase 21: `operatorRunPath`.** A manifest is a Capture-plane artifact and must not reference the Reasoning plane; with the Operator no longer aware of recordings at all (`spec.md` §1.2), nothing can populate it. Readers must tolerate the key still being present in manifests written by earlier versions — an unknown extra key never fails validation.
+**Removed in Phase 21: `operatorRunPath`.** A manifest is a Capture-plane artifact and must not reference anything that drives the screen. Readers must tolerate the key still being present in manifests written by earlier versions — an unknown extra key never fails validation.
 
 ## EventTimeline (`<recording>.events.json`)
 
@@ -100,9 +100,9 @@ Phase 10 output — cursor/click capture only in MVP; consumed by Phase 15's pos
 
 ```ts
 type TimelineEvent =
-  | { t: number; type: "cursor_move"; x: number; y: number; source?: "user" | "operator" }         // t = ms since recording start
-  | { t: number; type: "mouse_down" | "mouse_up"; x: number; y: number; button: "left" | "right" | "other"; source?: "user" | "operator" }
-  | { t: number; type: "key_down" | "key_up"; key: string; source?: "user" | "operator" }          // best-effort, capability-gated (see research.md §2)
+  | { t: number; type: "cursor_move"; x: number; y: number; source?: "user" }         // t = ms since recording start
+  | { t: number; type: "mouse_down" | "mouse_up"; x: number; y: number; button: "left" | "right" | "other"; source?: "user" }
+  | { t: number; type: "key_down" | "key_up"; key: string; source?: "user" }          // best-effort, capability-gated (see research.md §2)
 
 type EventTimeline = {
   sessionId: string;
@@ -113,132 +113,11 @@ type EventTimeline = {
 
 Cursor-move sampling rate is capped (default 30Hz) to bound file size on long recordings — configurable in Phase 10's task file, not part of the public API surface in MVP.
 
-## OperatorRun (Phase 19, `~/.windower/operator-runs/<id>.json`)
-
-The daemon's live/persisted record of a guided operator run — deliberately parallel to `RecordingSession` so `OperatorRunManager` can reuse `SessionManager`'s persist-on-every-transition pattern. "Parallel to" is the whole relationship: the two are peers owned by orchestration, and neither references the other (`spec.md` §1.2).
-
-```ts
-type OperatorRunState = "pending" | "running" | "succeeded" | "failed" | "aborted" | "timed_out";
-
-type OperatorRun = {
-  id: string;                  // uuid
-  state: OperatorRunState;
-  task: string;                // the natural-language instruction
-  target: CaptureTarget;       // the RESOLVED target this run perceives and drives. `run_operator`'s *input*
-                               //   accepts the same `CaptureTarget | { targetId: string }` selector shape
-                               //   `start_recording` takes (reused verbatim, not a parallel operator-only
-                               //   type); the daemon resolves it once, before the run starts, and the
-                               //   persisted record holds the resolution. A persisted record MUST NOT hold
-                               //   an unresolved selector — the bounds clamp is evaluated against this
-                               //   target's own `Rect` (`contracts/operator.md` §Guardrails).
-  models: OperatorModels;      // (Phase 22) the resolved planner/executor tiers. A run configured with one
-                               //   model records the same ModelConfig in both slots.
-  plan?: OperatorPlan;         // the CURRENT (highest-revision) plan; absent until the run's first `plan` tool call
-  steps: OperatorStep[];
-  startedAt: string;           // ISO 8601
-  endedAt?: string;
-  summary?: string;            // the `done`/`fail` summary — the run's own statement of what it accomplished
-                               //   or why it stopped, persisted on the terminal transition so a consumer
-                               //   polling `get_operator_run` reads the outcome's payload without
-                               //   subscribing to anything (`contracts/operator.md` §"How they surface").
-                               //   Optional because a crashed run (`OPERATOR_LOOP_CRASHED`) died without
-                               //   reporting one — an absent summary is never fabricated.
-  error?: { code: string; message: string };
-  transcriptPath?: string;     // full reasoning/tool-call transcript, written under ~/.windower/operator-runs/
-}
-```
-
-State machine: `pending → running → succeeded | failed | aborted | timed_out` — deliberately parallel to `SessionState` above.
-
-**Invariant — an `OperatorRun` must not know whether anything is recording.** It carries no recording identifier, in any field, at any state. The run MUST NOT start, stop, cancel, or look up a recording, and MUST NOT route its frames through a recording session. **The same `OperatorRun` must behave identically whether the screen is being recorded or not** — a recording is neither an input to nor an output of a run. Correlating a run's `plan`/`action`/`checkpoint`/`narration`/`result` events with a recording's `EventTimeline` is the orchestration plane's job, done by wall-clock in daemon memory, and is deliberately not modeled here.
-
-**Breaking change (Phase 21) — `sessionId` removed.** Phase 19 shipped `OperatorRun.sessionId` as the id of the recording the run started and owned ("standalone mode"); a Phase 21 draft additionally proposed populating it from a `sessionId` *input* ("attach mode"). Both are removed together, along with the field itself. Rationale: standalone mode required the Operator to start a recording and attach mode required it to hold a recording identifier — either one reintroduces the lifecycle coupling the peer model exists to eliminate, and keeping the field "just as an output" would keep the Reasoning plane depending on the Capture plane for no remaining reason. Already-written `<id>.json` files carrying `sessionId` must still parse: an unknown extra key never fails validation.
-
-`OperatorRun.plan` is always the highest-revision `OperatorPlan` and is redundant with the last `step.plan` by construction — it exists so a consumer polling `get_operator_run` reads the current plan without walking the transcript.
-
-## OperatorPlan (Phase 21)
-
-One revision of the run's action plan — the explicit planning stage of `contracts/operator.md`'s `task → plan → execute → verify` model. Produced by the model's `plan` tool call; there is no plan until the model makes one, and a run with no plan is well-formed.
-
-```ts
-type OperatorPlan = {
-  revision: number;            // 0 for the initial plan, +1 per replan; never reused, never edited in place
-  steps: string[];             // ordered, one concise line of intent per planned step — never dispatched mechanically
-  rationale?: string;          // why this plan, or (on a replan) what invalidated the previous one
-  atStepIndex: number;         // index of the OperatorStep whose turn produced this revision
-  tMs: number;                 // ms since run start
-}
-```
-
-The model supplies only the *content* (`steps`, `rationale`); the daemon assigns the *identity* (`revision`, `atStepIndex`, `tMs`) when it accepts a `reportPlan` (see `contracts/operator-loop-protocol.md`), so a revision cannot be renumbered, backdated, or overwritten. There is no separate plan-history array: the ordered `step.plan` values **are** the history, which makes it impossible to record replanning inconsistently.
-
-## OperatorStep
-
-One perceive/decide/act cycle within an `OperatorRun`. A step is one observation/decision turn regardless of how many actions it executed — see `contracts/operator.md` §Action batching, bounded by the `maxBatchActions` guardrail (default 8).
-
-```ts
-type OperatorStep = {
-  index: number;
-  observations: ObservationRef[];  // (Phase 22) what this step actually reasoned over — an element list, a
-                                   //   frame, or both. Replaces Phase 19's `observationRef: string`.
-  toolCalls: Array<{ name: string; args: unknown; result?: unknown }>;
-  reasoning?: string;          // model's stated rationale, when the provider exposes one
-  plan?: OperatorPlan;         // set only on a step whose turn called `plan`; the ordered step.plan values are the full history
-  checkpoint?: {               // the verification this step's batch was checked against (contracts/operator.md
-    expectation: string;       //   §Execution model). Absent on a step that executed no batch. Only
-    outcome: "held" | "failed-plan-sound" | "failed-plan-invalid";  //   `failed-plan-invalid` is a replan;
-    detail?: string;           //   `failed-plan-sound` means retry/adjust within the current plan.
-  };
-  tMs: number;                 // ms since run start
-}
-```
-
-`toolCalls[].result` for an action the loop never issued because an earlier action in the same batch failed (or the batch hit `maxBatchActions`) is the literal `{ skipped: "BATCH_ABORTED" }` — a skipped action stays a row rather than a missing one, so "ran / failed / never ran" is stated, never inferred from array length.
-
-**Breaking change (Phase 22) — `observationRef: string` becomes `observations: ObservationRef[]`.** Phase 19 shipped a single string ref because a step's only possible percept was one screenshot. Phase 22 makes the accessibility element list the default percept and keeps frames as a fallback, so a step may have reasoned over an element list, a frame, or both, and a consumer must be able to tell which. This is documented as a breaking transcript-schema change rather than worked around with a parallel field, on the same reasoning Phase 21 used when it removed `OperatorRun.sessionId`: a second field whose only purpose is to avoid admitting the first one was wrong keeps both wrong forever. Transcripts written before Phase 22 are read-only artifacts and are **not** migrated.
-
-## ObservationRef (Phase 22)
-
-What one `OperatorStep` looked at. Refs are content-addressed and stored beside the transcript, never inlined.
-
-```ts
-type ObservationRef =
-  | { kind: "frame"; ref: string }      // PNG at ~/.windower/operator-runs/<runId>/frames/<sha256-prefix>.png
-  | { kind: "elements"; ref: string }   // JSON at ~/.windower/operator-runs/<runId>/observations/<sha256-prefix>.json
-```
-
-Counting `kind` across a transcript is how "did this run actually avoid capturing frames" is answered — it is a property of the record, not something derived from logs.
-
-## UIElement (Phase 22)
-
-One accessibility element of a target, as returned by the sidecar protocol's `enumerateElements` (`contracts/sidecar-protocol.md`). This is the operator's default percept.
-
-```ts
-type UIElement = {
-  ref: string;          // opaque, stable within one `generation`; never a raw memory address
-  role: string;         // NORMALIZED cross-platform role: "button" | "textfield" | "link" | "menuitem"
-                        //   | "row" | "checkbox" | "tab" | "image" | "text" | "group" | "other" | ...
-  subrole?: string;     // platform-native refinement when it disambiguates, e.g. macOS "AXSearchField".
-                        //   An unmapped native role surfaces as role "other" with the native role here.
-  label?: string;       // accessible name — title, label, or description, whichever the platform exposes
-  value?: string;       // current value for fields/toggles, truncated to a documented max length
-  bounds: Rect;         // PIXELS, global top-left-origin Quartz space — the same space InputAction uses,
-                        //   so this rect's center feeds straight into performInput with no conversion
-  enabled: boolean;
-  focused?: boolean;
-  actions?: string[];   // actions the platform advertises. INFORMATIONAL ONLY — Windower never invokes them.
-                        //   AX is a sensor here, never an actuator (tasks/phase-22-operator-ax-first.md)
-  parentRef?: string;   // flat list plus a parent pointer, deliberately NOT a nested tree
-}
-```
-
-**Why flat, not nested.** A flat list serializes smaller, and it truncates cleanly: a nested tree cut at a depth or count bound leaves orphaned subtrees and an ambiguous record of what was dropped. A consumer that needs hierarchy rebuilds it from `parentRef`; most never do.
-
-**Why roles are normalized.** `role` is Windower's vocabulary, not `AXRole`/`UIA_ControlType`/AT-SPI role strings. The mapping lives in each native backend, below the stdio line — a caller in `packages/core`/`apps/daemon`/`packages/operator` must never branch on a platform-native role name, for the same reason it never branches on `platform === "macos"`.
+**Breaking change (Phase 24) — `source` collapses to the single literal `"user"`.** Windower never synthesizes input itself; an agent driving via computer-use or a browser skill looks identical to a human from the capture sidecar's point of view, so there is nothing left to distinguish. The schema still **accepts** `"operator"` when parsing an older `.events.json` file (a Phase 19/22-era transcript), but nothing ever emits it again — this is read-only backward compatibility, not a live value.
 
 ## InputAction
 
-Discriminated union on `kind`, passed as an array to `performInput` (see `contracts/sidecar-protocol.md`). Coordinates are pixels, global top-left-origin Quartz space — the same space `TimelineEvent` uses.
+Discriminated union on `kind`, describing one synthesized input action. Coordinates are pixels, global top-left-origin Quartz space — the same space `TimelineEvent` uses. Not currently wired to any sidecar protocol method — `performInput` was removed in Phase 24 along with the Operator, its only caller.
 
 ```ts
 type InputAction =
@@ -252,62 +131,6 @@ type InputAction =
   | { kind: "key_press"; key: string; modifiers?: ("cmd" | "shift" | "ctrl" | "alt")[] }
   | { kind: "wait"; durationMs: number }
 ```
-
-## CaptureFrameParams
-
-Params of the sidecar protocol's `captureFrame` method (see `contracts/sidecar-protocol.md`). Dimensions are pixels.
-
-```ts
-type CaptureFrameParams = {
-  target: CaptureTarget;
-  format: "png" | "jpeg";
-  maxWidth?: number;         // downscale the longest edge to at most this, preserving aspect ratio
-  quality?: number;          // jpeg only, 0..1
-  fresh?: boolean;           // default false. false: the backend MAY serve the newest frame of an already-live
-                             //   capture stream covering `target` (staleness bounded by that stream's frame
-                             //   interval). true: force a real single-shot capture regardless of any live stream.
-}
-```
-
-## SecretRef
-
-A reference to a credential, never the credential's value — resolved at call time inside `packages/operator`, never persisted or logged.
-
-```ts
-type SecretRef = {
-  name: string;             // placeholder name substituted into `task`, e.g. "password" for "{{password}}"
-  source: "env" | "keychain" | "literal";
-  ref: string;               // env var name, keychain item name, or (discouraged) the literal value itself
-}
-```
-
-## ModelConfig
-
-Selects the LLM the operator's own reasoning loop uses, independent of whatever model is driving the calling agent/harness.
-
-```ts
-type ModelConfig = {
-  provider: string;          // e.g. "openai" | "anthropic" | "openai-compatible" | ...
-  model: string;              // provider-specific model id
-  baseUrl?: string;           // override, e.g. a local Ollama/LM Studio server for "openai-compatible"
-  apiKeyEnvVar?: string;      // env var to read the API key from; never the key itself
-}
-```
-
-## OperatorModels (Phase 22)
-
-The two model tiers one operator run uses. Planning is the expensive judgement and is made once; executing a plan step against a labeled element list is nearly mechanical, and does not need the same model.
-
-```ts
-type OperatorModels = {
-  planner: ModelConfig;       // writes and revises the plan; re-enters only on escalation
-  executor: ModelConfig;      // drives each step; never has the `plan` tool
-}
-```
-
-`OperatorRunOptions` accepts `executor` as optional and defaults it to `planner`, so a run configured with a single `--model` **MUST** behave exactly as a pre-Phase-22 single-model run. The persisted `OperatorRun.models` always holds both slots resolved — a persisted record never holds an unresolved tier, for the same reason it never holds an unresolved target.
-
-Both tiers resolve through the one provider registry in `packages/operator/src/providers.ts`; the tiers may use different providers, and either may be `openai-compatible`, so a fully-local two-tier run is possible. Each tier's API key still comes only from an environment variable (`contracts/operator.md` §Model configuration) — a two-provider run requires both env vars.
 
 ## Permission state (`doctor` / `check_permissions`)
 
@@ -356,21 +179,11 @@ type PermissionReport = {
     writable: boolean;
   };
   activeSessions?: number;
-  activeRuns?: number;
-
-  // API-key env var presence only — booleans, never values. A row reading
-  // "present in CLI: yes / present in daemon: no" is the one-line
-  // self-diagnosis of the frozen-daemon-env bug that motivated Phase 20.
-  apiKeyEnvVars?: Array<{
-    name: string;                     // e.g. "ANTHROPIC_API_KEY", or the configured apiKeyEnvVar
-    presentInClient: boolean;
-    presentInDaemon: boolean;         // false/omitted-effectively-false when no daemon is running
-  }>;
 
   // Phase 21 addition — ScreenCaptureKit exclusivity diagnostics
   // (contracts/screen-capture-exclusivity.md). A *diagnostic*, not a
-  // permission; it lives here for the same single-schema reason as
-  // `apiKeyEnvVars` (see below), which is what keeps `doctor --json`
+  // permission; it lives here for the same single-schema reason as the
+  // other optional fields above, which is what keeps `doctor --json`
   // schema-validated. It records only what the lock file already says, and is
   // NOT a discovery or routing mechanism: `doctor` never connects to the
   // holder, never steals a live lock, and never spawns a second
@@ -388,7 +201,7 @@ type PermissionReport = {
 }
 ```
 
-**Where `apiKeyEnvVars` lives:** modeled on `PermissionReport` itself, not a separate `DoctorReport` type. `packages/core/src/schemas/permissions.ts` defines exactly one report schema (`PermissionReportSchema`), consumed by both `windower doctor` and the `check_permissions` MCP tool (`GetPermissionsResultSchema = PermissionReportSchema.partial()` in `packages/core/src/protocol/methods.ts` — the sidecar's own permission response is a partial view over the same shape). Introducing a sibling `DoctorReport` type would fork that single-schema convention for a feature (env-var-presence diffing) that is just more permission/environment diagnostics, and `doctor`'s job in this codebase has always been "render `PermissionReport` plus daemon reachability" — see `contracts/cli.md`'s existing `doctor` section. Every new field above is optional for the same reason the existing ones already vary by reporter (`sidecarVersion` is only known once a sidecar has responded): different callers (sidecar `GetPermissionsResultSchema`, CLI-local `doctor`, daemon-backed `check_permissions`) populate different subsets of the same object, so exhaustiveness was never assumed even pre-Phase-20.
+**Where these optional fields live:** modeled on `PermissionReport` itself, not a separate `DoctorReport` type. `packages/core/src/schemas/permissions.ts` defines exactly one report schema (`PermissionReportSchema`), consumed by both `windower doctor` and the `check_permissions` MCP tool (`GetPermissionsResultSchema = PermissionReportSchema.partial()` in `packages/core/src/protocol/methods.ts` — the sidecar's own permission response is a partial view over the same shape). Introducing a sibling `DoctorReport` type would fork that single-schema convention for a feature that is just more permission/environment diagnostics, and `doctor`'s job in this codebase has always been "render `PermissionReport` plus daemon reachability" — see `contracts/cli.md`'s existing `doctor` section. Every new field above is optional for the same reason the existing ones already vary by reporter (`sidecarVersion` is only known once a sidecar has responded): different callers (sidecar `GetPermissionsResultSchema`, CLI-local `doctor`, daemon-backed `check_permissions`) populate different subsets of the same object, so exhaustiveness was never assumed even pre-Phase-20.
 
 ## Daemon state file (`~/.windower/daemon.json`)
 
@@ -409,7 +222,7 @@ type DaemonStateFile = {
 
 ## DaemonHello / DaemonInfo (`hello` / `daemon_info` RPC payloads)
 
-The version-handshake payloads exchanged when a client connects to the daemon socket, per `contracts/daemon-rpc.md`. Defined here — not only in the contract — per this repo's convention that Zod shapes are the source of truth in `data-model.md` even when the RPC method semantics (request/response framing, error codes) live in `contracts/*.md` (see `OperatorRun` above, whose method-level docs live in `contracts/mcp-tools.md` / `contracts/cli.md` but whose shape is defined here).
+The version-handshake payloads exchanged when a client connects to the daemon socket, per `contracts/daemon-rpc.md`. Defined here — not only in the contract — per this repo's convention that Zod shapes are the source of truth in `data-model.md` even when the RPC method semantics (request/response framing, error codes) live in `contracts/*.md`.
 
 ```ts
 // Client -> daemon, first call on every new connection.
@@ -418,11 +231,6 @@ type DaemonHelloRequest = {
   clientVersion: string;
   protocolVersion: number;            // client's DAEMON_PROTOCOL_VERSION
   windowerHome: string;                // resolved WINDOWER_HOME, compared against the daemon's — mismatch is an error
-  env?: {                              // scoped env snapshot, never process.env wholesale — see "Settled decisions" in phase-20-daemon-optional.md
-    apiKeyEnvVar?: string;             // name of the model API key var, e.g. "ANTHROPIC_API_KEY"
-    apiKeyValue?: string;              // the value itself — only ever sent for detached operate runs; never logged, never persisted
-    secretRefs?: Array<{ name: string; value: string }>; // resolved `env:`-sourced SecretRefs named in this request only
-  };
 }
 
 // Daemon -> client, response to `hello`; also the shape of `daemon_info` (a
@@ -437,8 +245,6 @@ type DaemonInfo = {
 }
 ```
 
-`DaemonHelloRequest.env` is the one place a secret value is allowed to cross the socket, and only because the socket is already `0600`, same-UID-only, unauthenticated by design (see phase-20 "Settled decisions"). Blocking `operate` (the default) never populates it; only `operate --detach` and MCP's `run_operator` do.
-
 ## WindowerConfig (`~/.windower/config.json`)
 
 Backs `windower config get|set` (`packages/core/src/schemas/config.ts`'s `WindowerConfigSchema`). All fields optional; missing/partial config is synthesized against documented defaults.
@@ -450,22 +256,6 @@ type WindowerConfig = {
   daemonIdleTimeoutMs?: number;                 // default 30min
   defaultVideo?: Partial<VideoSettings>;
   defaultAudio?: Partial<AudioSettings>;
-  operator?: {                                  // Phase 19, extended Phase 22
-    defaultModel?: ModelConfig;                 // used for any tier that has no more specific default
-    defaultPlannerModel?: ModelConfig;          // Phase 22
-    defaultExecutorModel?: ModelConfig;         // Phase 22
-    apiKeyEnvVar?: string;
-    baseUrl?: string;
-    defaultObserve?: "auto" | "ax" | "vision";  // Phase 22, default "auto"
-    guardrailDefaults?: {
-      maxSteps?: number;
-      timeoutSeconds?: number;
-      maxBatchActions?: number;                 // Phase 22 — closes drift vs contracts/operator.md's
-                                                //   guardrail table, which has had it since Phase 21
-      maxReplans?: number;                      // Phase 22, default 3
-      unbounded?: boolean;
-    };
-  };
 }
 ```
 

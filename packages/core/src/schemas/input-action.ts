@@ -1,15 +1,17 @@
 import { z } from "zod";
 
 /**
- * InputAction — the discriminated union (on `kind`) passed as an array to the
- * sidecar's `performInput` method. See data-model.md §InputAction and
- * contracts/sidecar-protocol.md §Methods.
+ * InputAction — a discriminated union (on `kind`) describing one synthesized
+ * input event. See data-model.md §InputAction. As of Phase 24, Windower
+ * itself never synthesizes input (that is always the calling agent's own
+ * tool — computer-use, a browser skill, or manual scripting); this schema
+ * remains as a general-purpose description of an input event, no longer
+ * wired to a sidecar RPC.
  *
  * Coordinates are **pixels, global top-left-origin Quartz space** — the same
- * space `TimelineEvent` uses, so a coordinate read out of an event timeline or
- * a `captureFrame` result feeds straight back into `performInput` with no
- * conversion. Points-vs-pixels conversion happens only inside the native
- * sidecar (CLAUDE.md §Units).
+ * space `TimelineEvent` uses, so a coordinate read out of an event timeline
+ * needs no conversion. Points-vs-pixels conversion happens only inside the
+ * native sidecar (CLAUDE.md §Units).
  */
 
 export const MouseButtonSchema = z.enum(["left", "right", "other"]);
@@ -116,10 +118,9 @@ export const INPUT_ACTION_KINDS = [
 export type InputActionKind = (typeof INPUT_ACTION_KINDS)[number];
 
 /**
- * Every (x, y) pair an action touches, in global pixel space. Used by
- * guardrail/bounds-clamp logic (contracts/operator.md §Guardrails) and by the
- * sidecar's `INPUT_OUT_OF_BOUNDS` check — `type_text`/`key_press`/`wait` carry
- * no coordinates and therefore yield an empty list.
+ * Every (x, y) pair an action touches, in global pixel space.
+ * `type_text`/`key_press`/`wait` carry no coordinates and therefore yield an
+ * empty list.
  */
 export function inputActionCoordinates(action: InputAction): Array<{ x: number; y: number }> {
   switch (action.kind) {

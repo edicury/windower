@@ -4,12 +4,20 @@ import { z } from "zod";
  * TimelineEvent / EventTimeline — <recording>.events.json. Phase 10 output;
  * cursor/click capture only in MVP. See data-model.md §EventTimeline.
  *
- * Phase 19 adds `source` — `"user"` for real human input, `"operator"` for
- * input synthesized by an operator run (`performInput`). It carries a runtime
- * default of `"user"` so `.events.json` files written before Phase 19 still
- * parse unchanged; the exported TS types use `z.input` (i.e. `source?`) for the
- * same back-compat reason — every event that has been through
- * `TimelineEventSchema.parse` is guaranteed to carry a concrete `source`.
+ * `source` carries a runtime default of `"user"` so `.events.json` files
+ * written before this field existed still parse unchanged; the exported TS
+ * types use `z.input` (i.e. `source?`) for the same back-compat reason —
+ * every event that has been through `TimelineEventSchema.parse` is
+ * guaranteed to carry a concrete `source`.
+ *
+ * Phase 24 — Windower no longer synthesizes input itself (the Operator was
+ * removed; driving a UI during a demo is always the calling agent's own
+ * tool, indistinguishable from a human below the stdio line), so `"user"` is
+ * the only value anything ever writes going forward. `"operator"` stays in
+ * the accepted enum purely for READ back-compat with `.events.json` files
+ * written before this phase — an older file carrying it must still parse,
+ * per the same policy `data-model.md`'s breaking-change notes use elsewhere
+ * (settled decision in `tasks/phase-24-remove-operator.md`).
  */
 
 export const EventSourceSchema = z.enum(["user", "operator"]);

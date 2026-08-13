@@ -1,3 +1,5 @@
+**Superseded by Phase 24 — the Operator was removed.** Kept for historical record only.
+
 ## Phase 19 — Operator (v1.2)
 
 **Goal:** Ship a guided "operator" agent that takes one natural-language instruction (e.g. "Open waroom.co, log in with these creds, create an incident to showcase. Record in 1080p, save to Desktop.") and performs it end-to-end — perceiving the screen, driving mouse/keyboard, recording as it goes — by freezing new sidecar protocol methods first (protocol before platform, this repo's core rule), then implementing on top of them.

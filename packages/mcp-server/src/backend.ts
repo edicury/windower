@@ -22,7 +22,7 @@ import { getDaemonClient } from "./daemon-client.js";
  * Every MCP tool that goes through this router. `shutdown` and
  * `list_operator_runs` are deliberately absent — per `contracts/mcp-tools.md`,
  * `shutdown` is a daemon-only RPC never exposed as an MCP tool, and
- * `list_operator_runs` is CLI-only (`windower operate list`).
+ * `list_operator_runs` no longer exists (Phase 24 removed the Operator).
  */
 export type McpToolId =
   | "list_targets"
@@ -33,10 +33,7 @@ export type McpToolId =
   | "list_sessions"
   | "start_recording"
   | "stop_recording"
-  | "cancel_recording"
-  | "run_operator"
-  | "get_operator_run"
-  | "abort_operator_run";
+  | "cancel_recording";
 
 /**
  * Tools routed `local` (Phase 20): a transient, daemon-free sidecar spawn
@@ -45,10 +42,7 @@ export type McpToolId =
  * (`get_session`/`list_sessions`). Everything else in `McpToolId` is
  * `daemon`-backed — `start_recording`/`stop_recording`/`cancel_recording`
  * because split-invocation recording needs a process that outlives the
- * calling tool call, and the three operator tools per
- * `contracts/mcp-tools.md`'s `run_operator` justification block (host
- * timeouts, cross-surface visibility, consistency with the session tools) —
- * unchanged by this phase.
+ * calling tool call.
  */
 export const MCP_LOCAL_TOOLS: ReadonlySet<McpToolId> = new Set<McpToolId>([
   "list_targets",
@@ -65,7 +59,7 @@ let sharedLocalWindower: LocalWindower | undefined;
  * One `LocalWindower` for the MCP server process's lifetime — construction
  * is cheap (no I/O; its stores lazy-load on first store-touching call), so
  * there's no benefit to constructing a fresh one per tool call, and sharing
- * one avoids redundant `SessionStore`/`OperatorRunStore` loads.
+ * one avoids redundant `SessionStore` loads.
  */
 export function getLocalWindower(): LocalWindower {
   if (!sharedLocalWindower) {
@@ -84,11 +78,6 @@ export function resetLocalWindowerForTests(): void {
  * this with their own tool name and get back either the shared
  * `LocalWindower` or the memoized daemon connection (`getDaemonClient`),
  * never touching a daemon for a `local` tool.
- *
- * `run_operator` does NOT go through this — it needs a fresh, env-scoped
- * connection per call (see `tools/operator.ts` and `daemon-client.ts`'s
- * `connectForOperatorRun`), not the memoized process-wide client this
- * returns for every other `daemon`-mode tool.
  */
 export type GetBackend = (toolId: McpToolId) => Promise<WindowerBackend>;
 

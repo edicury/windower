@@ -35,11 +35,7 @@ export type CommandId =
   | "list"
   | "config get"
   | "config set"
-  | "operate"
-  | "operate status"
-  | "operate list"
   | "start"
-  | "operate abort"
   | "stop"
   | "cancel"
   | "daemon status"
@@ -48,13 +44,8 @@ export type CommandId =
   | "daemon kill";
 
 /**
- * Flat lookup table, transcribed 1:1 from `contracts/cli.md`.
- *
- * NOTE: `operate`'s entry here is its **default** (blocking) mode, `local`.
- * `--detach` flips it to `daemon` — that nuance isn't expressible in a flat
- * per-command map, so `resolveBackendMode` below is the actual source of
- * truth for `operate`; this table alone is sufficient for every other
- * command, all of which have exactly one mode regardless of flags.
+ * Flat lookup table, transcribed 1:1 from `contracts/cli.md`. Every command
+ * here has exactly one mode regardless of flags.
  */
 export const POLICY_TABLE: Record<CommandId, BackendMode> = {
   record: "local",
@@ -66,11 +57,7 @@ export const POLICY_TABLE: Record<CommandId, BackendMode> = {
   list: "local",
   "config get": "local",
   "config set": "local",
-  operate: "local",
-  "operate status": "local",
-  "operate list": "local",
   start: "daemon",
-  "operate abort": "daemon",
   stop: "attach",
   cancel: "attach",
   "daemon status": "attach",
@@ -89,21 +76,12 @@ export const POLICY_TABLE: Record<CommandId, BackendMode> = {
 };
 
 /** Options affecting mode resolution for commands whose mode isn't a flat constant. */
-export interface ResolveBackendModeOptions {
-  /**
-   * `windower operate --detach`: opts out of the default blocking/local
-   * shape and restores the non-blocking two-call shape, `daemon` mode,
-   * returning `{ runId }` immediately (`contracts/cli.md`'s `operate`
-   * section). Ignored for every command other than `operate`.
-   */
-  detach?: boolean;
-}
+export interface ResolveBackendModeOptions {}
 
 /**
- * Resolves the backend mode for a command, accounting for the one
- * documented flag-driven exception (`operate --detach`). Every other
- * command's mode is a flat constant from `POLICY_TABLE` and ignores
- * `opts`.
+ * Resolves the backend mode for a command. Every command's mode is a flat
+ * constant from `POLICY_TABLE` and ignores `opts` — kept as a parameter for
+ * call-site stability even though nothing currently varies mode by flag.
  *
  * Deliberately does NOT apply the `--daemon`/`--no-daemon`/`WINDOWER_BACKEND`
  * debugging escape hatches described in `contracts/cli.md` — those override
@@ -113,10 +91,7 @@ export interface ResolveBackendModeOptions {
  */
 export function resolveBackendMode(
   command: CommandId,
-  opts: ResolveBackendModeOptions = {},
+  _opts: ResolveBackendModeOptions = {},
 ): BackendMode {
-  if (command === "operate" && opts.detach) {
-    return "daemon";
-  }
   return POLICY_TABLE[command];
 }

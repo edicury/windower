@@ -1,6 +1,10 @@
 // Phase 21 live verification — per-run metrics.
+// Originally reported operator run/step/plan/checkpoint counts alongside
+// recording duration; the Operator has been removed (CLAUDE.md — Windower
+// never drives UI itself), so this now reports only recording-side metrics
+// against core-repro.sh's synthetic-input-driven runs.
 // Usage: node metrics.mjs <runLabel>
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 
 const SCRATCH =
@@ -10,9 +14,6 @@ const dir = `${SCRATCH}/${label}`;
 
 const stop = JSON.parse(readFileSync(`${dir}/stop.json`, "utf8"));
 const session = JSON.parse(readFileSync(`${dir}/session.json`, "utf8"));
-const run = existsSync(`${dir}/run-final.json`)
-  ? JSON.parse(readFileSync(`${dir}/run-final.json`, "utf8"))
-  : null;
 
 const wallMs = Date.parse(session.stoppedAt) - Date.parse(session.startedAt);
 const videoMs = stop.manifest.video.durationMs;
@@ -33,25 +34,23 @@ try {
 
 const events = JSON.parse(readFileSync(stop.eventTimelinePath, "utf8"));
 const evList = Array.isArray(events) ? events : (events.events ?? []);
-const operatorEvents = evList.filter((e) => e.source === "operator");
+const sourceCounts = {};
+for (const e of evList) {
+  const key = e.source ?? "(none)";
+  sourceCounts[key] = (sourceCounts[key] ?? 0) + 1;
+}
 
 console.log(
   JSON.stringify(
     {
       label,
       sessionId: session.id,
-      runId: run?.id ?? null,
-      runState: run?.state ?? null,
-      runError: run?.error ?? null,
-      steps: run?.steps?.length ?? null,
-      planRevisions: run?.plan ? (run.plan.revision ?? "present") : null,
-      checkpoints: (run?.steps ?? []).filter((s) => s.checkpoint !== undefined).length,
       wallClockMs: wallMs,
       manifestVideoMs: videoMs,
       ffprobeMs,
       preservedPct: Number(((videoMs / wallMs) * 100).toFixed(1)),
       totalEvents: evList.length,
-      operatorEvents: operatorEvents.length,
+      eventSourceCounts: sourceCounts,
       videoPath: stop.outputPath,
     },
     null,

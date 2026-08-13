@@ -13,7 +13,7 @@ import { createServer } from "./server.js";
  * sure no tool named `shutdown` is ever registered here.
  */
 describe("shutdown is not an MCP tool (Phase 20)", () => {
-  it("the real server's tool list never includes shutdown or list_operator_runs", async () => {
+  it("the real server's tool list never includes shutdown", async () => {
     const server = createServer();
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "test-client", version: "0.0.0" });
@@ -24,9 +24,6 @@ describe("shutdown is not an MCP tool (Phase 20)", () => {
     const names = tools.map((t) => t.name);
 
     expect(names).not.toContain("shutdown");
-    // list_operator_runs is CLI-only (`windower operate list`), per the same
-    // contract section — not this file's focus, but cheap to assert here too.
-    expect(names).not.toContain("list_operator_runs");
     expect(names.length).toBeGreaterThan(0);
   });
 });

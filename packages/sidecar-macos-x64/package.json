@@ -6,6 +6,10 @@
   "os": ["darwin"],
   "cpu": ["x64"],
   "files": ["bin"],
+  "bin": {
+    "windower-capture-macos": "bin/windower-capture-macos",
+    "windower-control-macos": "bin/windower-control-macos"
+  },
   "publishConfig": {
     "access": "public"
   }

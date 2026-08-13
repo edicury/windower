@@ -191,30 +191,12 @@ final class EventTapCaptureTests: XCTestCase {
         XCTAssertFalse(source.keyboardCaptureActive)
     }
 
-    // MARK: - Synthetic-event read-back (moved here in phase 21)
+    // MARK: - Event source tagging (Phase 24)
     //
-    // `WindowerEventTag` is stamped onto events by the CONTROL surface and
-    // read back by this (capture) one. The write half is covered in
-    // `WindowerControlCoreTests/InputSynthesisTests`; the read half has to
-    // live here because `EventTapSource`/`TimelineEventWire` are
-    // capture-surface symbols the control test target deliberately cannot see.
-
-    func testEventTapSourceClassifiesAnUnstampedEventAsUser() throws {
-        guard let event = CGEvent(source: nil) else {
-            throw XCTSkip("CGEvent creation unavailable in this environment")
-        }
-        XCTAssertEqual(EventTapSource.source(for: event), "user")
-    }
-
-    func testEventTapSourceClassifiesAStampedEventAsOperator() throws {
-        guard let event = CGEvent(source: nil) else {
-            throw XCTSkip("CGEvent creation unavailable in this environment")
-        }
-        // Exactly what `InputSynthesisService.post` does before posting —
-        // no CGEventPost involved, so no Accessibility grant is needed.
-        event.setIntegerValueField(.eventSourceUserData, value: WindowerEventTag.magic)
-        XCTAssertEqual(EventTapSource.source(for: event), "operator")
-    }
+    // Phase 24 removed the Operator, and with it the only path that ever
+    // synthesized input. `EventTapSource` no longer classifies events by
+    // origin — every event it captures is tagged `WindowerEventTag.userSource`
+    // directly (see `tasks/phase-24-remove-operator.md` settled decision 4).
 
     func testTimelineEventEncodesSourceForEveryVariant() throws {
         func sourceField(_ event: TimelineEventWire) throws -> String? {

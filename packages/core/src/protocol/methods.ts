@@ -2,10 +2,8 @@ import { z } from "zod";
 import { AudioSettingsSchema } from "../schemas/audio-settings.js";
 import { CaptureTargetSchema } from "../schemas/capture-target.js";
 import { TimelineEventSchema } from "../schemas/event-timeline.js";
-import { type InputActionKind, InputActionSchema } from "../schemas/input-action.js";
 import { PermissionReportSchema, PermissionStatusSchema } from "../schemas/permissions.js";
 import { RectSchema } from "../schemas/rect.js";
-import { UIElementSchema } from "../schemas/ui-element.js";
 import { VideoSettingsSchema } from "../schemas/video-settings.js";
 
 /**
@@ -30,41 +28,8 @@ export const CapabilitySchema = z.enum([
   "eventTimeline.cursor",
   "eventTimeline.mouse",
   "eventTimeline.keyboard",
-  "input.mouse",
-  "input.keyboard",
-  "screenshot",
-  /**
-   * Phase 22 — `enumerateElements`. Control-surface capability, same shape as
-   * `window-control`: absent on any backend that cannot walk a UI tree (e.g.
-   * native Wayland without AT-SPI reachability — research.md §2).
-   */
-  "ui.elements",
 ]);
 export type Capability = z.infer<typeof CapabilitySchema>;
-
-/**
- * Which capability `performInput` requires for a given action `kind`
- * (contracts/sidecar-protocol.md §Methods — "`input.mouse` / `input.keyboard`
- * (per action `kind`)"). `wait` is a local sleep and needs neither.
- */
-export function requiredCapabilityForInputAction(
-  kind: InputActionKind,
-): Extract<Capability, "input.mouse" | "input.keyboard"> | null {
-  switch (kind) {
-    case "mouse_move":
-    case "mouse_down":
-    case "mouse_up":
-    case "mouse_click":
-    case "mouse_drag":
-    case "scroll":
-      return "input.mouse";
-    case "type_text":
-    case "key_press":
-      return "input.keyboard";
-    default:
-      return null;
-  }
-}
 
 export const PlatformSchema = z.enum(["macos", "windows", "linux"]);
 export type Platform = z.infer<typeof PlatformSchema>;
@@ -174,80 +139,6 @@ export const CancelCaptureResultSchema = z.object({
 });
 export type CancelCaptureResult = z.infer<typeof CancelCaptureResultSchema>;
 
-// ---- performInput ----
-// Takes an **array** deliberately: a click-then-type sequence is one atomic
-// round trip and one capability check, not N round trips
-// (contracts/sidecar-protocol.md §Methods).
-export const PerformInputParamsSchema = z.object({
-  sessionId: z.string().optional(),
-  actions: z.array(InputActionSchema),
-});
-export type PerformInputParams = z.infer<typeof PerformInputParamsSchema>;
-
-export const PerformInputResultSchema = z.object({
-  performed: z.number(),
-});
-export type PerformInputResult = z.infer<typeof PerformInputResultSchema>;
-
-// ---- captureFrame ----
-export const CaptureFrameParamsSchema = z.object({
-  target: CaptureTargetSchema,
-  format: z.enum(["png", "jpeg"]),
-  maxWidth: z.number().positive().optional(),
-  quality: z.number().optional(),
-  /**
-   * Phase 21 frame-sharing opt-out (contracts/sidecar-protocol.md
-   * §captureFrame). When the capture sidecar already has a live stream
-   * covering the requested target it MAY serve that stream's most recently
-   * delivered frame instead of a fresh one-shot capture — observable only as
-   * lower latency plus staleness bounded by the stream's frame interval.
-   * `fresh: true` forces a real one-shot capture regardless. Defaults to
-   * `false`; the operator's observation loop leaves it unset.
-   */
-  fresh: z.boolean().default(false),
-});
-/**
- * Deliberately `z.input` rather than `z.infer`: `fresh` has a schema-level
- * default, so callers may omit it (every pre-Phase-21 `captureFrame` call site
- * still type-checks unchanged) while anything that *parses* the params sees
- * the resolved `fresh: false`. Use `CaptureFrameParamsParsed` for the
- * post-parse shape.
- */
-export type CaptureFrameParams = z.input<typeof CaptureFrameParamsSchema>;
-export type CaptureFrameParamsParsed = z.output<typeof CaptureFrameParamsSchema>;
-
-export const CaptureFrameResultSchema = z.object({
-  imageBase64: z.string(),
-  width: z.number(),
-  height: z.number(),
-  scale: z.number(),
-});
-export type CaptureFrameResult = z.infer<typeof CaptureFrameResultSchema>;
-
-// ---- enumerateElements ----
-// Phase 22 — control-surface, capture-free (contracts/sidecar-protocol.md
-// §Methods). Requires `ui.elements`. `refs` is the freshness path: passing it
-// re-reads exactly those elements' current attributes/bounds instead of
-// walking the tree, so `click_element` can re-resolve a ref immediately
-// before acting in one round trip — no separate `resolveElement` method.
-export const EnumerateElementsParamsSchema = z.object({
-  target: CaptureTargetSchema,
-  refs: z.array(z.string()).optional(),
-  filter: z.enum(["interactable", "all"]).optional(),
-  maxDepth: z.number().int().positive().optional(),
-  maxElements: z.number().int().positive().optional(),
-});
-export type EnumerateElementsParams = z.infer<typeof EnumerateElementsParamsSchema>;
-
-export const EnumerateElementsResultSchema = z.object({
-  elements: z.array(UIElementSchema),
-  /** Minted per full walk; refs are `<generation>:<index>`, valid only within it. */
-  generation: z.string(),
-  /** True when `maxDepth`/`maxElements` cut the walk — never truncated silently. */
-  truncated: z.boolean(),
-});
-export type EnumerateElementsResult = z.infer<typeof EnumerateElementsResultSchema>;
-
 // ---- Method table ----
 
 export const SIDECAR_METHODS = [
@@ -259,9 +150,6 @@ export const SIDECAR_METHODS = [
   "startCapture",
   "stopCapture",
   "cancelCapture",
-  "performInput",
-  "captureFrame",
-  "enumerateElements",
 ] as const;
 export type SidecarMethod = (typeof SIDECAR_METHODS)[number];
 
@@ -275,9 +163,6 @@ export interface SidecarMethodMap {
   startCapture: { params: StartCaptureParams; result: StartCaptureResult };
   stopCapture: { params: StopCaptureParams; result: StopCaptureResult };
   cancelCapture: { params: CancelCaptureParams; result: CancelCaptureResult };
-  performInput: { params: PerformInputParams; result: PerformInputResult };
-  captureFrame: { params: CaptureFrameParams; result: CaptureFrameResult };
-  enumerateElements: { params: EnumerateElementsParams; result: EnumerateElementsResult };
 }
 
 export const SIDECAR_METHOD_SCHEMAS: {
@@ -297,12 +182,6 @@ export const SIDECAR_METHOD_SCHEMAS: {
   startCapture: { params: StartCaptureParamsSchema, result: StartCaptureResultSchema },
   stopCapture: { params: StopCaptureParamsSchema, result: StopCaptureResultSchema },
   cancelCapture: { params: CancelCaptureParamsSchema, result: CancelCaptureResultSchema },
-  performInput: { params: PerformInputParamsSchema, result: PerformInputResultSchema },
-  captureFrame: { params: CaptureFrameParamsSchema, result: CaptureFrameResultSchema },
-  enumerateElements: {
-    params: EnumerateElementsParamsSchema,
-    result: EnumerateElementsResultSchema,
-  },
 };
 
 // ---- Notifications (sidecar → daemon) ----

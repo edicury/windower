@@ -211,24 +211,6 @@ describe("connectToDaemon / ensureDaemonRunning / restartDaemon", () => {
     client.dispose();
   }, 10_000);
 
-  it("throws DAEMON_BUSY (naming active ids) when a mismatched daemon has an active operator run", async () => {
-    spawned.push(
-      spawnFixture(home, {
-        FAKE_DAEMON_PROTOCOL_VERSION: "999",
-        FAKE_DAEMON_ACTIVE_RUN_IDS: "run-xyz789",
-      }),
-    );
-    await waitForSocket(daemonSocketPath());
-
-    await expect(
-      ensureDaemonRunning({
-        socketPath: daemonSocketPath(),
-        entryPath: FIXTURE_PATH,
-        spawnTimeoutMs: 3000,
-      }),
-    ).rejects.toMatchObject({ code: "DAEMON_BUSY", message: expect.stringContaining("run-xyz789") });
-  }, 10_000);
-
   it("throws DAEMON_VERSION_MISMATCH on windowerHome disagreement, without attempting a restart", async () => {
     spawned.push(spawnFixture(home, { FAKE_DAEMON_WINDOWER_HOME: "/some/other/windower/home" }));
     await waitForSocket(daemonSocketPath());

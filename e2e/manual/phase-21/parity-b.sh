@@ -1,5 +1,10 @@
 #!/bin/bash
-# Phase 21 live verification — recording-without-operator parity (model-free half).
+# Phase 21 live verification — recording session/manifest shape parity
+# (model-free). Confirms a recording's session record and manifest are
+# identical in shape regardless of what drives the screen (here: plain
+# human/agent-style desktop activity via osascript, compared against
+# core-repro.sh's synthetic-input-driven runs) — there is no Windower
+# operator anymore to compare against (see CLAUDE.md).
 set -uo pipefail
 REPO=/Users/edicury/Documents/Development/windower
 SCRATCH=/private/tmp/claude-501/-Users-edicury-Documents-Development-windower/1e7cd64a-71fd-4a25-96ca-b53181c9776e/scratchpad
@@ -27,7 +32,7 @@ cp "$HOME/.windower/sessions/$SESSION.json" "$OUT/session.json"
 cat "$OUT/stop.json"
 
 echo
-echo "=== SHAPE COMPARISON vs the caller-driven runs ==="
+echo "=== SHAPE COMPARISON vs the synthetic-input-driven runs (core-repro.sh) ==="
 node - "$OUT" "$SCRATCH/run1" "$SCRATCH/run2" "$SCRATCH/run3" <<'EOF'
 const fs = require("node:fs");
 const keys = (o, p = "") =>
@@ -44,12 +49,12 @@ for (const r of runs) {
   const rSession = keys(load(`${r}/session.json`)).sort();
   const rManifest = keys(load(`${r}/stop.json`).manifest).sort();
   const dS = [
-    ...bSession.filter((k) => !rSession.includes(k)).map((k) => `only-in-no-operator: ${k}`),
-    ...rSession.filter((k) => !bSession.includes(k)).map((k) => `only-in-caller-driven: ${k}`),
+    ...bSession.filter((k) => !rSession.includes(k)).map((k) => `only-in-human-driven: ${k}`),
+    ...rSession.filter((k) => !bSession.includes(k)).map((k) => `only-in-synthetic-input-driven: ${k}`),
   ];
   const dM = [
-    ...bManifest.filter((k) => !rManifest.includes(k)).map((k) => `only-in-no-operator: ${k}`),
-    ...rManifest.filter((k) => !bManifest.includes(k)).map((k) => `only-in-caller-driven: ${k}`),
+    ...bManifest.filter((k) => !rManifest.includes(k)).map((k) => `only-in-human-driven: ${k}`),
+    ...rManifest.filter((k) => !bManifest.includes(k)).map((k) => `only-in-synthetic-input-driven: ${k}`),
   ];
   const tag = r.split("/").pop();
   console.log(`CHECK session_shape_vs_${tag}: ${dS.length === 0 ? "PASS identical key set" : `FAIL ${dS.join(", ")}`}`);
@@ -58,13 +63,13 @@ for (const r of runs) {
 }
 // Nothing anywhere may identify what drove the screen.
 const raw = fs.readFileSync(`${b}/session.json`, "utf8") + fs.readFileSync(`${b}/stop.json`, "utf8");
-const hits = raw.match(/operator|runId|loop-entry/gi) ?? [];
+const hits = raw.match(/driver|agent|operator|runId|loop-entry/gi) ?? [];
 console.log(`CHECK no_driver_identity: ${hits.length === 0 ? "PASS nothing names what drove the screen" : `FAIL ${[...new Set(hits)].join(", ")}`}`);
 process.exit(fail);
 EOF
 
 echo
-echo "=== events timeline source tags (no operator ran — expect none tagged operator) ==="
+echo "=== events timeline source tags (EventTimeline.source is now always \"user\" — settled decision, Phase 24) ==="
 node -e '
 const fs=require("node:fs");
 const p=JSON.parse(fs.readFileSync(process.argv[1],"utf8")).eventTimelinePath;
@@ -73,7 +78,8 @@ const list=Array.isArray(e)?e:(e.events??[]);
 const counts={};
 for(const x of list) counts[x.source??"(none)"]=(counts[x.source??"(none)"]??0)+1;
 console.log("event source counts:",JSON.stringify(counts));
-console.log(`CHECK no_operator_tagged_events: ${(counts.operator??0)===0?"PASS":"FAIL "+counts.operator}`);
+const nonUser=Object.keys(counts).filter(k=>k!=="user"&&k!=="(none)");
+console.log(`CHECK only_user_tagged_events: ${nonUser.length===0?"PASS":"FAIL "+nonUser.join(",")}`);
 ' "$OUT/stop.json"
 
 echo

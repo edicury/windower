@@ -102,10 +102,6 @@ describe("effectiveMode", () => {
     expect(effectiveMode("record")).toBe("local");
     expect(effectiveMode("start")).toBe("daemon");
   });
-
-  it("still respects operate --detach's flag-driven exception", () => {
-    expect(effectiveMode("operate", { detach: true })).toBe("daemon");
-  });
 });
 
 describe("acquireBackend / withBackend", () => {

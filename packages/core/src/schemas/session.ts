@@ -34,16 +34,12 @@ export const RecordingSessionSchema = z.object({
   // §RecordingSession. Optional so 0.1.x session files without it still
   // parse.
   owner: z.object({ pid: z.number(), startedAt: z.string() }).optional(),
-  // Phase 21 invariant (data-model.md §RecordingSession, spec.md §1.1): a
+  // Phase 21/24 invariant (data-model.md §RecordingSession, spec.md §1.1): a
   // `RecordingSession` must NOT know whether it is recording a human,
-  // Windower Operator, Claude Code, Playwright, another agent, or nothing at
-  // all. It carries **no operator-derived field of any kind**, and there is no
-  // relationship field in **either** direction: `OperatorRun` likewise carries
-  // no session identifier. Capture and Operator are independent peers that
-  // share at most a `target` value the caller passed to both, which correlates
-  // nothing. An orchestrator learns a run finished by polling
-  // `get_operator_run` — never by reading something an operator wrote onto a
-  // session. Adding a field here would make the Capture plane depend on the
-  // Reasoning plane.
+  // Claude Code, Playwright, another agent, or nothing at all. Windower never
+  // synthesizes input or perceives the screen for decision-making — it only
+  // records — so this schema carries no driving-agent-derived field of any
+  // kind. Adding one would make the Capture plane depend on something outside
+  // it.
 });
 export type RecordingSession = z.infer<typeof RecordingSessionSchema>;

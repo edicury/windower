@@ -56,6 +56,12 @@
 |---|---|---|
 | 23 | CI Release Automation | `phase-23-ci-release-automation.md` |
 
+## v1.7
+
+| Phase | Title | File |
+|---|---|---|
+| 24 | Remove Operator; Adopt Computer-Use & Chrome Skills | `phase-24-remove-operator.md` |
+
 ## Post-MVP
 
 | Phase | Title | File |
@@ -80,5 +86,7 @@ Phase 19 depends on **Phase 10** (event timeline — needed for the `TimelineEve
 Phase 22 depends on **Phase 19** (operator) and **Phase 21** (the capture/control split — it adds a method to the *control* surface, and the whole point of putting it there is that a control-surface process is capture-free and lock-free, which only became true in Phase 21). It comes out of Phase 21's live testing, where real runs cost several dollars and consumed 29–30 of 30 steps for a task a human does in four clicks: the operator's only percept is a screenshot, so every coordinate is an estimate and every misestimate costs round trips. It is independent of Phases 14/15/16/17 and can be built in parallel with them, but it should **not** be scheduled ahead of Phase 21's six carried-over live-verification items — those still gate `bugs.spec.md` #6, and Phase 22 changes the operator loop those harnesses drive. If Phase 15 (Post-Processing) lands after it, note that `OperatorStep.observations` replaces `observationRef`, so Phase 15 consumes the new shape rather than the Phase 19 one.
 
 Phase 23 depends on **Phase 14** (Packaging) — it automates Phase 14's manual publish path and its task list traces directly to bugs and open items recorded in `phase-14-packaging.md`'s "Publish status" log (the chmod/executable-bit bug, dependency-graph publish ordering, the never-compiled `sidecar-macos-x64` binary). It is independent of Phases 15–22 and can be built in parallel with any of them, but its own live verification (a genuinely clean-machine install) is also the last unmet piece of Phase 14's exit criteria, so landing it is what finally closes Phase 14 out.
+
+Phase 24 depends on **Phase 19** and **Phase 22** (it deletes what they built) and touches every phase that referenced the Operator along the way — 20, 21, and 23 each need surgical (not wholesale) edits, since their non-Operator work (daemon lifecycle hardening, the capture/control split, CI release automation) stands independent of it; see the phase file's "Spec bookkeeping" section for the exact edit list per phase. It should land **before Phase 14** (Packaging) if at all possible, for the same reason Phase 21 gave: packaging is cheaper to do once against the final dependency graph (no `@windower/operator`, no AI-SDK deps in the lockfile) than twice. It carries forward Phase 21's six outstanding live-verification items, now rewritten to use synthetic input instead of `windower operate` as their load generator, since real hardware time is a better use of a live-verification pass than repeating it once per phase.
 
 Phase 21 depends on **Phase 19** (operator) and **Phase 20** (the `@windower/engine` extraction and daemon lifecycle hardening it builds on directly — the broker lock and `ControlEngine` are new peers of `RecordingEngine` inside that package). It is the architectural follow-up to `bugs.spec.md` #6, found during Phase 20's live verification and chased across several follow-up sessions before this phase was written — see the phase file's "Context / why now" for the full evidence chain (OS-level `log stream` tracing, external research on ScreenCaptureKit's `replayd` behavior, and a file:line map of which native calls do and don't touch ScreenCaptureKit). It supersedes bug #6's stopgap fix (operator reusing the recording's sidecar as a special case) with a general, construction-enforced invariant. Should land before Phase 14 (Packaging) if at all possible — it changes `native/macos`'s binary topology, and packaging/notarization work is cheaper to do once against the final shape than twice.

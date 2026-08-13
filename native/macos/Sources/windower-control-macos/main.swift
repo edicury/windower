@@ -5,8 +5,11 @@ import WindowerSidecarShared
 // windower-control-macos — the CONTROL surface
 // (contracts/sidecar-protocol.md §Method-ownership surfaces).
 //
-// Synthetic input (`performInput`) and window geometry (`resizeWindow`), plus
-// the two always-available permission methods and `describe`. Nothing else.
+// Window geometry (`resizeWindow`), plus the two always-available permission
+// methods and `describe`. Nothing else — Phase 24 removed synthetic input
+// (`performInput`) and accessibility-element enumeration (`enumerateElements`)
+// along with the Operator, their only caller (settled decision 2,
+// tasks/phase-24-remove-operator.md).
 //
 // Phase 21's governing invariant is that exactly one process on the machine
 // may hold ScreenCaptureKit state; this binary's contribution to that
@@ -29,18 +32,19 @@ let sidecarVersion = "0.1.0"
 /// capture and a control connection takes the union, and a caller holding only
 /// one MUST NOT infer anything about the capabilities it did not see.
 ///
-/// `input.*` needs the Accessibility grant and `window-control` needs it too
-/// (`AXUIElement*`). They are advertised statically for the same reason every
-/// other capability in this codebase is: `describe` is a one-shot handshake
-/// with no mechanism to report a per-call outcome. The genuinely per-call
-/// fact is reported truthfully by `getPermissions`, and each method returns
-/// `PERMISSION_DENIED` when the grant is missing rather than being silently
-/// absent from this list.
+/// `window-control` needs the Accessibility grant (`AXUIElement*`). It is
+/// advertised statically for the same reason every other capability in this
+/// codebase is: `describe` is a one-shot handshake with no mechanism to
+/// report a per-call outcome. The genuinely per-call fact is reported
+/// truthfully by `getPermissions`, and the method returns `PERMISSION_DENIED`
+/// when the grant is missing rather than being silently absent from this
+/// list.
+///
+/// Phase 24 removed `input.mouse`/`input.keyboard`/`ui.elements` along with
+/// the Operator, their only caller (settled decision 2,
+/// tasks/phase-24-remove-operator.md).
 let supportedCapabilities: [String] = [
-    "input.mouse",
-    "input.keyboard",
-    "window-control",
-    "ui.elements",
+    "window-control"
 ]
 
 func logStderr(_ message: String) {
@@ -123,28 +127,10 @@ func handleRequest(id: JSONValue, method: String, params: JSONValue?) {
             semaphore.wait()
             resultValue = try JSONCodec.encode(RequestPermissionResult(status: status))
 
-        case "performInput":
-            // `sessionId` is a plain correlation hint here and is deliberately
-            // never validated: the control surface owns no sessions and MUST
-            // NOT return SESSION_NOT_FOUND (contracts/sidecar-protocol.md).
-            let decodedParams = try decodeParams(PerformInputParams.self, from: params)
-            let result = try InputSynthesisService.perform(params: decodedParams)
-            resultValue = try JSONCodec.encode(result)
-
         case "resizeWindow":
             let decodedParams = try decodeParams(ResizeWindowParams.self, from: params)
             let result = try WindowControlService.resizeWindow(
                 targetId: decodedParams.targetId, bounds: decodedParams.bounds)
-            resultValue = try JSONCodec.encode(result)
-
-        case "enumerateElements":
-            // Capture-free observation (contracts/sidecar-protocol.md
-            // §Element enumeration): no ScreenCaptureKit symbol, no
-            // `~/.windower/capture.lock`. Same Accessibility TCC grant as
-            // `performInput`/`resizeWindow` — PERMISSION_DENIED, not a
-            // separate permission kind.
-            let decodedParams = try decodeParams(EnumerateElementsParams.self, from: params)
-            let result = try ElementQueryService.enumerateElements(params: decodedParams)
             resultValue = try JSONCodec.encode(result)
 
         default:
@@ -184,16 +170,14 @@ func writeErrorResponse(id: JSONValue, error: SidecarRpcError) {
 // Same concurrent-dispatch structure as the capture binary (see the long
 // `rpcQueue` note in windower-capture-macos/main.swift for the full
 // bugs.spec.md #6 reasoning). It matters here for a different but analogous
-// reason: `performInput` blocks for the real duration of what it synthesizes —
-// a `wait` action, a drag interpolated over its `durationMs`, a long
-// `type_text` — and `resizeWindow`'s `AXUIElement` calls block on the target
-// app's main run loop, which an unresponsive app can stall for seconds. If
-// handling ran inline on the `readLine()` thread, an abort/second command sent
-// specifically to interrupt a long input sequence would queue up behind it and
-// arrive only after it finished, which is exactly the failure mode the caller
-// was trying to escape. Out-of-order responses are explicitly permitted by
-// contracts/sidecar-protocol.md §Transport and already handled by
-// `SidecarClient`'s id-keyed pending-call map.
+// reason: `resizeWindow`'s `AXUIElement` calls block on the target app's main
+// run loop, which an unresponsive app can stall for seconds. If handling ran
+// inline on the `readLine()` thread, a second command sent while a resize is
+// stalled would queue up behind it and arrive only after it finished, which
+// is exactly the failure mode the caller was trying to escape. Out-of-order
+// responses are explicitly permitted by contracts/sidecar-protocol.md
+// §Transport and already handled by `SidecarClient`'s id-keyed pending-call
+// map.
 let rpcQueue = DispatchQueue(
     label: "windower.control.rpc.dispatch", qos: .userInitiated, attributes: .concurrent)
 

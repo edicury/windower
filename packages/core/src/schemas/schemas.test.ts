@@ -232,10 +232,9 @@ describe("SessionStateSchema / RecordingSessionSchema", () => {
     expect(parsed).not.toHaveProperty("someFutureField");
   });
 
-  // Phase 21 invariant: the Capture plane never depends on the Reasoning
-  // plane. `RecordingSession` carries no operator-derived field at all — and
-  // there is no relationship field in either direction, since `OperatorRun`
-  // carries no session identifier either.
+  // Phase 21/24 invariant: `RecordingSession` carries no field describing
+  // what drove the UI during the recording — Windower never synthesizes
+  // input itself, so there is nothing of that kind to record.
   it("declares no operator-derived field", () => {
     const keys = Object.keys(RecordingSessionSchema.shape);
     expect(keys).not.toContain("operatorAttachedRunEnded");

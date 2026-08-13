@@ -344,6 +344,8 @@ This is Anthropic's own API rejecting the *next* request — the operator loop h
 
 **Status:** Fixed — `run.ts`'s tool-call loop now tracks `seenToolCallIds` and skips (with a log line) any subsequent call whose `toolCallId` repeats within the same turn, so only the first occurrence is executed and only one `tool-result` block per id is ever emitted.
 
+**N/A as of Phase 24 — the Operator no longer exists.**
+
 ## 10. `windower operate --detach` fails with `OPERATOR_MISSING_API_KEY` even though the daemon's environment has the key
 
 **Found:** Phase 21 live verification (this session), on the very first caller-driven repro attempt. The bug had never been hit because Phase 20's live verification only exercised *blocking* `windower operate` (local, in-process, never sends `hello`), never the `--detach` daemon-backed path.
@@ -367,6 +369,8 @@ This is Anthropic's own API rejecting the *next* request — the operator loop h
 **Tests added:** new `packages/engine/src/request-context.test.ts` (6 tests); 1 test in `operator-run-engine.test.ts` (empty context env must not shadow `process.env`); 3 tests in `packages/cli/src/commands/operate.test.ts` driven through the real command registration/parse, asserting the `hello` actually carries the resolved API-key var name and value. Suites after the fix: core 218, engine 161 (was 154), daemon 22, operator 101, cli 218 (was 215), mcp-server 53; `pnpm turbo run test` 19/19.
 
 **Status:** Fixed and verified live — after the fix, a real caller-driven `start_recording` → `operate --detach` → poll → `stop_recording` run reached the operator loop and executed 29 real steps against `anthropic:claude-sonnet-5`.
+
+**N/A as of Phase 24 — the Operator no longer exists.**
 
 ## 6 (continued) — Follow-up session: API key fixed, live repro of the residual ~19%-class stall obtained, correlated against operator steps, no code fix applied (evidence argues against every candidate fix)
 

@@ -86,9 +86,9 @@ public enum PermissionsService {
     }
 
     /// The capture surface's subset: the kinds `enumerateTargets`/
-    /// `startCapture`/`captureFrame` actually need. `accessibility` is
-    /// omitted — the capture binary has no method that requires it, and a
-    /// caller that also holds a control connection gets that kind from there.
+    /// `startCapture` actually need. `accessibility` is omitted — the
+    /// capture binary has no method that requires it, and a caller that also
+    /// holds a control connection gets that kind from there.
     public static func captureReport(sidecarVersion: String) -> PermissionReport {
         PermissionReport(
             screenRecording: screenRecordingStatus(),
@@ -98,9 +98,9 @@ public enum PermissionsService {
         )
     }
 
-    /// The control surface's subset: `performInput` (`CGEventPost`) and
-    /// `resizeWindow` (`AXUIElement*`) both need exactly one grant, and this
-    /// binary can neither capture the screen nor open a microphone.
+    /// The control surface's subset: `resizeWindow` (`AXUIElement*`) needs
+    /// exactly one grant, and this binary can neither capture the screen nor
+    /// open a microphone.
     public static func controlReport(sidecarVersion: String) -> PermissionReport {
         PermissionReport(
             accessibility: accessibilityStatus(),

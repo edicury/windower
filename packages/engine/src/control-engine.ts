@@ -10,22 +10,19 @@ import type { SidecarFactory, SidecarHandle } from "./recording-engine.js";
  * `ControlEngine` — a peer of `RecordingEngine`, and deliberately much
  * simpler: no session, no manifest, no lifecycle state machine. It is a thin
  * owner of the one long-lived-or-on-demand control-surface process
- * (`windower-control-macos`) and its client, used by both direct
- * `performInput`/`resizeWindow` calls and — later, via the daemon — the
- * operator.
+ * (`windower-control-macos`) and its client, used by `resizeWindow` calls.
  *
  * **It never takes the capture lock.** The control surface implements only
- * `describe`/`performInput`/`resizeWindow`, backed by `CGEventPost`/
- * `CGEventSource` and `AXUIElement*` + `CGWindowListCopyWindowInfo` — none of
+ * `describe`/`resizeWindow`, backed by `AXUIElement*` +
+ * `CGWindowListCopyWindowInfo` — none of
  * which touch ScreenCaptureKit, `replayd`, or any shared capture state
  * (`contracts/screen-capture-exclusivity.md` §What never takes this lock).
  * Consequences, all intentional:
  *
  * - Any number of control processes may run concurrently, with each other and
  *   with the capture sidecar.
- * - `performInput`/`resizeWindow` are never serialized against a recording, a
- *   `captureFrame`, or an `enumerateTargets`. An operator run clicking and
- *   typing while a recording is live involves zero lock traffic.
+ * - `resizeWindow` is never serialized against a recording or an
+ *   `enumerateTargets`.
  * - A wedged or `kill -9`'d control surface cannot affect the capture sidecar,
  *   the lock, or an in-progress recording — the process is respawned on the
  *   next call, and only the call that was in flight fails.
@@ -88,7 +85,7 @@ export class ControlEngine {
     return active.capabilities;
   }
 
-  /** The live control client — spawning the process on demand. Consumers that need raw protocol access (e.g. the operator proxy) use this. */
+  /** The live control client — spawning the process on demand. */
   async client(): Promise<SidecarClient> {
     const active = await this.ensureProcess();
     return active.handle.client;
@@ -98,30 +95,10 @@ export class ControlEngine {
     return this.call((client) => client.describe());
   }
 
-  async performInput(
-    params: Parameters<SidecarClient["performInput"]>[0],
-  ): Promise<Awaited<ReturnType<SidecarClient["performInput"]>>> {
-    return this.call((client) => client.performInput(params));
-  }
-
   async resizeWindow(
     params: Parameters<SidecarClient["resizeWindow"]>[0],
   ): Promise<Awaited<ReturnType<SidecarClient["resizeWindow"]>>> {
     return this.call((client) => client.resizeWindow(params));
-  }
-
-  /**
-   * Phase 22 — `enumerateElements`. Control-surface, capture-free, same
-   * capability-gating pattern as every other call here: this method does not
-   * gate itself (mirroring `resizeWindow`) — callers that need a structured
-   * `UNSUPPORTED_CAPABILITY` before making the call (the operator's deps, so
-   * it can fall back to a frame) call `requireCapability("ui.elements")`
-   * first, exactly as `performInput`'s caller does per input-action kind.
-   */
-  async enumerateElements(
-    params: Parameters<SidecarClient["enumerateElements"]>[0],
-  ): Promise<Awaited<ReturnType<SidecarClient["enumerateElements"]>>> {
-    return this.call((client) => client.enumerateElements(params));
   }
 
   /**
@@ -166,10 +143,9 @@ export class ControlEngine {
   /**
    * Runs one control-surface RPC. A process that already died is replaced
    * *before* the call (restart-on-demand). A process that dies *during* the
-   * call is not silently retried — `performInput` is not idempotent, and
-   * replaying a half-delivered click batch is worse than a clear error — so
-   * the failure surfaces as `INTERNAL_ERROR` naming the exit, and the next
-   * call gets a fresh process.
+   * call is not silently retried — replaying a half-delivered request is
+   * worse than a clear error — so the failure surfaces as `INTERNAL_ERROR`
+   * naming the exit, and the next call gets a fresh process.
    */
   private async call<T>(fn: (client: SidecarClient) => Promise<T>): Promise<T> {
     const active = await this.ensureProcess();

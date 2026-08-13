@@ -53,17 +53,6 @@ public enum SidecarErrorCode: String, Encodable, Equatable {
     case unsupportedCapability = "UNSUPPORTED_CAPABILITY"
     case sessionNotFound = "SESSION_NOT_FOUND"
     case internalError = "INTERNAL_ERROR"
-    /// Phase 19 (operator). Caller requested an `InputAction.kind` this
-    /// backend cannot synthesize.
-    case inputUnsupported = "INPUT_UNSUPPORTED"
-    /// Phase 19 (operator). A mouse coordinate in `performInput` falls
-    /// outside every known display's bounds.
-    case inputOutOfBounds = "INPUT_OUT_OF_BOUNDS"
-    /// Phase 22 (operator, AX-first observation). A `ref` passed to
-    /// `enumerateElements` no longer resolves to a live element — stale
-    /// generation, closed window, re-rendered view. Recoverable: the caller
-    /// re-enumerates; this is not a run-ending condition.
-    case axElementStale = "AX_ELEMENT_STALE"
 }
 
 public struct JsonRpcErrorData: Encodable {

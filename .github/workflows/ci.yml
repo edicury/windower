@@ -1,5 +1,8 @@
 name: CI
 
+# Release counterpart (signing/notarization/version-bump/publish, triggered
+# by a `v*` tag or workflow_dispatch): .github/workflows/release.yml
+
 on:
   push:
     branches: [main]

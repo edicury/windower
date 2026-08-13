@@ -7,10 +7,10 @@ import { buildProgram } from "./program.js";
  * Walks a fully-registered Commander `program` (`buildProgram()`, shared
  * with `index.ts` so this test can never drift from what the real binary
  * registers) and collects the CLI-facing id (`contracts/cli.md`'s Daemon
- * policy table key, e.g. `"daemon restart"`, `"operate status"`) for every
- * command node that has its own registered action handler — i.e. every
- * command a user can actually invoke, not just container nodes like
- * `daemon`/`config`/`permission` that only exist to hold subcommands.
+ * policy table key, e.g. `"daemon restart"`) for every command node that
+ * has its own registered action handler — i.e. every command a user can
+ * actually invoke, not just container nodes like `daemon`/`config`/
+ * `permission` that only exist to hold subcommands.
  *
  * `Command._actionHandler` is Commander's own (underscore-prefixed but not
  * privately enforced) marker for "this node has an `.action()` callback" —
@@ -40,9 +40,6 @@ describe("backend policy completeness", () => {
 
     const missing = ids.filter((id) => {
       if (id in POLICY_TABLE) return false;
-      // `operate`'s flat POLICY_TABLE entry only covers its default
-      // (blocking) mode — resolveBackendMode is the actual source of truth
-      // for it (see policy.ts). Any id resolvable without throwing counts.
       try {
         // `CommandId` is a closed string-literal union and `id` is only
         // known to be a `string` here — that's the whole point of this

@@ -34,22 +34,17 @@ import {
  *   holding only one surface reports the absent kinds as **unknown**, not denied.
  */
 
-/** Capture-surface capabilities — no `input.*`/`window-control`, per the contract's Handshake section. */
+/** Capture-surface capabilities — no `window-control`, per the contract's Handshake section. */
 const CAPTURE_CAPABILITIES: FakeSidecarOptions["capabilities"] = [
   "enumerate.displays",
   "enumerate.windows",
   "capture.display",
   "capture.window",
   "capture.region",
-  "screenshot",
 ];
 
 /** Control-surface capabilities — nothing capture-shaped. */
-const CONTROL_CAPABILITIES: FakeSidecarOptions["capabilities"] = [
-  "window-control",
-  "input.mouse",
-  "input.keyboard",
-];
+const CONTROL_CAPABILITIES: FakeSidecarOptions["capabilities"] = ["window-control"];
 
 const WINDOW_TARGET: CaptureTarget = {
   kind: "window",

@@ -1,6 +1,6 @@
 # Daemon RPC Contract
 
-Transport: newline-delimited **JSON-RPC 2.0** over a unix domain socket (`~/.windower/daemon.sock`, mode `0600`, no authentication beyond that — see `contracts/sidecar-protocol.md`'s framing, which this reuses). This document covers the daemon protocol's own identity, versioning, and handshake — the RPC methods that carry recording/operator/permission semantics (`start_recording`, `stop_recording`, `run_operator`, etc.) are specified in `contracts/mcp-tools.md` and mirrored 1:1 by `contracts/cli.md`; this file does not repeat them.
+Transport: newline-delimited **JSON-RPC 2.0** over a unix domain socket (`~/.windower/daemon.sock`, mode `0600`, no authentication beyond that — see `contracts/sidecar-protocol.md`'s framing, which this reuses). This document covers the daemon protocol's own identity, versioning, and handshake — the RPC methods that carry recording/permission semantics (`start_recording`, `stop_recording`, etc.) are specified in `contracts/mcp-tools.md` and mirrored 1:1 by `contracts/cli.md`; this file does not repeat them.
 
 Split out of `contracts/mcp-tools.md` (Phase 20) because the daemon protocol has its own versioning semantics — a `hello` handshake, a protocol-version constant, restart/busy error codes — that are not MCP tools and apply equally to the CLI's daemon client.
 
@@ -18,12 +18,7 @@ Client → daemon handshake. Sent once per connection by `ensureDaemonRunning` (
 {
   "clientProtocolVersion": 1,           // integer, current DAEMON_PROTOCOL_VERSION
   "windowerHome": "/Users/x/.windower", // client's resolved WINDOWER_HOME
-  "cwd": "/Users/x/project",            // RequestContext.cwd — used for relative outputDir resolution
-  "env": {                              // scoped snapshot, NEVER process.env wholesale
-    "ANTHROPIC_API_KEY": "sk-..."       // only the model's configured API-key var, plus any
-                                         // env:-prefixed SecretRef names explicitly listed in
-                                         // this request — nothing else, ever
-  }
+  "cwd": "/Users/x/project"             // RequestContext.cwd — used for relative outputDir resolution
 }
 ```
 
@@ -44,21 +39,13 @@ Client → daemon handshake. Sent once per connection by `ensureDaemonRunning` (
 
 This result shape is exactly `~/.windower/daemon.json`, the daemon identity state file written on listen and unlinked on clean stop (`packages/core/src/daemon/state-file.ts`; full field-level definition lives in `data-model.md`). `hello`'s response and the state file are kept identical on purpose: whatever `doctor` reads off disk without connecting is the same shape a live handshake would return, so the two code paths can't drift.
 
-### `env` scoping rules
-
-- The client decides what's in scope — the API-key env var named by the active `ModelConfig`/CLI config, plus any `SecretRef` of kind `env:` explicitly named in the current command's arguments. Nothing else is read or sent.
-- `process.env` is never serialized wholesale onto the socket.
-- The daemon never logs `hello`'s `env` field, in full or in part — not to stderr, not to any log file.
-- Blocking `operate` (the default, per `phase-20-daemon-optional.md`) never puts a key on the socket at all — it runs in-process against the local engine, so there's no `hello` env snapshot to send for that path in the first place. Only `operate --detach` and any other daemon-backed flow that needs a secret goes through this.
-- This crosses no new trust boundary: the socket is already `0600` and unauthenticated, so a same-UID process could already read the CLI's environment directly. See the "Settled decisions" section of `phase-20-daemon-optional.md`.
-
 ### `windowerHome` split-brain detection
 
 The client sends its own resolved `windowerHome` (see `packages/core/src/daemon/paths.ts`'s `WINDOWER_HOME` resolution). The daemon compares it against its own. On disagreement, the daemon rejects the handshake loudly (`DAEMON_VERSION_MISMATCH`-shaped error, `message` naming both paths) rather than silently serving sessions from the wrong home directory. Before this check, a CLI and daemon that resolved `WINDOWER_HOME` independently (e.g. one had the env var set, one didn't) could silently disagree about where session/output state lives.
 
 ### `cwd`
 
-Threaded into the per-connection `RequestContext` (`{env, cwd, windowerHome}`), used wherever a daemon RPC needs to resolve a relative path (e.g. a relative `outputDir`) against the *caller's* working directory rather than the daemon process's own. A detached operator run outlives the connection that started it, so it snapshots `env`/`cwd` at run start rather than reading the connection later.
+Threaded into the per-connection `RequestContext` (`{cwd, windowerHome}`), used wherever a daemon RPC needs to resolve a relative path (e.g. a relative `outputDir`) against the *caller's* working directory rather than the daemon process's own.
 
 ## `daemon_info`
 
@@ -91,13 +78,13 @@ On a genuine version **mismatch** (`hello` succeeds, but `result.protocolVersion
 
 1. The client (`ensureDaemonRunning` in `packages/core/src/daemon/connect.ts`) may attempt to **restart the daemon**, but only when it's safe — see `DAEMON_BUSY` below.
 2. The restart happens **at most once per invocation**. If the freshly-restarted daemon's `hello` still doesn't match (e.g. a broken install), the client surfaces `DAEMON_VERSION_MISMATCH` to the caller rather than retrying again — never a restart loop.
-3. Safety check before restarting: `list_sessions({state: "recording"})` and the operator-run-listing equivalent must both come back empty against the *old* daemon. Anything in flight aborts the restart attempt in favor of `DAEMON_BUSY`.
+3. Safety check before restarting: `list_sessions({state: "recording"})` must come back empty against the *old* daemon. Anything in flight aborts the restart attempt in favor of `DAEMON_BUSY`.
 4. A safe restart goes through the same graceful `shutdown({mode: "graceful"})` path documented below, then a fresh spawn through the spawn lockfile.
-5. `windower daemon restart --force` (CLI-only, see `contracts/cli.md`) lets an operator override the busy check explicitly — never invoked automatically.
+5. `windower daemon restart --force` (CLI-only, see `contracts/cli.md`) lets a caller override the busy check explicitly — never invoked automatically.
 
 ## Error codes
 
-New in Phase 20, added to `DaemonErrorCodeSchema` (`packages/core/src/daemon/methods.ts`) alongside the existing `DAEMON_UNREACHABLE` / `INVALID_ARGS` / `TARGET_ALREADY_RECORDING` / `OUTPUT_DIR_NOT_WRITABLE` / `OPERATOR_RUN_NOT_FOUND` codes. Same JSON error shape as the rest of the daemon/sidecar taxonomy — `data.code` from this fixed set, `message` human-readable:
+New in Phase 20, added to `DaemonErrorCodeSchema` (`packages/core/src/daemon/methods.ts`) alongside the existing `DAEMON_UNREACHABLE` / `INVALID_ARGS` / `TARGET_ALREADY_RECORDING` / `OUTPUT_DIR_NOT_WRITABLE` codes. Same JSON error shape as the rest of the daemon/sidecar taxonomy — `data.code` from this fixed set, `message` human-readable:
 
 ```jsonc
 { "error": { "code": "DAEMON_VERSION_MISMATCH", "message": "..." } }
@@ -106,7 +93,7 @@ New in Phase 20, added to `DaemonErrorCodeSchema` (`packages/core/src/daemon/met
 | Code | Meaning |
 |---|---|
 | `DAEMON_VERSION_MISMATCH` | The connected daemon's `protocolVersion` disagrees with the client's `DAEMON_PROTOCOL_VERSION` (including the "no `hello` method" / pre-handshake signal), and an auto-restart either wasn't attempted or didn't resolve it. Also used for a `windowerHome` disagreement surfaced during `hello` (see above). `message` names both versions (or both paths). |
-| `DAEMON_BUSY` | A version-mismatch restart was attempted, but the daemon has in-flight work — at least one session in `recording` state, or an active (non-terminal) operator run — so the restart was refused rather than orphaning that work. `message` names the specific session id(s) / run id(s) still active, and points at the remediation: `windower stop <id>` (or `windower operate abort <runId>`) to clear the in-flight work, then retry, or `windower daemon restart --force` to override the check outright. |
+| `DAEMON_BUSY` | A version-mismatch restart was attempted, but the daemon has in-flight work — at least one session in `recording` state — so the restart was refused rather than orphaning that work. `message` names the specific session id(s) still active, and points at the remediation: `windower stop <id>` to clear the in-flight work, then retry, or `windower daemon restart --force` to override the check outright. |
 
 Both codes flow through the same CLI exit-code mapping as the rest of `DaemonErrorCodeSchema` (`contracts/cli.md`) and the same MCP tool-error shape as every other daemon-backed tool in `contracts/mcp-tools.md`.
 
@@ -137,7 +124,7 @@ Full acquire/steal/release mechanics (`O_EXCL` create, pid-liveness staleness ch
 
 **Result:** `{ shuttingDown: true }`, sent before the daemon begins tearing down.
 
-- **`graceful`** (default): stop accepting new connections → abort any active operator runs (their existing finalizer stops the recording cleanly) → `stopRecording` every session still in `recording` state, so a finalized video, manifest, and `.events.json` all land on disk → close the socket, unlink the socket file and `daemon.json` → exit. Bounded to roughly 30 seconds; if it doesn't complete in time, the daemon escalates itself to the `immediate` path rather than hanging.
+- **`graceful`** (default): stop accepting new connections → `stopRecording` every session still in `recording` state, so a finalized video, manifest, and `.events.json` all land on disk → close the socket, unlink the socket file and `daemon.json` → exit. Bounded to roughly 30 seconds; if it doesn't complete in time, the daemon escalates itself to the `immediate` path rather than hanging.
 - **`immediate`**: skip the drain/finalize sequence and exit as fast as possible. Sessions still `recording` at that point are left for the next daemon start's crash-recovery pass (`recoverCrashedSessions()`) to mark `failed`.
 - `windower daemon stop --discard` (CLI, see `contracts/cli.md`) maps to canceling in-flight sessions rather than finalizing them, then proceeding with the graceful drain otherwise.
 - `bin.ts`'s `SIGTERM`/`SIGINT` handlers invoke the graceful path. A best-effort `process.on("exit")` sweep additionally `SIGKILL`s anything left in the in-memory `activeSidecars` map, so a hard process exit (e.g. `SIGKILL` sent to the daemon itself) can't orphan a capture process indefinitely.

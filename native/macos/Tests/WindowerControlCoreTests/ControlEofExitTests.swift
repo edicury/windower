@@ -65,12 +65,4 @@ final class ControlEofExitTests: XCTestCase {
             #"{"jsonrpc":"2.0","id":1,"method":"describe","params":{}}"#
         ])
     }
-
-    /// A request still in flight on `rpcQueue` when EOF arrives is drained by
-    /// `inFlightRequests.wait()` — which must delay the exit, never prevent it.
-    func testExitsOnStdinEofWhileARequestIsStillInFlight() throws {
-        try assertExitsOnStdinEof(afterSending: [
-            #"{"jsonrpc":"2.0","id":1,"method":"performInput","params":{"actions":[{"kind":"wait","durationMs":750}]}}"#
-        ])
-    }
 }

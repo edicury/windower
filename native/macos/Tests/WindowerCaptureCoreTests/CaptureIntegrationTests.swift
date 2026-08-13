@@ -83,8 +83,9 @@ final class CaptureIntegrationTests: XCTestCase {
         // reported via a `log` notification instead) — see main.swift's doc
         // comment on `supportedCapabilities`.
         XCTAssertTrue(capabilities.contains("eventTimeline.keyboard"))
-        // Phase 19.
-        XCTAssertTrue(capabilities.contains("screenshot"))
+        // Phase 19's "screenshot" (`captureFrame`) capability was removed in
+        // Phase 24 along with the Operator, its only caller.
+        XCTAssertFalse(capabilities.contains("screenshot"))
     }
 
     /// Phase 21 §Handshake: "each `describe` reports only the capabilities of
@@ -124,6 +125,18 @@ final class CaptureIntegrationTests: XCTestCase {
         XCTAssertNotNil(result["microphone"])
         XCTAssertNil(result["accessibility"])
         XCTAssertEqual(result["sidecarAvailable"] as? Bool, true)
+    }
+
+    /// Phase 24 removed the Operator, and with it `captureFrame` — its only
+    /// caller. It must now fall through to the `default` branch and answer
+    /// `UNSUPPORTED_CAPABILITY`, exactly like any other method this
+    /// implementation no longer advertises (settled decision 2,
+    /// tasks/phase-24-remove-operator.md).
+    func testCaptureFrameIsNoLongerSupported() throws {
+        let obj = try roundTrip(#"{"jsonrpc":"2.0","id":5,"method":"captureFrame","params":{}}"#)
+        let error = try XCTUnwrap(obj["error"] as? [String: Any], "captureFrame unexpectedly succeeded")
+        let data = try XCTUnwrap(error["data"] as? [String: Any])
+        XCTAssertEqual(data["code"] as? String, "UNSUPPORTED_CAPABILITY")
     }
 
     func testUnknownMethodReturnsUnsupportedCapabilityTaxonomyCode() throws {

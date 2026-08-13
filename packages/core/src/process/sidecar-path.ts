@@ -8,9 +8,9 @@ const require = createRequire(import.meta.url);
 /**
  * Which method-ownership surface of the sidecar protocol a binary implements
  * (`contracts/sidecar-protocol.md` — capture surface: `describe`,
- * `enumerateTargets`, `startCapture`, `stopCapture`, `cancelCapture`,
- * `captureFrame`; control surface: `describe`, `performInput`,
- * `resizeWindow`). This selector is deliberately platform-neutral: it names a
+ * `enumerateTargets`, `startCapture`, `stopCapture`, `cancelCapture`; control
+ * surface: `describe`, `resizeWindow`). This selector is deliberately
+ * platform-neutral: it names a
  * protocol surface, not an OS. Whether a platform implements the two surfaces
  * with two binaries (macOS, Phase 21), one binary, or any other topology is a
  * per-platform detail confined to the lookup tables below.

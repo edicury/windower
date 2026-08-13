@@ -42,14 +42,7 @@ describe("MCP_LOCAL_TOOLS (Phase 20 routing)", () => {
   });
 
   it("does not mark the daemon-backed tools local", () => {
-    const expectedDaemon: McpToolId[] = [
-      "start_recording",
-      "stop_recording",
-      "cancel_recording",
-      "run_operator",
-      "get_operator_run",
-      "abort_operator_run",
-    ];
+    const expectedDaemon: McpToolId[] = ["start_recording", "stop_recording", "cancel_recording"];
     for (const toolId of expectedDaemon) {
       expect(MCP_LOCAL_TOOLS.has(toolId)).toBe(false);
     }

@@ -9,9 +9,8 @@ import { printError, printResult } from "../output.js";
  * `stop`, and `restart` are `attach` mode: they act on a daemon that's
  * already listening and never spawn one to begin with (`connectToDaemon`/
  * `restartDaemon`, never `ensureDaemonRunning`/`withDaemon`). The daemon
- * itself now auto-starts only for `start`, `stop`/`cancel`, and
- * `operate --detach`/`operate abort` — it's no longer true that any other
- * command brings one up.
+ * itself now auto-starts only for `start` and `stop`/`cancel` — it's no
+ * longer true that any other command brings one up.
  *
  * `kill` is deliberately NOT `attach` mode (or any of the three policy
  * modes) — it never touches the socket at all, by design: it's the fallback

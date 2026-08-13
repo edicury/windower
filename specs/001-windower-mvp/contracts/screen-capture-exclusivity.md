@@ -16,7 +16,7 @@ Conceptually, every caller does exactly this and nothing more:
 
 ## Enforcement, in two tiers
 
-1. **Inside the daemon — ordinary bookkeeping.** The daemon knows which capture sidecar processes it has spawned. It simply does not start a second one; concurrent in-daemon capture work (`list_targets`, `captureFrame`, the operator's proxied calls) reuses the capture sidecar process the daemon already has. No lock mediation is involved between in-daemon callers, because none is needed.
+1. **Inside the daemon — ordinary bookkeeping.** The daemon knows which capture sidecar processes it has spawned. It simply does not start a second one; concurrent in-daemon capture work (`list_targets`, etc.) reuses the capture sidecar process the daemon already has. No lock mediation is involved between in-daemon callers, because none is needed.
 2. **Across processes — a global file mutex.** Daemon-optional execution (Phase 20) means a daemon-free `windower record` / `windower targets` can run with no shared parent, so in-process bookkeeping is not sufficient. Any process about to spawn `windower-capture-macos` MUST first acquire `~/.windower/capture.lock`, and MUST hold it for that capture sidecar process's entire lifetime. The daemon takes it too, even though its own callers never need it, so the invariant stays honest against daemon-free processes.
 
 By construction, only `windower-capture-macos` links `WindowerCaptureCore`; `windower-control-macos` cannot `import ScreenCaptureKit` even transitively (verified via `otool -L`).
@@ -92,8 +92,7 @@ This is a deferral, not an oversight. The invariant only requires that a second 
 
 ## What never takes this lock
 
-- `windower-control-macos` — it implements only `describe` / `performInput` / `resizeWindow`, backed by `CGEventPost`/`CGEventSource` (`InputSynthesis.swift`) and `AXUIElement*` + `CGWindowListCopyWindowInfo` (`WindowControl.swift`). None of those touch ScreenCaptureKit, `replayd`, or any shared capture state. Consequently: any number of control-surface processes MAY run concurrently, with each other and with a capture process; `performInput`/`resizeWindow` are **never** serialized against a recording or a `captureFrame`; a wedged or `kill -9`'d control surface cannot affect a recording. Code that takes this lock before spawning a control-surface process is a bug.
-- The operator loop child (`packages/operator`), which holds no native handles and proxies screen-facing calls through the daemon (`contracts/operator-loop-protocol.md`).
+- `windower-control-macos` — it implements only `describe` / `resizeWindow`, backed by `CGWindowListCopyWindowInfo` (`WindowControl.swift`). None of those touch ScreenCaptureKit, `replayd`, or any shared capture state. Consequently: any number of control-surface processes MAY run concurrently, with each other and with a capture process; `resizeWindow` is **never** serialized against a recording; a wedged or `kill -9`'d control surface cannot affect a recording. Code that takes this lock before spawning a control-surface process is a bug.
 - Post-processing (Phase 15), which reads finished files off disk.
 - Per-target recording contention, which remains `target-lock.ts`'s job and returns `TARGET_ALREADY_RECORDING`. This lock arbitrates *the ScreenCaptureKit resource*; the target lock arbitrates *what is being recorded*.
 
@@ -109,4 +108,4 @@ Added to `DaemonErrorCodeSchema` (`packages/core/src/daemon/methods.ts`), same `
 
 ## Verification
 
-Per Phase 21's exit criteria (`specs/001-windower-mvp/tasks/`): a real 3-minute `windower operate` run produces **zero** `replayd`-invalidation lines in `log stream` output across at least three repetitions, and a `kill -9` of a lock-holding capture process is followed by a clean stale-steal on the very next `list_targets` rather than a wedged capture surface.
+Per Phase 21's exit criteria (`specs/001-windower-mvp/tasks/`): a real 3-minute recording session with synthetic input driving the target app (e.g. via `osascript`/System Events) produces **zero** `replayd`-invalidation lines in `log stream` output across at least three repetitions, and a `kill -9` of a lock-holding capture process is followed by a clean stale-steal on the very next `list_targets` rather than a wedged capture surface.

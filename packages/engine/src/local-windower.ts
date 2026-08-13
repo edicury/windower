@@ -8,8 +8,6 @@ import {
   windowerHome,
 } from "@windower/core";
 import { ControlEngine } from "./control-engine.js";
-import { OperatorRunEngine } from "./operator-run-engine.js";
-import { OperatorRunStore } from "./operator-run-store.js";
 import { PassthroughService } from "./passthrough.js";
 import { RecordingEngine, type SidecarFactory } from "./recording-engine.js";
 import { CaptureLock } from "./screen-capture-lock.js";
@@ -26,34 +24,30 @@ export interface LocalWindowerOptions {
  * (`contracts/daemon-rpc.md` "Shared backend infrastructure",
  * `phase-20-daemon-optional.md`): implements `WindowerBackend` directly over
  * `@windower/engine`'s in-process pieces — no socket, no spawned daemon
- * process. Constructs and owns its own `RecordingEngine`, `OperatorRunEngine`,
- * `SessionStore`, and `OperatorRunStore`, scoped to this host process's
- * lifetime (e.g. a single `record --duration` CLI invocation, or one MCP
- * tool call routed `local`).
+ * process. Constructs and owns its own `RecordingEngine` and `SessionStore`,
+ * scoped to this host process's lifetime (e.g. a single `record --duration`
+ * CLI invocation, or one MCP tool call routed `local`).
  *
  * Deliberately thin: every method either delegates straight to
- * `RecordingEngine`/`OperatorRunEngine`/`PassthroughService`, or (for
- * `hello`/`daemonInfo`/`shutdown`) fabricates the trivial answer a
- * same-process caller needs. `recoverCrashedSessions()`/`recoverCrashedRuns()`
- * are intentionally NOT called here — those mark every `recording`/`running`
- * record `failed` at startup, which is only safe for a real daemon's own
- * exclusive session store, per `RecordingEngine.recoverCrashedSessions`'s
- * doc; a daemon-free `LocalWindower` sharing `~/.windower` with a
- * concurrently-running daemon must never do that.
+ * `RecordingEngine`/`PassthroughService`, or (for `hello`/`daemonInfo`/
+ * `shutdown`) fabricates the trivial answer a same-process caller needs.
+ * `recoverCrashedSessions()` is intentionally NOT called here — it marks
+ * every `recording` record `failed` at startup, which is only safe for a
+ * real daemon's own exclusive session store, per
+ * `RecordingEngine.recoverCrashedSessions`'s doc; a daemon-free
+ * `LocalWindower` sharing `~/.windower` with a concurrently-running daemon
+ * must never do that.
  */
 export class LocalWindower implements WindowerBackend {
   private readonly sessionStore: SessionStore;
-  private readonly operatorRunStore: OperatorRunStore;
   private readonly recordingEngine: RecordingEngine;
   private readonly passthrough: PassthroughService;
-  private readonly operatorRunEngine: OperatorRunEngine;
   private readonly startedAt = new Date().toISOString();
   private loaded: Promise<void> | undefined;
 
   constructor(options: LocalWindowerOptions = {}) {
     const spawnSidecar = options.spawnSidecar ?? realSpawnSidecar;
     this.sessionStore = new SessionStore();
-    this.operatorRunStore = new OperatorRunStore();
     // Phase 21: ONE `CaptureLock` shared by the recording engine and the
     // passthrough ops, so a `list_targets` issued while this process's own
     // recording is live takes row 1 of the acquire-or-wait table (reuse the
@@ -61,7 +55,7 @@ export class LocalWindower implements WindowerBackend {
     // instead of contending with itself for the lock file.
     const captureLock = new CaptureLock({ spawnSidecar });
     // The control surface's peer of the same idea: ONE `ControlEngine` shared
-    // by `resize_window` and the operator's `performInput`. It takes no
+    // by `resize_window` and any future control passthrough. It takes no
     // capture lock — control has no ScreenCaptureKit relationship — and
     // `surface: "control"` keeps it off the capture binary, whose spawn is
     // `SpawnSidecarOptions.surface`'s default.
@@ -79,24 +73,12 @@ export class LocalWindower implements WindowerBackend {
       capture: captureLock,
       control: controlEngine,
     });
-    this.operatorRunEngine = new OperatorRunEngine({
-      store: this.operatorRunStore,
-      passthrough: this.passthrough,
-      spawnSidecar,
-      control: controlEngine,
-      // The same capture lock the recording engine and passthrough ops use —
-      // an operator `captureFrame` during this process's own recording is
-      // row 1 of the acquire-or-wait table, not a second capture process.
-      capture: captureLock,
-    });
   }
 
-  /** Loads both stores from disk exactly once, on first store-touching call. */
+  /** Loads the session store from disk exactly once, on first store-touching call. */
   private ensureLoaded(): Promise<void> {
     if (!this.loaded) {
-      this.loaded = Promise.all([this.sessionStore.load(), this.operatorRunStore.load()]).then(
-        () => undefined,
-      );
+      this.loaded = this.sessionStore.load().then(() => undefined);
     }
     return this.loaded;
   }
@@ -180,34 +162,6 @@ export class LocalWindower implements WindowerBackend {
   ): Promise<DaemonMethodMap["list_sessions"]["result"]> {
     await this.ensureLoaded();
     return this.recordingEngine.listSessions(params);
-  }
-
-  async runOperator(
-    params: DaemonMethodMap["run_operator"]["params"],
-  ): Promise<DaemonMethodMap["run_operator"]["result"]> {
-    await this.ensureLoaded();
-    return this.operatorRunEngine.runOperator(params);
-  }
-
-  async getOperatorRun(
-    params: DaemonMethodMap["get_operator_run"]["params"],
-  ): Promise<DaemonMethodMap["get_operator_run"]["result"]> {
-    await this.ensureLoaded();
-    return this.operatorRunEngine.getOperatorRun(params);
-  }
-
-  async abortOperatorRun(
-    params: DaemonMethodMap["abort_operator_run"]["params"],
-  ): Promise<DaemonMethodMap["abort_operator_run"]["result"]> {
-    await this.ensureLoaded();
-    return this.operatorRunEngine.abortOperatorRun(params);
-  }
-
-  async listOperatorRuns(
-    params: DaemonMethodMap["list_operator_runs"]["params"] = {},
-  ): Promise<DaemonMethodMap["list_operator_runs"]["result"]> {
-    await this.ensureLoaded();
-    return this.operatorRunEngine.listOperatorRuns(params);
   }
 
   /**

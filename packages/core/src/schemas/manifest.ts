@@ -25,14 +25,11 @@ export const OutputManifestSchema = z.object({
     })
     .optional(),
   eventTimelinePath: z.string().optional(),
-  // Phase 21 invariant (contracts/operator.md §Transcript format): no manifest
-  // field points at an operator artifact. `operatorRunPath` was exactly that
-  // reverse dependency — a capture artifact referencing the operator — and is
-  // removed. An operator run's transcript lives under
-  // `~/.windower/operator-runs/<runId>/` and is nobody's business here; an
-  // orchestrator that wants the two side by side copies them itself using the
-  // two paths it already holds. Already-written `manifest.json` files carrying
-  // the key still parse — the unknown key is stripped, never rejected.
+  // Phase 21/24 invariant: no manifest field points at what drove the UI
+  // during the recording — Windower never synthesizes input itself, so there
+  // is nothing of that kind to reference. Already-written `manifest.json`
+  // files carrying an unknown key from an older build still parse — the
+  // unknown key is stripped, never rejected.
   createdAt: z.string(),
   file: z.object({
     path: z.string(),

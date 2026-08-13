@@ -5,9 +5,9 @@
 // `ensureDaemonRunning`/`spawnDaemonDetached`/`restartDaemon` against a REAL
 // spawned OS process without needing the full `apps/daemon` build.
 // Deliberately duplicates `paths.ts`'s tiny path-join logic and hand-writes
-// minimal-but-schema-valid `RecordingSession`/`OperatorRun` payloads rather
-// than importing the package, to stay a dependency-free spawnable script
-// like `process/fixtures/fake-sidecar-cli.mjs`.
+// minimal-but-schema-valid `RecordingSession` payloads rather than importing
+// the package, to stay a dependency-free spawnable script like
+// `process/fixtures/fake-sidecar-cli.mjs`.
 //
 // Behavior is controlled entirely by env vars so `connect.test.ts` can drive
 // every handshake scenario (version match, mismatch+safe-restart,
@@ -25,8 +25,6 @@
 //                                  `WINDOWER_HOME`, i.e. agrees with the client)
 //   FAKE_DAEMON_ACTIVE_SESSION_IDS comma-separated ids returned by
 //                                  `list_sessions({state:"recording"})`
-//   FAKE_DAEMON_ACTIVE_RUN_IDS     comma-separated ids returned by
-//                                  `list_operator_runs` (state: "running")
 //   FAKE_DAEMON_WRITE_STATE=0      skip writing `daemon.json` on listen
 //                                  (so stale-socket detection sees "no
 //                                  recorded pid")
@@ -52,10 +50,6 @@ const hasHello = process.env.FAKE_DAEMON_NO_HELLO !== "1";
 const protocolVersion = Number(process.env.FAKE_DAEMON_PROTOCOL_VERSION ?? "1");
 const windowerHomeEcho = process.env.FAKE_DAEMON_WINDOWER_HOME ?? home;
 const activeSessionIds = (process.env.FAKE_DAEMON_ACTIVE_SESSION_IDS ?? "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
-const activeRunIds = (process.env.FAKE_DAEMON_ACTIVE_RUN_IDS ?? "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
@@ -87,25 +81,6 @@ function fakeSession(id) {
     },
     video: { fps: 30, codec: "h264", container: "mp4", quality: "high", showCursor: true },
     audio: { tracks: [], separateTracks: false },
-    startedAt: new Date().toISOString(),
-  };
-}
-
-function fakeRun(id) {
-  return {
-    id,
-    state: "running",
-    task: "fake task",
-    models: { planner: { provider: "anthropic", model: "claude-sonnet-5" } },
-    target: {
-      kind: "display",
-      id: "display:0",
-      name: "Fake Display",
-      bounds: { x: 0, y: 0, width: 1920, height: 1080 },
-      isPrimary: true,
-      scaleFactor: 1,
-    },
-    steps: [],
     startedAt: new Date().toISOString(),
   };
 }
@@ -148,10 +123,6 @@ function listen() {
         }
         case "list_sessions": {
           respond(socket, id, { sessions: activeSessionIds.map(fakeSession) });
-          return;
-        }
-        case "list_operator_runs": {
-          respond(socket, id, { runs: activeRunIds.map(fakeRun) });
           return;
         }
         case "shutdown": {

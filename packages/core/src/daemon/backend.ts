@@ -56,21 +56,5 @@ export interface WindowerBackend {
     params?: DaemonMethodMap["list_sessions"]["params"],
   ): Promise<DaemonMethodMap["list_sessions"]["result"]>;
 
-  runOperator(
-    params: DaemonMethodMap["run_operator"]["params"],
-  ): Promise<DaemonMethodMap["run_operator"]["result"]>;
-
-  getOperatorRun(
-    params: DaemonMethodMap["get_operator_run"]["params"],
-  ): Promise<DaemonMethodMap["get_operator_run"]["result"]>;
-
-  abortOperatorRun(
-    params: DaemonMethodMap["abort_operator_run"]["params"],
-  ): Promise<DaemonMethodMap["abort_operator_run"]["result"]>;
-
-  listOperatorRuns(
-    params?: DaemonMethodMap["list_operator_runs"]["params"],
-  ): Promise<DaemonMethodMap["list_operator_runs"]["result"]>;
-
   shutdown(): Promise<DaemonMethodMap["shutdown"]["result"]>;
 }

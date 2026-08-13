@@ -7,17 +7,12 @@ import {
   type CaptureTarget,
   DaemonClient,
   type FakeSidecarOptions,
-  type LoopReadyResult,
   type PermissionReport,
   WINDOWER_HOME_ENV,
 } from "@windower/core";
 import {
   CaptureLock,
   ControlEngine,
-  FakeLoopChild,
-  type LoopChildFactory,
-  OperatorRunEngine,
-  OperatorRunStore,
   PassthroughService,
   RecordingEngine,
   SessionStore,
@@ -39,40 +34,15 @@ const DISPLAY_TARGET: CaptureTarget = {
   scaleFactor: 2,
 };
 
-const MODEL = { provider: "anthropic", model: "claude-sonnet-5" };
-
 describe("DaemonServer", () => {
   let dir: string;
   let socketPath: string;
   let windowerHome: string;
   let server: DaemonServer;
   let manager: RecordingEngine;
-  let operatorRunManager: OperatorRunEngine;
   let fakeSpawns: SpawnedFakeSidecar[];
   let captureLock: CaptureLock;
   let controlEngine: ControlEngine;
-  /**
-   * Swappable per-test script for the operator **loop child process**
-   * (`contracts/operator-loop-protocol.md`) — defaults to an instant success.
-   * Since Phase 21 the loop is its own OS process, so a test stubs the wire,
-   * not an in-process function.
-   */
-  type LoopScript = (child: FakeLoopChild, config: LoopReadyResult) => Promise<void>;
-  const INSTANT_SUCCESS: LoopScript = async (child) => {
-    await child.request("reportResult", { state: "succeeded" });
-  };
-  let loopScript: LoopScript = INSTANT_SUCCESS;
-
-  /** One fake child per run, handshaking exactly as a real one does. */
-  const spawnLoopChild: LoopChildFactory = () => {
-    const child = new FakeLoopChild();
-    void (async () => {
-      const config = await child.handshake();
-      await loopScript(child, config);
-      child.exit(0);
-    })().catch(() => child.exit(1));
-    return child;
-  };
 
   let previousWindowerHome: string | undefined;
 
@@ -91,7 +61,6 @@ describe("DaemonServer", () => {
     previousWindowerHome = process.env[WINDOWER_HOME_ENV];
     process.env[WINDOWER_HOME_ENV] = dir;
     resetCaptureHoldsForTesting();
-    loopScript = INSTANT_SUCCESS;
   });
 
   afterEach(async () => {
@@ -133,18 +102,7 @@ describe("DaemonServer", () => {
       capture: captureLock,
       control: controlEngine,
     });
-    operatorRunManager = new OperatorRunEngine({
-      store: new OperatorRunStore(),
-      passthrough,
-      spawnSidecar,
-      capture: captureLock,
-      control: controlEngine,
-      // Never reached by most of these tests, but keeps the dispatch path
-      // from spawning a real loop child if one ever does.
-      spawnLoopChild,
-      loopTimings: { exitGraceMs: 20, abortGraceMs: 50, sigkillGraceMs: 20, pingIntervalMs: 0 },
-    });
-    server = new DaemonServer(manager, passthrough, operatorRunManager, {
+    server = new DaemonServer(manager, passthrough, {
       socketPath,
       windowerHome,
       idleTimeoutMs,
@@ -213,19 +171,7 @@ describe("DaemonServer", () => {
     return fakeSpawns.filter((spawn) => spawn.surface === "control");
   }
 
-  it("starts exactly ONE capture sidecar across concurrent list_targets, check_permissions, a recording, and operator-proxied capture calls", async () => {
-    loopScript = async (child) => {
-      // The loop child's screen-facing calls are proxied through the daemon and
-      // must land on the daemon's one capture sidecar (row 1), never spawn one.
-      // They are servable only inside an open step.
-      await child.request("beginStep", { index: 0 });
-      await child.request("captureFrame", { format: "png" });
-      await child.request("enumerateTargets", {});
-      await child.request("reportStep", {
-        step: { index: 0, observations: [{ kind: "elements", ref: "memory:1:deadbeef" }], toolCalls: [], tMs: 1 },
-      });
-      await child.request("reportResult", { state: "succeeded" });
-    };
+  it("starts exactly ONE capture sidecar across concurrent list_targets, check_permissions, and a recording", async () => {
     await start();
     const client = new DaemonClient(createConnection(socketPath));
 
@@ -237,24 +183,13 @@ describe("DaemonServer", () => {
       client.listTargets({}),
       client.checkPermissions(),
       client.listTargets({ kinds: ["display"] }),
-      client.runOperator({ task: "look at the screen", target: DISPLAY_TARGET, models: { planner: MODEL } }),
     ]);
-    // `run_operator` returns as soon as the run is registered; let the loop finish.
-    await new Promise((resolve) => setTimeout(resolve, 50));
 
     expect(captureSpawns()).toHaveLength(1);
     client.dispose();
   });
 
   it("serves control-surface calls from the control binary, concurrently with a live capture process", async () => {
-    loopScript = async (child) => {
-      await child.request("beginStep", { index: 0 });
-      await child.request("performInput", { actions: [{ kind: "mouse_move", x: 5, y: 5 }] });
-      await child.request("reportStep", {
-        step: { index: 0, observations: [{ kind: "elements", ref: "memory:1:deadbeef" }], toolCalls: [], tMs: 1 },
-      });
-      await child.request("reportResult", { state: "succeeded" });
-    };
     await start();
     const client = new DaemonClient(createConnection(socketPath));
 
@@ -263,8 +198,6 @@ describe("DaemonServer", () => {
       targetId: DISPLAY_TARGET.id,
       bounds: { x: 0, y: 0, width: 100, height: 100 },
     });
-    await client.runOperator({ task: "click something", target: DISPLAY_TARGET, models: { planner: MODEL } });
-    await new Promise((resolve) => setTimeout(resolve, 50));
 
     // Still one capture process; the control work went to a separate,
     // concurrently-alive control process that took no capture lock — control
@@ -374,39 +307,6 @@ describe("DaemonServer", () => {
     await expect(connect(socketPath)).rejects.toBeDefined();
   });
 
-  // checkIdle (phase-20-daemon-optional.md): an operator run never has a
-  // recording session — it records nothing — so counting only
-  // `activeSessionCount` would let idle-shutdown fire out from under an
-  // in-flight run.
-  it("does not idle-shut-down while an operator run is still active, even with zero recording sessions", async () => {
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    loopScript = async (child) => {
-      await gate;
-      await child.request("reportResult", { state: "succeeded" });
-    };
-    await start(50, 20);
-    const client = new DaemonClient(createConnection(socketPath));
-    const { runId } = await client.runOperator({
-      task: "do a thing",
-      target: DISPLAY_TARGET,
-      models: { planner: MODEL },
-    });
-
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    // Idle timeout has long since elapsed, but the run is still in flight —
-    // the socket must still be reachable.
-    await expect(connect(socketPath)).resolves.toBeUndefined();
-
-    release();
-    // The daemon owns every disk write for a run, so teardown has to wait for
-    // the terminal persist rather than race the temp dir out from under it.
-    await operatorRunManager.whenSettled(runId);
-    client.dispose();
-  });
-
   // ---- hello / daemon_info (contracts/daemon-rpc.md) ----
 
   it("hello returns the daemon's identity and stores the connection's env for later calls", async () => {
@@ -448,37 +348,6 @@ describe("DaemonServer", () => {
         cwd: dir,
       }),
     ).rejects.toMatchObject({ code: "DAEMON_VERSION_MISMATCH" });
-    client.dispose();
-  });
-
-  // ---- Root fix: caller env reaches resolveModel via a snapshot, not the daemon's own process.env ----
-
-  it("passes the hello-scoped env snapshot through to the operator run's options (env-passthrough regression)", async () => {
-    let seenEnv: Record<string, string> | undefined;
-    loopScript = async (child, config) => {
-      // It reaches the child in `ready`'s result — never on `argv`, which `ps`
-      // would expose (contracts/operator-loop-protocol.md §Transport).
-      seenEnv = config.env;
-      await child.request("reportResult", { state: "succeeded" });
-    };
-    await start();
-    const client = new DaemonClient(createConnection(socketPath));
-    await client.hello({
-      clientName: "windower-cli",
-      clientVersion: "0.0.0-test",
-      protocolVersion: 1,
-      windowerHome,
-      cwd: dir,
-      env: { apiKeyEnvVar: "ANTHROPIC_API_KEY", apiKeyValue: "caller-key-not-in-daemon-env" },
-    });
-
-    // The daemon process itself must not have this var set — otherwise the
-    // test can't distinguish "passed through" from "already there".
-    expect(process.env.ANTHROPIC_API_KEY).toBeUndefined();
-
-    await client.runOperator({ task: "do a thing", target: DISPLAY_TARGET, models: { planner: MODEL } });
-    await new Promise((resolve) => setTimeout(resolve, 30)); // let the loop child handshake
-    expect(seenEnv?.ANTHROPIC_API_KEY).toBe("caller-key-not-in-daemon-env");
     client.dispose();
   });
 

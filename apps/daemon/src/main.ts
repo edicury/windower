@@ -1,8 +1,8 @@
 import {
   addSidecarPid,
+  spawnSidecar as coreSpawnSidecar,
   daemonSocketPath,
   removeSidecarPid,
-  spawnSidecar as coreSpawnSidecar,
   windowerHome,
 } from "@windower/core";
 import type { SidecarProcess, SpawnSidecarOptions } from "@windower/core";
@@ -10,8 +10,6 @@ import {
   CaptureLock,
   ControlEngine,
   FileTargetLock,
-  OperatorRunEngine,
-  OperatorRunStore,
   PassthroughService,
   RecordingEngine,
   SessionStore,
@@ -28,8 +26,7 @@ import { DaemonServer } from "./server.js";
 export interface RunningDaemon {
   server: DaemonServer;
   sessionManager: RecordingEngine;
-  operatorRunManager: OperatorRunEngine;
-  /** The daemon's single control-surface owner — shared by `resize_window`, `performInput`, and the operator. */
+  /** The daemon's single control-surface owner — shared by `resize_window`. */
   controlEngine: ControlEngine;
   /** Closes the socket server and unlinks the socket file (and daemon.json). Does not exit the process. */
   stop: () => Promise<void>;
@@ -55,8 +52,8 @@ export interface RunDaemonOptions {
  * kill` runs in a fresh CLI process with none of that, so this file is the
  * only way it can find sidecars to force-kill alongside the daemon.
  * `main.ts` is the single place `spawnSidecar` is handed out to every engine
- * (`CaptureLock`, `ControlEngine`, `RecordingEngine`, `PassthroughService`,
- * `OperatorRunEngine`), so wrapping it once here covers all of them.
+ * (`CaptureLock`, `ControlEngine`, `RecordingEngine`, `PassthroughService`),
+ * so wrapping it once here covers all of them.
  */
 function trackedSpawnSidecar(options: SpawnSidecarOptions = {}): SidecarProcess {
   const proc = coreSpawnSidecar({
@@ -89,8 +86,8 @@ export async function runDaemon(options: RunDaemonOptions = {}): Promise<Running
   // process. That is what makes "the daemon owns exactly one capture sidecar
   // and never starts a second one" true *by construction* rather than by which
   // sidecar happens to get reused — `list_targets`, `check_permissions`, a
-  // recording's `startCapture`, and the operator's proxied `captureFrame` all
-  // resolve to the same in-process object (row 1 of the acquire-or-wait table:
+  // recording's `startCapture` all resolve to the same in-process object
+  // (row 1 of the acquire-or-wait table:
   // no file I/O, no spawn, no arbitration between in-daemon callers).
   //
   // The daemon takes the lock file itself even though its own callers never
@@ -101,8 +98,8 @@ export async function runDaemon(options: RunDaemonOptions = {}): Promise<Running
   // The control surface is an independent peer: a different binary, no
   // ScreenCaptureKit linkage, and therefore no capture lock — ever. Any number
   // of control processes may run concurrently with each other and with the
-  // capture sidecar, and `performInput`/`resizeWindow` are never serialized
-  // against a recording or a `captureFrame`.
+  // capture sidecar, and `resizeWindow` is never serialized against a
+  // recording.
   const controlEngine = new ControlEngine({
     spawnControl: trackedSpawnSidecar,
     // Without this, `SpawnSidecarOptions.surface` defaults to `"capture"` and
@@ -125,31 +122,13 @@ export async function runDaemon(options: RunDaemonOptions = {}): Promise<Running
     control: controlEngine,
   });
 
-  // Phase 19: operator runs replay from disk and crash-recover on the same
-  // startup path as recording sessions — an in-flight run cannot survive the
-  // death of the process that owned its loop.
-  const operatorRunStore = new OperatorRunStore();
-  await operatorRunStore.load();
-  const operatorRunManager = new OperatorRunEngine({
-    store: operatorRunStore,
-    passthrough,
-    spawnSidecar: trackedSpawnSidecar,
-    // The same two peers everything else in the daemon uses: an operator
-    // `captureFrame` during a live recording is row 1 (reuse this process's
-    // capture sidecar), and its `performInput` goes to the shared control
-    // process without touching the capture lock.
-    capture: captureLock,
-    control: controlEngine,
-  });
-  await operatorRunManager.recoverCrashedRuns();
-
   // Idle timeout and an explicit `windower daemon stop` RPC both mean the
   // same thing to the process: close the socket, then exit.
   const terminate = (): void => {
     void server.stop().then(options.onIdleShutdown ?? (() => process.exit(0)));
   };
 
-  const server = new DaemonServer(sessionManager, passthrough, operatorRunManager, {
+  const server = new DaemonServer(sessionManager, passthrough, {
     socketPath: daemonSocketPath(),
     windowerHome: windowerHome(),
     idleTimeoutMs: config.daemonIdleTimeoutMs,
@@ -164,7 +143,6 @@ export async function runDaemon(options: RunDaemonOptions = {}): Promise<Running
   return {
     server,
     sessionManager,
-    operatorRunManager,
     controlEngine,
     stop: () => server.stop(),
     shutdown: async (mode) => {

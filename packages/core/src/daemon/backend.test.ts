@@ -28,10 +28,6 @@ describe("WindowerBackend", () => {
     expect(typeof client.stopRecording).toBe("function");
     expect(typeof client.cancelRecording).toBe("function");
     expect(typeof client.listSessions).toBe("function");
-    expect(typeof client.runOperator).toBe("function");
-    expect(typeof client.getOperatorRun).toBe("function");
-    expect(typeof client.abortOperatorRun).toBe("function");
-    expect(typeof client.listOperatorRuns).toBe("function");
     expect(typeof client.shutdown).toBe("function");
 
     client.dispose();

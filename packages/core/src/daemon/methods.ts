@@ -3,16 +3,6 @@ import { SidecarErrorCodeSchema } from "../protocol/jsonrpc.js";
 import { AudioSettingsSchema } from "../schemas/audio-settings.js";
 import { CaptureTargetSchema } from "../schemas/capture-target.js";
 import { OutputManifestSchema } from "../schemas/manifest.js";
-import {
-  type ModelConfig,
-  ModelConfigSchema,
-  type OperatorModels,
-  OperatorGuardrailsSchema,
-  OperatorModelsSchema,
-  OperatorRunSchema,
-  OperatorRunStateSchema,
-  SecretRefSchema,
-} from "../schemas/operator.js";
 import { PermissionReportSchema, PermissionStatusSchema } from "../schemas/permissions.js";
 import { RectSchema } from "../schemas/rect.js";
 import { RecordingSessionSchema, SessionStateSchema } from "../schemas/session.js";
@@ -45,19 +35,10 @@ export const DaemonErrorCodeSchema = z.enum([
   "INVALID_ARGS",
   "TARGET_ALREADY_RECORDING",
   "OUTPUT_DIR_NOT_WRITABLE",
-  // Phase 19 (operator): daemon-only, mirrors SESSION_NOT_FOUND for
-  // `get_operator_run`/`abort_operator_run` against an unknown runId.
-  "OPERATOR_RUN_NOT_FOUND",
   // Phase 20 (daemon-optional): `hello` handshake outcomes. See
   // contracts/daemon-rpc.md's "Error codes" section.
   "DAEMON_VERSION_MISMATCH",
   "DAEMON_BUSY",
-  // Phase 21 (capture/control split).
-  // `OPERATOR_LOOP_CRASHED` — the operator decision-loop child process exited
-  // without sending `reportResult` (non-zero exit, signal, `kill -9`, EOF, or
-  // an unanswered `ping`). Daemon-internal, never on the loop wire; see
-  // contracts/operator-loop-protocol.md §OPERATOR_LOOP_CRASHED.
-  "OPERATOR_LOOP_CRASHED",
   // `SCREEN_CAPTURE_BUSY` — the ScreenCaptureKit resource is held by a live
   // process this caller cannot route to: a same-home holder that outlived the
   // bounded wait budget, or any holder from a different WINDOWER_HOME. See
@@ -168,87 +149,6 @@ export const ListSessionsResultSchema = z.object({
 });
 export type ListSessionsResult = z.infer<typeof ListSessionsResultSchema>;
 
-// ---- run_operator ----
-// contracts/mcp-tools.md §run_operator + contracts/cli.md `windower operate`.
-// Returns immediately with `{ runId }` — same non-blocking two-call shape as
-// `start_recording`; poll `get_operator_run` for progress.
-// An operator run is fully specified by `{ task, target, model, secrets?,
-// guardrails? }` and nothing else (contracts/operator.md §Inputs). It is
-// recording-unaware: there is no `sessionId` member and no `recording` member,
-// and the attach-vs-standalone refinement that used to police them is gone
-// rather than kept as a no-op. `.strict()` is what makes passing either one
-// `INVALID_ARGS` — by schema strictness, not by refinement.
-export const RunOperatorParamsSchema = z.strictObject({
-  task: z.string().min(1),
-  /**
-   * The **same target selector `start_recording` takes** — resolved through
-   * `enumerateTargets` exactly as capture does, and the source of the bounds
-   * clamp. Not a parallel operator-only type.
-   */
-  target: z.union([CaptureTargetSchema, z.object({ targetId: z.string() })]),
-  /**
-   * Phase 22 — accepts either a bare `ModelConfig` (one `--model`, both tiers
-   * resolve to it) or an already-tiered `OperatorModels`
-   * (`--planner-model`/`--executor-model`), mirroring
-   * `normalizeOperatorModels`'s accepted shapes at the CLI/MCP boundary.
-   * Optional: a caller may omit it entirely and rely on
-   * `~/.windower/config.json`'s `operator.defaultPlannerModel` /
-   * `defaultExecutorModel` / `defaultModel` — the same file the daemon
-   * already reads for every other operator default, resolved daemon-side in
-   * `OperatorRunEngine.resolveModels` (explicit → tier-specific config
-   * default → `defaultModel` → error; executor additionally falls back to
-   * the resolved planner). A caller that supplies a fully resolved `models`
-   * (as `windower operate` does today) sees the config file consulted for
-   * nothing — this is a fallback, not a second source of truth.
-   */
-  models: z.union([ModelConfigSchema, OperatorModelsSchema]).optional(),
-  secrets: z.array(SecretRefSchema).optional(),
-  guardrails: OperatorGuardrailsSchema.optional(),
-  /** Phase 22 — `"auto"` (default) | `"ax"` | `"vision"`; see `contracts/operator.md` §Observation policy. */
-  observe: z.enum(["auto", "ax", "vision"]).optional(),
-});
-export type RunOperatorParams = z.infer<typeof RunOperatorParamsSchema>;
-/** The pre-normalization shape `RunOperatorParams.models` accepts. */
-export type RunOperatorModelsInput = ModelConfig | OperatorModels;
-
-export const RunOperatorResultSchema = z.object({
-  runId: z.string(),
-});
-export type RunOperatorResult = z.infer<typeof RunOperatorResultSchema>;
-
-// ---- get_operator_run ----
-export const GetOperatorRunParamsSchema = z.object({
-  runId: z.string(),
-});
-export type GetOperatorRunParams = z.infer<typeof GetOperatorRunParamsSchema>;
-
-export const GetOperatorRunResultSchema = OperatorRunSchema;
-export type GetOperatorRunResult = z.infer<typeof GetOperatorRunResultSchema>;
-
-// ---- abort_operator_run ----
-export const AbortOperatorRunParamsSchema = z.object({
-  runId: z.string(),
-});
-export type AbortOperatorRunParams = z.infer<typeof AbortOperatorRunParamsSchema>;
-
-export const AbortOperatorRunResultSchema = z.object({
-  aborted: z.literal(true),
-});
-export type AbortOperatorRunResult = z.infer<typeof AbortOperatorRunResultSchema>;
-
-// ---- list_operator_runs ----
-// `windower operate list [--state <state>]` (contracts/cli.md) — mirrors
-// `list_sessions`. Daemon-side only; not exposed as an MCP tool.
-export const ListOperatorRunsParamsSchema = z.object({
-  state: OperatorRunStateSchema.optional(),
-});
-export type ListOperatorRunsParams = z.infer<typeof ListOperatorRunsParamsSchema>;
-
-export const ListOperatorRunsResultSchema = z.object({
-  runs: z.array(OperatorRunSchema),
-});
-export type ListOperatorRunsResult = z.infer<typeof ListOperatorRunsResultSchema>;
-
 // ---- shutdown ----
 // Added in Phase 7 (CLI) for `windower daemon stop`: contracts/cli.md calls
 // for explicit daemon lifecycle control, and there was no clean way to ask
@@ -257,7 +157,7 @@ export type ListOperatorRunsResult = z.infer<typeof ListOperatorRunsResultSchema
 // method shape; see that file for the prominent note on this addition.
 // `mode` added Phase 20 (contracts/daemon-rpc.md "Graceful shutdown"):
 // `"graceful"` (default) drains connections, finalizes in-flight
-// recordings/operator runs, then exits; `"immediate"` skips the drain and
+// recordings, then exits; `"immediate"` skips the drain and
 // exits as fast as possible, leaving `recoverCrashedSessions()` to clean up
 // anything left `recording`. Optional so an old (pre-Phase-20) daemon still
 // accepts a bare `{}` shutdown call unchanged.
@@ -296,10 +196,6 @@ export const DAEMON_METHODS = [
   "stop_recording",
   "cancel_recording",
   "list_sessions",
-  "run_operator",
-  "get_operator_run",
-  "abort_operator_run",
-  "list_operator_runs",
   "shutdown",
 ] as const;
 export type DaemonMethod = (typeof DAEMON_METHODS)[number];
@@ -319,10 +215,6 @@ export interface DaemonMethodMap {
   stop_recording: { params: StopRecordingParams; result: StopRecordingResult };
   cancel_recording: { params: CancelRecordingParams; result: CancelRecordingResult };
   list_sessions: { params: ListSessionsParams; result: ListSessionsResult };
-  run_operator: { params: RunOperatorParams; result: RunOperatorResult };
-  get_operator_run: { params: GetOperatorRunParams; result: GetOperatorRunResult };
-  abort_operator_run: { params: AbortOperatorRunParams; result: AbortOperatorRunResult };
-  list_operator_runs: { params: ListOperatorRunsParams; result: ListOperatorRunsResult };
   shutdown: { params: ShutdownParams; result: ShutdownResult };
 }
 
@@ -346,15 +238,5 @@ export const DAEMON_METHOD_SCHEMAS: {
   stop_recording: { params: StopRecordingParamsSchema, result: StopRecordingResultSchema },
   cancel_recording: { params: CancelRecordingParamsSchema, result: CancelRecordingResultSchema },
   list_sessions: { params: ListSessionsParamsSchema, result: ListSessionsResultSchema },
-  run_operator: { params: RunOperatorParamsSchema, result: RunOperatorResultSchema },
-  get_operator_run: { params: GetOperatorRunParamsSchema, result: GetOperatorRunResultSchema },
-  abort_operator_run: {
-    params: AbortOperatorRunParamsSchema,
-    result: AbortOperatorRunResultSchema,
-  },
-  list_operator_runs: {
-    params: ListOperatorRunsParamsSchema,
-    result: ListOperatorRunsResultSchema,
-  },
   shutdown: { params: ShutdownParamsSchema, result: ShutdownResultSchema },
 };

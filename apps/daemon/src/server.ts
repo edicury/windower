@@ -14,17 +14,10 @@ import {
   classifyDaemonJsonRpcLine,
   clearDaemonState,
   clearSidecarPids,
-  isTerminalOperatorRunState,
   packageVersion,
   writeDaemonState,
 } from "@windower/core";
-import {
-  type OperatorRunEngine,
-  type PassthroughService,
-  type RecordingEngine,
-  type RequestContext,
-  buildRequestContext,
-} from "@windower/engine";
+import type { PassthroughService, RecordingEngine } from "@windower/engine";
 import { ZodError } from "zod";
 
 /** Bounded drain window for a graceful `shutdown` before escalating to `immediate`. */
@@ -85,24 +78,19 @@ function toDaemonError(err: unknown): DaemonError {
 export class DaemonServer {
   private readonly sessionManager: RecordingEngine;
   private readonly passthrough: PassthroughService;
-  private readonly operatorRunManager: OperatorRunEngine;
   private readonly options: DaemonServerOptions;
   private server: Server | undefined;
   private idleTimer: NodeJS.Timeout | undefined;
   private idleSince: number | undefined;
   private startedAt: string | undefined;
-  /** Per-connection state captured at `hello` — see `request-context.ts`. */
-  private readonly connectionContexts = new WeakMap<Socket, RequestContext>();
 
   constructor(
     sessionManager: RecordingEngine,
     passthrough: PassthroughService,
-    operatorRunManager: OperatorRunEngine,
     options: DaemonServerOptions,
   ) {
     this.sessionManager = sessionManager;
     this.passthrough = passthrough;
-    this.operatorRunManager = operatorRunManager;
     this.options = options;
   }
 
@@ -178,12 +166,11 @@ export class DaemonServer {
    * `{shuttingDown: true}` response has already been written to the
    * requesting client's socket, and from `bin.ts`'s SIGTERM/SIGINT handlers.
    *
-   * `graceful` (default): stop accepting new connections, then abort every
-   * active operator run (its own finalizer stops the run's recording
-   * cleanly) and `stopRecording` every session still `recording` — so video,
-   * manifest, and `.events.json` all land — before closing the socket.
-   * Bounded to `GRACEFUL_SHUTDOWN_TIMEOUT_MS`; if the drain doesn't finish in
-   * time, escalates to the `immediate` path instead of hanging.
+   * `graceful` (default): stop accepting new connections, then
+   * `stopRecording` every session still `recording` — so video, manifest,
+   * and `.events.json` all land — before closing the socket. Bounded to
+   * `GRACEFUL_SHUTDOWN_TIMEOUT_MS`; if the drain doesn't finish in time,
+   * escalates to the `immediate` path instead of hanging.
    *
    * `immediate`: skip the drain and just tear everything down. Anything left
    * `recording` is picked up by the next daemon start's
@@ -203,34 +190,10 @@ export class DaemonServer {
     await this.stop();
   }
 
-  /**
-   * `contracts/operator-loop-protocol.md` §Shutdown, "Daemon graceful
-   * shutdown": `abort({reason:"daemon-shutdown"})` to every live loop child
-   * **first**, then the drain — and the two drains below run as **peers**,
-   * concurrently and unordered with respect to each other. Live recordings are
-   * finalized by the recording pass on its own; the loop's shutdown neither
-   * triggers nor waits on the recording's, which is what keeps "the operator
-   * never touches a recording" true even here.
-   */
   private async drainGraceful(): Promise<void> {
     let timedOut = false;
-    this.operatorRunManager.signalDaemonShutdown();
 
-    const drainRuns = (async () => {
-      const activeRuns = this.operatorRunManager
-        .listOperatorRuns({})
-        .runs.filter((run) => !isTerminalOperatorRunState(run.state));
-      for (const run of activeRuns) {
-        try {
-          await this.operatorRunManager.abortOperatorRun({ runId: run.id });
-          await this.operatorRunManager.whenSettled(run.id);
-        } catch (err) {
-          console.error(`[DaemonServer] graceful shutdown: aborting run ${run.id} failed:`, err);
-        }
-      }
-    })();
-
-    const drainRecordings = (async () => {
+    const work = (async () => {
       const recording = this.sessionManager.listSessions({ state: "recording" }).sessions;
       for (const session of recording) {
         try {
@@ -243,8 +206,6 @@ export class DaemonServer {
         }
       }
     })();
-
-    const work = Promise.all([drainRuns, drainRecordings]).then(() => undefined);
 
     const timeout = new Promise<void>((resolve) => {
       const timer = setTimeout(() => {
@@ -266,16 +227,10 @@ export class DaemonServer {
   /** Synchronous best-effort SIGKILL sweep — the `immediate` path and a timed-out `graceful` drain. */
   private killEverythingSync(): void {
     this.sessionManager.sigkillActiveSidecars();
-    this.operatorRunManager.sigkillActiveSidecars();
   }
 
   private checkIdle(): void {
-    // An operator run has no recording session — it is a peer capability that
-    // records nothing (contracts/operator.md §Recording independence), so
-    // counting only `activeSessionCount` would let idle-shutdown race an
-    // in-flight run out from under itself (phase-20-daemon-optional.md
-    // "checkIdle").
-    const active = this.sessionManager.activeSessionCount + this.operatorRunManager.activeRunCount;
+    const active = this.sessionManager.activeSessionCount;
     if (active > 0) {
       this.idleSince = undefined;
       return;
@@ -295,9 +250,6 @@ export class DaemonServer {
       void this.handleLine(socket, line);
     });
     socket.on("error", () => {});
-    socket.on("close", () => {
-      this.connectionContexts.delete(socket);
-    });
   }
 
   private async handleLine(socket: Socket, rawLine: string): Promise<void> {
@@ -320,7 +272,7 @@ export class DaemonServer {
     const method = line.method as string;
 
     try {
-      const result = await this.dispatch(socket, method, line.params);
+      const result = await this.dispatch(method, line.params);
       socket.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
     } catch (err) {
       const daemonErr = toDaemonError(err);
@@ -334,7 +286,7 @@ export class DaemonServer {
     }
   }
 
-  private async dispatch(socket: Socket, method: string, rawParams: unknown): Promise<unknown> {
+  private async dispatch(method: string, rawParams: unknown): Promise<unknown> {
     if (!(method in DAEMON_METHOD_SCHEMAS)) {
       throw new DaemonError("INVALID_ARGS", `Unknown method "${method}"`);
     }
@@ -356,7 +308,6 @@ export class DaemonServer {
               `daemon resolved "${this.options.windowerHome}"`,
           );
         }
-        this.connectionContexts.set(socket, buildRequestContext(req));
         return schemas.result.parse(this.identity());
       }
       case "daemon_info":
@@ -404,31 +355,6 @@ export class DaemonServer {
       case "list_sessions":
         return schemas.result.parse(
           this.sessionManager.listSessions(params as DaemonMethodMap["list_sessions"]["params"]),
-        );
-      case "run_operator":
-        return schemas.result.parse(
-          await this.operatorRunManager.runOperator(
-            params as DaemonMethodMap["run_operator"]["params"],
-            this.connectionContexts.get(socket),
-          ),
-        );
-      case "get_operator_run":
-        return schemas.result.parse(
-          this.operatorRunManager.getOperatorRun(
-            params as DaemonMethodMap["get_operator_run"]["params"],
-          ),
-        );
-      case "abort_operator_run":
-        return schemas.result.parse(
-          await this.operatorRunManager.abortOperatorRun(
-            params as DaemonMethodMap["abort_operator_run"]["params"],
-          ),
-        );
-      case "list_operator_runs":
-        return schemas.result.parse(
-          this.operatorRunManager.listOperatorRuns(
-            params as DaemonMethodMap["list_operator_runs"]["params"],
-          ),
         );
       case "shutdown": {
         const { mode } = params as DaemonMethodMap["shutdown"]["params"];

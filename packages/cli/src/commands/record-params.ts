@@ -88,10 +88,8 @@ function parseResolution(raw: string | undefined): { width: number; height: numb
 
 /**
  * `--target`/`--kind`/`--region` → the `CaptureTarget | { targetId }` selector
- * both `start_recording` and `run_operator` take (contracts/operator.md
- * §Inputs — "the same target selector `start_recording` takes ... not a new
- * type"). Exported so `operate` resolves its own target through exactly this
- * code rather than a parallel implementation.
+ * `start_recording` takes. Shared by `record`/`start` so both resolve a
+ * target through exactly this code rather than a parallel implementation.
  */
 export function buildTargetSelector(opts: {
   target?: string;
@@ -112,9 +110,8 @@ export function buildTargetSelector(opts: {
 }
 
 /**
- * Exported so `operate` (contracts/cli.md `windower operate`) can reuse the
- * exact same video-flag parsing without going through
- * `buildStartRecordingParams`.
+ * Exported so callers other than `buildStartRecordingParams` can reuse the
+ * exact same video-flag parsing.
  */
 export function buildVideo(opts: SharedRecordingOpts): Partial<VideoSettings> | undefined {
   const fps = parseFps(opts.fps);

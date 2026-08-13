@@ -5,9 +5,9 @@ import { runDaemon } from "./main.js";
  * Real process entrypoint — what `packages/core`'s `spawnDaemonDetached`
  * spawns via `node dist/bin.js`. Owns process lifecycle: exits non-zero on
  * startup failure, and handles SIGTERM/SIGINT via the graceful `shutdown`
- * path (`contracts/daemon-rpc.md` "Graceful shutdown") — draining in-flight
- * operator runs and finalizing any recording still in progress — instead of
- * just closing the socket and leaving capture processes orphaned.
+ * path (`contracts/daemon-rpc.md` "Graceful shutdown") — finalizing any
+ * recording still in progress — instead of just closing the socket and
+ * leaving capture processes orphaned.
  */
 async function main(): Promise<void> {
   const daemon = await runDaemon();
@@ -29,7 +29,6 @@ async function main(): Promise<void> {
   // clean up properly before this would ever run.
   process.on("exit", () => {
     daemon.sessionManager.sigkillActiveSidecars();
-    daemon.operatorRunManager.sigkillActiveSidecars();
     daemon.controlEngine.sigkillActiveProcess();
   });
 }

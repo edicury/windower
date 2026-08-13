@@ -8,9 +8,9 @@ import Foundation
 // used to live on `EnumerationService` in the (now capture-only)
 // ScreenCaptureKit-importing module. Both surfaces need them — the capture
 // surface for pixel/point conversion when mapping `SCDisplay`/`SCWindow`, the
-// control surface for `performInput`'s pixels→points conversion and
-// `resizeWindow`'s AX bounds math — and neither of those uses touches
-// ScreenCaptureKit: `NSScreen`/`CGDirectDisplayID` are plain AppKit/CoreGraphics.
+// control surface for `resizeWindow`'s AX bounds math — and neither of those
+// uses touches ScreenCaptureKit: `NSScreen`/`CGDirectDisplayID` are plain
+// AppKit/CoreGraphics.
 //
 // Keeping them here is what lets `WindowerControlCore` (and therefore
 // `windower-control-macos`) stay free of any ScreenCaptureKit linkage while

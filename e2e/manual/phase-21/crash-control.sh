@@ -1,6 +1,17 @@
 #!/bin/bash
 # Phase 21 live verification — crash isolation: kill -9 the CONTROL sidecar
-# mid-run and observe operator + recording behavior.
+# (windower-control-macos) mid-recording and observe capture behavior.
+#
+# The control sidecar is exercised by `windower resize` — synthetic input via
+# osascript/System Events (used elsewhere in this directory as a load
+# generator) never touches windower-control-macos at all, it's macOS's own
+# GUI scripting. So this script drives a repeating `windower resize` loop
+# against a real window to keep a live control sidecar around to kill, plus
+# a background osascript loop for general on-screen activity so the
+# recording has something to capture. This replaces what `windower operate`
+# used to generate as a side effect of its own click/keystroke actions —
+# there is no Windower operator anymore (see CLAUDE.md: Windower never
+# drives UI itself).
 # Usage: crash-control.sh <run-label>
 set -uo pipefail
 
@@ -14,11 +25,10 @@ cd "$REPO"
 set -a; . ./.env; set +a
 W="node $REPO/packages/cli/dist/index.js"
 
-TASK='Open Safari and navigate to waroom.co. Use Finder to open the Applications folder and launch Safari from there if it is not already running. Once the page has loaded, you are done.'
-
 SESSION=""
-RUNID=""
 STOPPED=0
+LOAD_PID=""
+RESIZE_PID=""
 
 check() { echo "CHECK $1: $2 $3"; }
 jget() {
@@ -26,7 +36,56 @@ jget() {
 let v;try{v=eval(process.argv[2])}catch(e){v=""}
 console.log(v===undefined||v===null?"":(typeof v==="object"?JSON.stringify(v):v))' "$1" "$2"
 }
+
+start_synthetic_load() {
+  (
+    osascript -e 'tell application "TextEdit" to activate' >/dev/null 2>&1
+    osascript -e 'tell application "TextEdit" to make new document' >/dev/null 2>&1
+    sleep 1
+    n=0
+    while :; do
+      n=$((n+1))
+      osascript -e "tell application \"System Events\" to keystroke \"line $n \"" >/dev/null 2>&1
+      sleep 1
+    done
+  ) &
+  echo $!
+}
+stop_synthetic_load() {
+  [ -n "$1" ] && kill "$1" 2>/dev/null
+  osascript -e 'tell application "TextEdit" to quit saving no' >/dev/null 2>&1
+}
+
+# Finds a resizable TextEdit window id via `windower targets`, for the resize
+# loop below to hammer — this is what keeps windower-control-macos alive.
+pick_window_target() {
+  $W targets --kind window --json 2>/dev/null | node -e '
+let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+  try{
+    const d=JSON.parse(s);
+    const list=d.targets||[];
+    const t=list.find(t=>JSON.stringify(t).match(/textedit/i))||list[0];
+    console.log(t?t.id:"");
+  }catch(e){console.log("")}
+});'
+}
+
+start_resize_loop() {
+  local winId="$1"
+  (
+    w=900; h=600
+    while :; do
+      w=$((w==900?920:900)); h=$((h==600?620:600))
+      $W resize --window "$winId" --width "$w" --height "$h" --json >/dev/null 2>&1
+      sleep 2
+    done
+  ) &
+  echo $!
+}
+
 cleanup() {
+  [ -n "$RESIZE_PID" ] && kill "$RESIZE_PID" 2>/dev/null
+  stop_synthetic_load "$LOAD_PID"
   if [ -n "$SESSION" ] && [ "$STOPPED" -eq 0 ]; then
     echo "=== [$LABEL] TRAP cleanup: stopping recording $SESSION ==="
     $W stop "$SESSION" --json > "$OUT/stop-trap.json" 2>&1
@@ -44,57 +103,55 @@ echo "sessionId=$SESSION"
 [ -z "$SESSION" ] && { check start_recording "FAIL" "no sessionId; see $OUT/start.err"; exit 1; }
 check start_recording "PASS" "sessionId=$SESSION"
 
-echo "############ [$LABEL] START DETACHED OPERATOR RUN ############"
-$W operate "$TASK" --target 5 --kind display --model anthropic:claude-sonnet-5 --max-steps 30 --detach --json > "$OUT/operate.json" 2>"$OUT/operate.err"
-RUNID=$(jget "$OUT/operate.json" 'd.runId')
-echo "runId=$RUNID"
-[ -z "$RUNID" ] && { check operator_started "FAIL" "no runId; see $OUT/operate.err"; exit 1; }
-check operator_started "PASS" "runId=$RUNID"
+echo "############ [$LABEL] START SYNTHETIC LOAD + RESIZE LOOP ############"
+LOAD_PID=$(start_synthetic_load)
+echo "loadPid=$LOAD_PID"
+sleep 2
+WIN_ID=$(pick_window_target)
+echo "resizeTargetWindowId=${WIN_ID:-none}"
+if [ -z "$WIN_ID" ]; then
+  check resize_target_found "FAIL" "could not resolve a window target for windower resize"
+else
+  check resize_target_found "PASS" "windowId=$WIN_ID"
+  RESIZE_PID=$(start_resize_loop "$WIN_ID")
+  echo "resizeLoopPid=$RESIZE_PID"
+fi
 
-echo "############ [$LABEL] WAIT FOR >=3 STEPS AND A CONTROL SIDECAR ############"
+echo "############ [$LABEL] WAIT FOR A LIVE CONTROL SIDECAR ############"
 CTRL_PID=""
-STEPS=0
-STATE=pending
-for i in $(seq 1 120); do
+for i in $(seq 1 40); do
   sleep 3
-  $W operate status "$RUNID" --json > "$OUT/run-poll.json" 2>/dev/null
-  STATE=$(jget "$OUT/run-poll.json" 'd.state')
-  STEPS=$(jget "$OUT/run-poll.json" '(d.steps||[]).length')
   CTRL_PID=$(ps -eo pid,ppid,command | grep "[w]indower-control-macos" | awk '{print $1}' | head -1)
-  echo "  t=$((i*3))s state=${STATE:-?} steps=${STEPS:-0} controlPid=${CTRL_PID:-none}"
-  case "$STATE" in succeeded|failed|aborted|timed_out) break;; esac
-  if [ "${STEPS:-0}" -ge 3 ] 2>/dev/null && [ -n "$CTRL_PID" ]; then break; fi
+  echo "  t=$((i*3))s controlPid=${CTRL_PID:-none}"
+  [ -n "$CTRL_PID" ] && [ $i -ge 3 ] && break
 done
 
 if [ -z "$CTRL_PID" ]; then
-  check control_sidecar_present "FAIL" "no windower-control-macos observed (steps=$STEPS state=$STATE); nothing to kill"
-  KILLED=0
+  check control_sidecar_present "FAIL" "no windower-control-macos observed; nothing to kill"
 else
-  check control_sidecar_present "PASS" "pid=$CTRL_PID at steps=$STEPS"
+  check control_sidecar_present "PASS" "pid=$CTRL_PID"
   echo "############ [$LABEL] KILL -9 CONTROL SIDECAR pid=$CTRL_PID ############"
   date +"killAt=%H:%M:%S" | tee "$OUT/kill.txt"
-  kill -9 "$CTRL_PID" 2>/dev/null && KILLED=1 || KILLED=0
-  echo "STEPS_AT_KILL=$STEPS" >> "$OUT/kill.txt"
+  kill -9 "$CTRL_PID" 2>/dev/null
   sleep 2
   echo "-- ps right after kill:"
   ps -eo pid,ppid,command | grep "[w]indower-control-macos" || echo "   (no control process)"
 fi
 
-echo "############ [$LABEL] POLL TO TERMINAL STATE ############"
+echo "############ [$LABEL] WAIT FOR RESIZE LOOP TO RESPAWN CONTROL SIDECAR ############"
 RESPAWN_SEEN=0
 RESPAWN_PID=""
-for i in $(seq 1 180); do
-  sleep 5
-  $W operate status "$RUNID" --json > "$OUT/run-poll.json" 2>/dev/null
-  STATE=$(jget "$OUT/run-poll.json" 'd.state')
-  STEPS=$(jget "$OUT/run-poll.json" '(d.steps||[]).length')
+for i in $(seq 1 20); do
+  sleep 3
   NEW=$(ps -eo pid,ppid,command | grep "[w]indower-control-macos" | awk '{print $1}' | head -1)
-  if [ -n "$NEW" ] && [ "$NEW" != "$CTRL_PID" ]; then RESPAWN_SEEN=1; RESPAWN_PID="$NEW"; fi
   CAP=$(ps -eo pid,ppid,command | grep -c "[w]indower-capture-macos")
-  echo "  t=$((i*5))s state=${STATE:-?} steps=${STEPS:-?} controlPid=${NEW:-none} capProcs=$CAP"
-  case "$STATE" in succeeded|failed|aborted|timed_out) cp "$OUT/run-poll.json" "$OUT/run-final.json"; break;; esac
+  echo "  t=$((i*3))s controlPid=${NEW:-none} capProcs=$CAP"
+  if [ -n "$NEW" ] && [ "$NEW" != "$CTRL_PID" ]; then RESPAWN_SEEN=1; RESPAWN_PID="$NEW"; break; fi
 done
-[ -f "$OUT/run-final.json" ] || cp "$OUT/run-poll.json" "$OUT/run-final.json"
+
+echo "############ [$LABEL] STOP RESIZE LOOP + SYNTHETIC LOAD ############"
+[ -n "$RESIZE_PID" ] && kill "$RESIZE_PID" 2>/dev/null; RESIZE_PID=""
+stop_synthetic_load "$LOAD_PID"; LOAD_PID=""
 
 echo "############ [$LABEL] STOP RECORDING ############"
 $W stop "$SESSION" --json > "$OUT/stop.json" 2>"$OUT/stop.err"
@@ -103,10 +160,6 @@ cat "$OUT/stop.json"
 cp "$HOME/.windower/sessions/$SESSION.json" "$OUT/session.json" 2>/dev/null
 
 echo "############ [$LABEL] RESULTS ############"
-FSTATE=$(jget "$OUT/run-final.json" 'd.state')
-FERR=$(jget "$OUT/run-final.json" 'd.error && (d.error.code||d.error)')
-FERRMSG=$(jget "$OUT/run-final.json" 'd.error && d.error.message')
-FSTEPS=$(jget "$OUT/run-final.json" '(d.steps||[]).length')
 OUTPATH=$(jget "$OUT/stop.json" 'd.outputPath')
 DUR=$(jget "$OUT/stop.json" 'd.manifest.video.durationMs')
 SSTATE=$(jget "$OUT/session.json" 'd.state')
@@ -114,19 +167,11 @@ STARTED=$(jget "$OUT/session.json" 'd.startedAt')
 ENDED=$(jget "$OUT/session.json" 'd.stoppedAt')
 WALL=$(node -e 'const a=Date.parse(process.argv[1]),b=Date.parse(process.argv[2]);console.log(isNaN(a)||isNaN(b)?"":b-a)' "$STARTED" "$ENDED")
 
-echo "operator: state=$FSTATE steps=$FSTEPS errorCode=${FERR:-none}"
-echo "operator errorMessage: ${FERRMSG:-none}"
 echo "control respawn after kill: seen=$RESPAWN_SEEN pid=${RESPAWN_PID:-none}"
 echo "recording: durationMs=${DUR:-?} wallMs=${WALL:-?} sessionState=${SSTATE:-?}"
 
 echo
 echo "############ [$LABEL] CHECKS ############"
-case "$FSTATE" in
-  succeeded|failed|aborted|timed_out) check operator_terminal "PASS" "state=$FSTATE errorCode=${FERR:-none}";;
-  *) check operator_terminal "FAIL" "state=${FSTATE:-?} (wedged, never reached terminal state)";;
-esac
-[ "${FSTEPS:-0}" -ge 3 ] 2>/dev/null && check partial_transcript_preserved "PASS" "$FSTEPS steps retained" \
-  || check partial_transcript_preserved "FAIL" "steps=${FSTEPS:-?}"
 [ "$RESPAWN_SEEN" = "1" ] && check control_respawned "PASS" "new control pid=$RESPAWN_PID (different from killed $CTRL_PID)" \
   || check control_respawned "FAIL" "no new windower-control-macos observed after the kill"
 [ "$SSTATE" = "stopped" ] && check recording_unaffected "PASS" "sessionState=stopped despite control-sidecar crash" \
@@ -143,9 +188,9 @@ else
 fi
 
 echo "############ [$LABEL] FINAL HYGIENE ############"
-ps -eo pid,ppid,command | grep -E "[w]indower-(capture|control)-macos|[l]oop-entry.js" || echo "(nothing orphaned — good)"
-LEFT=$(ps -eo pid,command | grep -cE "[w]indower-(capture|control)-macos|[l]oop-entry.js")
-[ "$LEFT" = "0" ] && check no_orphans "PASS" "no capture/control/loop processes left" || check no_orphans "FAIL" "$LEFT process(es) left behind"
+ps -eo pid,ppid,command | grep -E "[w]indower-(capture|control)-macos" || echo "(nothing orphaned — good)"
+LEFT=$(ps -eo pid,command | grep -cE "[w]indower-(capture|control)-macos")
+[ "$LEFT" = "0" ] && check no_orphans "PASS" "no capture/control processes left" || check no_orphans "FAIL" "$LEFT process(es) left behind"
 
-echo "SESSION=$SESSION RUNID=$RUNID STATE=$FSTATE KILLEDCTRL=${CTRL_PID:-none}" > "$OUT/ids.txt"
+echo "SESSION=$SESSION KILLEDCTRL=${CTRL_PID:-none}" > "$OUT/ids.txt"
 echo "=== [$LABEL] done — artifacts in $OUT ==="

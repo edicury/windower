@@ -19,12 +19,12 @@ import {
 interface StubControlProcess {
   options: SpawnSidecarOptions;
   handle: SidecarHandle;
-  performInputCalls: unknown[];
+  resizeWindowCalls: unknown[];
   terminated: boolean;
   /** Simulates the process dying (`kill -9`) — the factory's `onExit` is what a real `SidecarProcess` fires. */
   die(): void;
-  /** When true, `performInput` hangs until `die()` — the genuine mid-call death. */
-  hangPerformInput: boolean;
+  /** When true, `resizeWindow` hangs until `die()` — the genuine mid-call death. */
+  hangResizeWindow: boolean;
 }
 
 /**
@@ -43,9 +43,9 @@ function createStubControlFactory(options?: {
     const record: StubControlProcess = {
       options: spawnOptions,
       handle: undefined as unknown as SidecarHandle,
-      performInputCalls: [],
+      resizeWindowCalls: [],
       terminated: false,
-      hangPerformInput: false,
+      hangResizeWindow: false,
       die: () => {
         dead = true;
         spawnOptions.onExit?.({ code: null, signal: "SIGKILL" });
@@ -62,24 +62,16 @@ function createStubControlFactory(options?: {
         return {
           version: "1.0.0",
           platform: "macos" as const,
-          capabilities: options?.capabilities ?? ["input.mouse", "input.keyboard", "resize"],
+          capabilities: options?.capabilities ?? ["resize"],
         };
       },
-      performInput: async (params: unknown) => {
+      resizeWindow: async (params: unknown) => {
         if (dead) throw new SidecarError("INTERNAL_ERROR", "Sidecar stream closed", -32000);
-        record.performInputCalls.push(params);
-        if (record.hangPerformInput) {
+        record.resizeWindowCalls.push(params);
+        if (record.hangResizeWindow) {
           return new Promise((_resolve, reject) => inFlight.push(reject));
         }
-        return { performed: 1 };
-      },
-      resizeWindow: async () => {
-        if (dead) throw new SidecarError("INTERNAL_ERROR", "Sidecar stream closed", -32000);
         return { bounds: { x: 0, y: 0, width: 10, height: 10 } };
-      },
-      enumerateElements: async () => {
-        if (dead) throw new SidecarError("INTERNAL_ERROR", "Sidecar stream closed", -32000);
-        return { elements: [], generation: "gen-1", truncated: false };
       },
     } as unknown as SidecarClient;
     record.handle = {
@@ -117,10 +109,13 @@ describe("ControlEngine", () => {
     const { spawnControl, spawned } = createStubControlFactory();
     const control = new ControlEngine({ spawnControl });
 
-    await control.performInput({ actions: [{ kind: "wait", durationMs: 1 }] });
     await control.resizeWindow({
       targetId: "window-1",
       bounds: { x: 0, y: 0, width: 10, height: 10 },
+    });
+    await control.resizeWindow({
+      targetId: "window-1",
+      bounds: { x: 0, y: 0, width: 20, height: 20 },
     });
 
     expect(spawned).toHaveLength(1);
@@ -133,24 +128,27 @@ describe("ControlEngine", () => {
     const control = new ControlEngine({ spawnControl });
 
     await Promise.all([
-      control.performInput({ actions: [{ kind: "wait", durationMs: 1 }] }),
-      control.performInput({ actions: [{ kind: "wait", durationMs: 1 }] }),
+      control.resizeWindow({ targetId: "window-1", bounds: { x: 0, y: 0, width: 10, height: 10 } }),
+      control.resizeWindow({ targetId: "window-1", bounds: { x: 0, y: 0, width: 10, height: 10 } }),
       control.capabilities(),
     ]);
 
     expect(spawned).toHaveLength(1);
   });
 
-  it("surfaces a clear error when the process dies mid-call and never silently replays the input", async () => {
+  it("surfaces a clear error when the process dies mid-call and never silently replays the request", async () => {
     const { spawnControl, spawned } = createStubControlFactory();
     const control = new ControlEngine({ spawnControl, onLog: () => {} });
-    await control.performInput({ actions: [{ kind: "wait", durationMs: 1 }] });
+    await control.resizeWindow({
+      targetId: "window-1",
+      bounds: { x: 0, y: 0, width: 10, height: 10 },
+    });
 
     const process0 = spawned[0];
     if (!process0) throw new Error("expected a spawned control process");
-    process0.hangPerformInput = true;
+    process0.hangResizeWindow = true;
     const pending = control
-      .performInput({ actions: [{ kind: "mouse_click", x: 1, y: 1, button: "left" }] })
+      .resizeWindow({ targetId: "window-1", bounds: { x: 0, y: 0, width: 30, height: 30 } })
       .catch((e) => e);
     await new Promise((resolve) => setTimeout(resolve, 1));
     process0.die(); // kill -9 mid-call
@@ -159,50 +157,37 @@ describe("ControlEngine", () => {
     // The call that was in flight against the dead process fails clearly...
     expect((err as { code?: string }).code).toBe("INTERNAL_ERROR");
     expect((err as Error).message).toMatch(/control surface process/i);
-    // ...and the half-delivered click is NOT replayed against a fresh
-    // process: `performInput` is not idempotent, so a clear error beats a
-    // silent double-click.
+    // ...and the half-delivered request is NOT replayed against a fresh
+    // process: a clear error beats a silent double-resize.
     expect(spawned).toHaveLength(1);
-    expect(process0.performInputCalls).toHaveLength(2);
+    expect(process0.resizeWindowCalls).toHaveLength(2);
   });
 
   it("restarts on demand after the process died", async () => {
     const { spawnControl, spawned } = createStubControlFactory();
     const control = new ControlEngine({ spawnControl, onLog: () => {} });
-    await control.performInput({ actions: [{ kind: "wait", durationMs: 1 }] });
+    await control.resizeWindow({
+      targetId: "window-1",
+      bounds: { x: 0, y: 0, width: 10, height: 10 },
+    });
 
     spawned[0]?.die();
     expect(control.isRunning).toBe(false);
 
-    await control.performInput({ actions: [{ kind: "wait", durationMs: 1 }] });
+    await control.resizeWindow({
+      targetId: "window-1",
+      bounds: { x: 0, y: 0, width: 10, height: 10 },
+    });
     expect(spawned).toHaveLength(2);
-    expect(spawned[1]?.performInputCalls).toHaveLength(1);
+    expect(spawned[1]?.resizeWindowCalls).toHaveLength(1);
     expect(control.isRunning).toBe(true);
   });
 
-  it("proxies enumerateElements through the control client, same process as performInput/resizeWindow", async () => {
-    const { spawnControl, spawned } = createStubControlFactory();
-    const control = new ControlEngine({ spawnControl });
-
-    const target = {
-      kind: "display" as const,
-      id: "display-1",
-      name: "Built-in",
-      bounds: { x: 0, y: 0, width: 1920, height: 1080 },
-      isPrimary: true,
-      scaleFactor: 1,
-    };
-    const result = await control.enumerateElements({ target });
-
-    expect(result).toEqual({ elements: [], generation: "gen-1", truncated: false });
-    expect(spawned).toHaveLength(1);
-  });
-
   it("gates on describe().capabilities, never on a platform string", async () => {
-    const { spawnControl } = createStubControlFactory({ capabilities: ["input.mouse"] });
+    const { spawnControl } = createStubControlFactory({ capabilities: ["resize"] });
     const control = new ControlEngine({ spawnControl });
 
-    await expect(control.requireCapability("input.mouse")).resolves.toBeUndefined();
+    await expect(control.requireCapability("resize")).resolves.toBeUndefined();
     await expect(control.requireCapability("input.keyboard")).rejects.toMatchObject({
       code: "UNSUPPORTED_CAPABILITY",
     });
@@ -225,7 +210,6 @@ describe("ControlEngine", () => {
     });
     const control = new ControlEngine({ spawnControl });
 
-    await control.performInput({ actions: [{ kind: "wait", durationMs: 1 }] });
     await control.resizeWindow({
       targetId: "window-1",
       bounds: { x: 0, y: 0, width: 10, height: 10 },
@@ -255,7 +239,10 @@ describe("ControlEngine", () => {
     const hold = await captureLock.acquireCaptureHold();
 
     const control = new ControlEngine({ spawnControl, onLog: () => {} });
-    await control.performInput({ actions: [{ kind: "wait", durationMs: 1 }] });
+    await control.resizeWindow({
+      targetId: "window-1",
+      bounds: { x: 0, y: 0, width: 10, height: 10 },
+    });
     spawned[0]?.die();
 
     // The recording's hold is still held, its capture child still alive.

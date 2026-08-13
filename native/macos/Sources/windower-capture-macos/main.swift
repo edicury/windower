@@ -58,22 +58,14 @@ let supportedCapabilities: [String] = [
     "eventTimeline.cursor",
     "eventTimeline.mouse",
     "eventTimeline.keyboard",
-    // Phase 19 (operator). Advertised statically for the same reason the
-    // eventTimeline.* entries are: `describe` is a one-shot handshake with no
-    // mechanism to report a per-call outcome. `screenshot` depends on the
-    // Screen Recording grant, which is reported truthfully by
-    // `getPermissions` and surfaces PERMISSION_DENIED per call when missing
-    // rather than being silently dropped from this list. `screenshot`
-    // additionally needs macOS 14+ (SCScreenshotManager); a 13.x host answers
-    // UNSUPPORTED_CAPABILITY at call time — except when frame sharing can
-    // serve the request off a live stream, which needs no SCScreenshotManager.
-    //
     // Phase 21: `input.mouse`/`input.keyboard`/`window-control` are NOT in
     // this list. They belong to `windower-control-macos`, and per
     // contracts/sidecar-protocol.md §Handshake each implementation reports
     // only its own capabilities — a caller holding both connections takes the
     // union.
-    "screenshot",
+    //
+    // Phase 24 removed `screenshot` (`captureFrame`) along with the Operator,
+    // its only caller (settled decision 2, tasks/phase-24-remove-operator.md).
 ]
 
 func logStderr(_ message: String) {
@@ -198,11 +190,6 @@ func handleRequest(id: JSONValue, method: String, params: JSONValue?) {
             let result = try CaptureSessionManager.shared.cancelCapture(params: decodedParams)
             resultValue = try JSONCodec.encode(result)
 
-        case "captureFrame":
-            let decodedParams = try decodeParams(CaptureFrameParams.self, from: params)
-            let result = try FrameCaptureService.captureFrame(params: decodedParams)
-            resultValue = try JSONCodec.encode(result)
-
         default:
             throw SidecarRpcError.unsupportedCapability("Unknown method: \(method)")
         }
@@ -236,13 +223,11 @@ func writeErrorResponse(id: JSONValue, error: SidecarRpcError) {
 
 // bugs.spec.md #6, "structural fix" session: `handleRequest` used to run
 // synchronously, inline, on this file's `readLine()` thread — the sidecar's
-// only thread servicing JSON-RPC. Two call sites reachable from it
-// (`EnumerationService.fetchShareableContent`, used by `enumerateTargets`
-// AND `captureFrame`; `FrameCaptureService`'s `SCScreenshotManager.captureImage`
-// bridge) can block for up to their configured timeout (8-10s) waiting on a
-// `SCShareableContent`/`SCScreenshotManager` completion handler that, per
+// only thread servicing JSON-RPC. `EnumerationService.fetchShareableContent`
+// (used by `enumerateTargets`) can block for up to its configured timeout
+// (8-10s) waiting on a `SCShareableContent` completion handler that, per
 // field evidence, can itself hang far longer while an `SCStream` is
-// concurrently live. A prior session bounded those waits so they fail
+// concurrently live. A prior session bounded that wait so it fails
 // instead of hanging forever, but as long as `handleRequest` ran inline here,
 // even a BOUNDED 8-10s stall meant `readLine()` could not read (let alone
 // service) any subsequent line for that whole window — e.g. a `stopCapture`
@@ -253,7 +238,7 @@ func writeErrorResponse(id: JSONValue, error: SidecarRpcError) {
 // Fix: `readLine()` keeps synchronously reading and framing lines (cheap,
 // never blocks on anything but stdin itself), but each REQUEST's actual
 // handling is dispatched onto `rpcQueue`, a concurrent background queue, so
-// a stalled `captureFrame`/`enumerateTargets` call never prevents the next
+// a stalled `enumerateTargets` call never prevents the next
 // line from being read, parsed, and (for an independent request) serviced
 // immediately. This is protocol-conformant, not a silent break of an
 // assumed request/response ordering: `packages/core/src/protocol/

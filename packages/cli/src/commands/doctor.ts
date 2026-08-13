@@ -1,5 +1,4 @@
 import {
-  type ApiKeyEnvVarReport,
   type CaptureLockReport,
   DAEMON_PROTOCOL_VERSION,
   type DaemonIdentity,
@@ -9,11 +8,9 @@ import {
   type SidecarReport,
   WINDOWER_HOME_ENV,
   connectToDaemon,
-  isTerminalOperatorRunState,
   packageVersion,
   readConfig,
   readDaemonState,
-  readRawConfig,
   spawnSidecar as realSpawnSidecar,
   resolveSidecarBinaryPathWithSource,
   windowerHome,
@@ -21,7 +18,6 @@ import {
 import {
   type CaptureHold,
   CaptureLock,
-  OperatorRunStore,
   ScreenCaptureBusyError,
   SessionStore,
   type SidecarFactory,
@@ -34,17 +30,6 @@ import { printResult } from "../output.js";
 
 /** `hello`/`daemon_info`'s `clientName` convention (`data-model.md`'s `DaemonHelloRequest` doc). */
 const CLIENT_NAME = "windower-cli";
-
-/**
- * Provider API-key env vars `doctor` always checks, per `contracts/cli.md`'s
- * `doctor` report shape. The user's configured `operator.apiKeyEnvVar` (from
- * `~/.windower/config.json`) is appended to this list, deduplicated, if set.
- */
-const DEFAULT_API_KEY_ENV_VARS = [
-  "ANTHROPIC_API_KEY",
-  "OPENAI_API_KEY",
-  "OPENAI_COMPATIBLE_API_KEY",
-];
 
 /**
  * Diagnostic view of `~/.windower/capture.lock`
@@ -104,12 +89,11 @@ export function registerDoctorCommand(program: Command): void {
  */
 export async function buildDoctorReport(options: DoctorProbeOptions = {}): Promise<DoctorReport> {
   const spawnSidecar = options.spawnSidecar ?? realSpawnSidecar;
-  const [capture, controlPermissions, daemon, config, rawConfig] = await Promise.all([
+  const [capture, controlPermissions, daemon, config] = await Promise.all([
     probeCaptureSurface(spawnSidecar, options.captureWaitMs),
     probeControlSurface(spawnSidecar),
     probeDaemon(),
     readConfig().catch(() => undefined),
-    readRawConfig().catch(() => undefined),
   ]);
   const sidecar = capture.sidecar;
 
@@ -134,12 +118,7 @@ export async function buildDoctorReport(options: DoctorProbeOptions = {}): Promi
     outputDirWritable = false;
   }
 
-  const [activeSessions, activeRuns] = await Promise.all([
-    countActiveSessions(),
-    countActiveRuns(),
-  ]);
-
-  const apiKeyEnvVars = buildApiKeyEnvVarsReport(rawConfig?.operator?.apiKeyEnvVar);
+  const activeSessions = await countActiveSessions();
 
   const report: DoctorReport = {
     // Merged capture + control view. `getPermissions` lives on BOTH surfaces
@@ -167,8 +146,6 @@ export async function buildDoctorReport(options: DoctorProbeOptions = {}): Promi
     windowerHome: windowerHomeReport,
     outputDir: { path: outputDirPath, writable: outputDirWritable },
     activeSessions,
-    activeRuns,
-    apiKeyEnvVars,
     captureLock: capture.lock,
   };
   return report;
@@ -381,47 +358,6 @@ async function countActiveSessions(): Promise<number> {
   }
 }
 
-async function countActiveRuns(): Promise<number> {
-  try {
-    const store = new OperatorRunStore();
-    const runs = await store.load();
-    return runs.filter((r) => !isTerminalOperatorRunState(r.state)).length;
-  } catch {
-    return 0;
-  }
-}
-
-/**
- * `presentInClient` is a direct `process.env` read on this CLI process —
- * always accurate. `presentInDaemon` is a known gap as of Phase 20: the
- * daemon's `hello`/`daemon_info` RPCs (`data-model.md`'s `DaemonInfo`) carry
- * identity only, not env-var presence — there is currently no RPC that lets
- * a probing client ask a running daemon "do you see env var X?" without
- * sending a `hello` env snapshot (which is opt-in, secret-carrying, and
- * deliberately never populated by a read-only command like `doctor`).
- * Rather than fabricate an answer, this reports `presentInDaemon: false`
- * whenever it cannot be verified live — which is honest ("we don't know" and
- * "not running" both collapse to `false` today) but means a real `true`
- * case in the daemon can currently only ever be under-reported, never
- * over-reported. Closing this gap needs a small new daemon-side capability
- * (e.g. a `presentEnvVars` field on `daemon_info`) — left as a follow-up,
- * not invented here since it would mean touching the frozen `DaemonInfo`
- * contract shape.
- */
-function buildApiKeyEnvVarsReport(
-  configuredApiKeyEnvVar: string | undefined,
-): ApiKeyEnvVarReport[] {
-  const names = [...DEFAULT_API_KEY_ENV_VARS];
-  if (configuredApiKeyEnvVar && !names.includes(configuredApiKeyEnvVar)) {
-    names.push(configuredApiKeyEnvVar);
-  }
-  return names.map((name) => ({
-    name,
-    presentInClient: Boolean(process.env[name]),
-    presentInDaemon: false,
-  }));
-}
-
 function checkbox(ok: boolean): string {
   return ok ? "[x]" : "[ ]";
 }
@@ -468,13 +404,9 @@ export function renderReport(report: DoctorReport): string {
       }`,
     );
   }
-  if (report.activeSessions !== undefined || report.activeRuns !== undefined) {
-    lines.push(
-      `  Active sessions: ${report.activeSessions ?? 0}, active operator runs: ${report.activeRuns ?? 0}`,
-    );
+  if (report.activeSessions !== undefined) {
+    lines.push(`  Active sessions: ${report.activeSessions ?? 0}`);
   }
-
-  renderApiKeySection(lines, report);
 
   return lines.join("\n");
 }
@@ -542,22 +474,4 @@ function renderCaptureLockSection(lines: string[], report: DoctorReport): void {
     "      Screen Recording, Microphone and the sidecar version could not be checked (unknown, not denied); " +
       "no second screen-capture process was started. Stop the holding recording and re-run `windower doctor`.",
   );
-}
-
-function renderApiKeySection(lines: string[], report: PermissionReport): void {
-  if (!report.apiKeyEnvVars || report.apiKeyEnvVars.length === 0) return;
-  lines.push("  API key env vars (presence only, values never shown):");
-  for (const entry of report.apiKeyEnvVars) {
-    lines.push(
-      `      ${entry.name}: present in CLI: ${entry.presentInClient ? "yes" : "no"} / ` +
-        `present in daemon: ${entry.presentInDaemon ? "yes" : "no"}`,
-    );
-  }
-  if (report.daemonRunning) {
-    lines.push(
-      '      note: "present in daemon" cannot currently be verified live (no RPC exposes env-var ' +
-        'presence) and is reported as "no" whenever unverified — a real `yes` in the daemon can be ' +
-        "under-reported here, never over-reported.",
-    );
-  }
 }

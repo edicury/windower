@@ -37,10 +37,11 @@ public struct TimelineEventWire: Codable, Equatable {
     public let y: Double?
     public let button: String?
     public let key: String?
-    /// Phase 19 — `"user"` (real human input) or `"operator"` (input this
-    /// sidecar synthesized via `performInput`, identified by the
-    /// `WindowerEventTag.magic` stamp on the event's `eventSourceUserData`).
-    /// Optional in the schema; always populated by this backend.
+    /// Phase 24 — always `"user"` (`WindowerEventTag.userSource`); there is
+    /// no synthesized-input path left to distinguish from real human input
+    /// (see `WindowerEventTag`'s doc comment). Optional in the schema for
+    /// backward-compat with older `.events.json` files; always populated by
+    /// this backend.
     public let source: String?
 
     public init(t: Double, type: String, x: Double? = nil, y: Double? = nil, button: String? = nil, key: String? = nil, source: String? = nil) {
@@ -374,7 +375,7 @@ public final class EventTapSource {
         let location = event.location
         let scaleFactor = scaleFactorResolver(location)
         let pixels = EventCoordinateConversion.toPixels(location, scaleFactor: scaleFactor)
-        let source = Self.source(for: event)
+        let source = WindowerEventTag.userSource
 
         switch type {
         case .mouseMoved:
@@ -402,7 +403,7 @@ public final class EventTapSource {
     private func handleKeyEvent(type: CGEventType, event: CGEvent) {
         let nowMs = Date().timeIntervalSince(startedAt) * 1000
         let key = Self.keyDescription(for: event)
-        let source = Self.source(for: event)
+        let source = WindowerEventTag.userSource
         switch type {
         case .keyDown:
             emitEvent(.key(t: nowMs, type: "key_down", key: key, source: source))
@@ -411,17 +412,6 @@ public final class EventTapSource {
         default:
             break
         }
-    }
-
-    /// Phase 19 — attribute a tapped event to the human or to the operator
-    /// loop. `InputSynthesisService` stamps `WindowerEventTag.magic` onto
-    /// `.eventSourceUserData` for every event it posts; anything else (real
-    /// hardware input, or another process's synthetic input) reads as
-    /// `"user"`. The tap itself stays `.listenOnly` — synthesis posts on a
-    /// completely separate path (`CGEventPost`), it never re-injects through
-    /// this tap.
-    static func source(for event: CGEvent) -> String {
-        WindowerEventTag.source(forUserData: event.getIntegerValueField(.eventSourceUserData))
     }
 
     /// Best-effort key description (phase-10 explicitly does not require a

@@ -1,14 +1,19 @@
 #!/bin/bash
 # Phase 21 live verification — concurrent-load stress variant.
-# Caller-driven recipe (start -> detached operate -> poll -> stop) with a
-# synthetic burst of daemon-routed `windower targets` calls layered on top,
-# while sampling capture-sidecar process count every 2s.
-# Usage: stress-run.sh <run-label>
+# A recording, with a synthetic burst of daemon-routed `windower targets`
+# calls layered on top (the transient-capture-process pattern that caused
+# the original bugs.spec.md #6 conflict), plus a background synthetic-input
+# load generator (osascript/System Events against TextEdit) standing in for
+# what `windower operate` used to drive — there is no Windower operator
+# anymore, see CLAUDE.md. Samples capture-sidecar process count every 2s
+# throughout.
+# Usage: stress-run.sh <run-label> [duration-seconds]
 set -uo pipefail
 
 REPO=/Users/edicury/Documents/Development/windower
 SCRATCH=/private/tmp/claude-501/-Users-edicury-Documents-Development-windower/1e7cd64a-71fd-4a25-96ca-b53181c9776e/scratchpad
 LABEL="${1:-stress}"
+DURATION="${2:-180}"
 OUT="$SCRATCH/$LABEL"
 rm -rf "$OUT"; mkdir -p "$OUT"
 
@@ -16,13 +21,11 @@ cd "$REPO"
 set -a; . ./.env; set +a
 W="node $REPO/packages/cli/dist/index.js"
 
-TASK='Open Safari and navigate to waroom.co. Use Finder to open the Applications folder and launch Safari from there if it is not already running. Once the page has loaded, you are done.'
-
 SESSION=""
-RUNID=""
 STOPPED=0
 BURST_PID=""
 SAMPLE_PID=""
+LOAD_PID=""
 
 check() { echo "CHECK $1: $2 $3"; }
 
@@ -32,9 +35,29 @@ let v;try{v=eval(process.argv[2])}catch(e){v=""}
 console.log(v===undefined||v===null?"":(typeof v==="object"?JSON.stringify(v):v))' "$1" "$2"
 }
 
+start_synthetic_load() {
+  (
+    osascript -e 'tell application "TextEdit" to activate' >/dev/null 2>&1
+    osascript -e 'tell application "TextEdit" to make new document' >/dev/null 2>&1
+    sleep 1
+    n=0
+    while :; do
+      n=$((n+1))
+      osascript -e "tell application \"System Events\" to keystroke \"line $n \"" >/dev/null 2>&1
+      sleep 1
+    done
+  ) &
+  echo $!
+}
+stop_synthetic_load() {
+  [ -n "$1" ] && kill "$1" 2>/dev/null
+  osascript -e 'tell application "TextEdit" to quit saving no' >/dev/null 2>&1
+}
+
 cleanup() {
   [ -n "$BURST_PID" ] && kill "$BURST_PID" 2>/dev/null
   [ -n "$SAMPLE_PID" ] && kill "$SAMPLE_PID" 2>/dev/null
+  stop_synthetic_load "$LOAD_PID"
   if [ -n "$SESSION" ] && [ "$STOPPED" -eq 0 ]; then
     echo "=== [$LABEL] TRAP cleanup: stopping recording $SESSION ==="
     $W stop "$SESSION" --json > "$OUT/stop-trap.json" 2>&1
@@ -55,7 +78,7 @@ if [ -z "$SESSION" ]; then
 fi
 check start_recording "PASS" "sessionId=$SESSION"
 
-echo "############ [$LABEL] LAUNCH BURST + SAMPLER ############"
+echo "############ [$LABEL] LAUNCH BURST + SAMPLER + SYNTHETIC LOAD ############"
 # Synthetic burst: daemon-routed list_targets every ~2s for the whole run.
 BURST_LOG="$OUT/burst.log"
 : > "$BURST_LOG"
@@ -91,36 +114,22 @@ ANOMALY_LOG="$OUT/capture-anomalies.log"
 ) &
 SAMPLE_PID=$!
 
-echo "burstPid=$BURST_PID samplerPid=$SAMPLE_PID"
+LOAD_PID=$(start_synthetic_load)
+echo "burstPid=$BURST_PID samplerPid=$SAMPLE_PID loadPid=$LOAD_PID"
 
-echo "############ [$LABEL] START DETACHED OPERATOR RUN ############"
-$W operate "$TASK" --target 5 --kind display --model anthropic:claude-sonnet-5 --max-steps 30 --detach --json > "$OUT/operate.json" 2>"$OUT/operate.err"
-RUNID=$(jget "$OUT/operate.json" 'd.runId')
-echo "runId=$RUNID"
-if [ -z "$RUNID" ]; then
-  check operator_started "FAIL" "no runId; see $OUT/operate.err"
-  exit 1
-fi
-check operator_started "PASS" "runId=$RUNID"
-
-echo "############ [$LABEL] POLL OPERATOR RUN ############"
-STATE=pending
-for i in $(seq 1 180); do
-  sleep 5
-  $W operate status "$RUNID" --json > "$OUT/run-poll.json" 2>/dev/null
-  STATE=$(jget "$OUT/run-poll.json" 'd.state')
-  STEPS=$(jget "$OUT/run-poll.json" '(d.steps||[]).length')
-  MAXNOW=$(sort -k2 -n "$SAMPLE_LOG" 2>/dev/null | tail -1 | awk '{print $2}')
-  echo "  t=$((i*5))s state=${STATE:-?} steps=${STEPS:-?} maxCaptureProcsSoFar=${MAXNOW:-?}"
-  case "$STATE" in
-    succeeded|failed|aborted|timed_out) cp "$OUT/run-poll.json" "$OUT/run-final.json"; break;;
-  esac
+echo "############ [$LABEL] HOLD FOR ${DURATION}s ############"
+for i in $(seq 1 "$DURATION"); do
+  sleep 1
+  if [ $((i % 15)) -eq 0 ]; then
+    MAXNOW=$(sort -k2 -n "$SAMPLE_LOG" 2>/dev/null | tail -1 | awk '{print $2}')
+    echo "  t=${i}s maxCaptureProcsSoFar=${MAXNOW:-?}"
+  fi
 done
-[ -f "$OUT/run-final.json" ] || cp "$OUT/run-poll.json" "$OUT/run-final.json"
 
-echo "############ [$LABEL] STOP BURST + SAMPLER ############"
+echo "############ [$LABEL] STOP BURST + SAMPLER + SYNTHETIC LOAD ############"
 kill "$BURST_PID" 2>/dev/null; BURST_PID=""
 kill "$SAMPLE_PID" 2>/dev/null; SAMPLE_PID=""
+stop_synthetic_load "$LOAD_PID"; LOAD_PID=""
 sleep 1
 
 echo "############ [$LABEL] STOP RECORDING ############"
@@ -151,9 +160,6 @@ SSTATE=$(jget "$OUT/session.json" 'd.state')
 STARTED=$(jget "$OUT/session.json" 'd.startedAt')
 ENDED=$(jget "$OUT/session.json" 'd.stoppedAt')
 WALL=$(node -e 'const a=Date.parse(process.argv[1]),b=Date.parse(process.argv[2]);console.log(isNaN(a)||isNaN(b)?"":b-a)' "$STARTED" "$ENDED")
-FSTEPS=$(jget "$OUT/run-final.json" '(d.steps||[]).length')
-FSTATE=$(jget "$OUT/run-final.json" 'd.state')
-FERR=$(jget "$OUT/run-final.json" 'd.error && (d.error.code||d.error)')
 
 echo
 echo "############ [$LABEL] CHECKS ############"
@@ -161,10 +167,6 @@ echo "############ [$LABEL] CHECKS ############"
   || check single_capture_sidecar "FAIL" "max concurrent windower-capture-macos = $MAXPROC (see $ANOMALY_LOG)"
 [ "$BURST_FAIL" = "0" ] && check burst_calls_all_ok "PASS" "$BURST_TOTAL burst targets calls, 0 failures" \
   || check burst_calls_all_ok "FAIL" "$BURST_FAIL/$BURST_TOTAL burst targets calls failed"
-case "$FSTATE" in
-  succeeded|failed|aborted|timed_out) check operator_terminal "PASS" "state=$FSTATE steps=$FSTEPS error=${FERR:-none}";;
-  *) check operator_terminal "FAIL" "state=${FSTATE:-?} steps=${FSTEPS:-?} (did not reach terminal state)";;
-esac
 [ -n "$OUTPATH" ] && [ -f "$OUTPATH" ] && check video_exists "PASS" "$OUTPATH ($(wc -c < "$OUTPATH" | tr -d ' ') bytes)" \
   || check video_exists "FAIL" "outputPath=${OUTPATH:-none}"
 [ -n "$MANPATH" ] && [ -f "$MANPATH" ] && check manifest_exists "PASS" "$MANPATH" || check manifest_exists "FAIL" "manifestPath=${MANPATH:-none}"
@@ -180,9 +182,9 @@ else
 fi
 
 echo "############ [$LABEL] FINAL HYGIENE ############"
-ps -eo pid,ppid,command | grep -E "[w]indower-(capture|control)-macos|[l]oop-entry.js" || echo "(no sidecars/loop children — good)"
-LEFT=$(ps -eo pid,command | grep -cE "[w]indower-(capture|control)-macos|[l]oop-entry.js")
-[ "$LEFT" = "0" ] && check no_orphans "PASS" "no capture/control/loop processes left" || check no_orphans "FAIL" "$LEFT process(es) left behind"
+ps -eo pid,ppid,command | grep -E "[w]indower-(capture|control)-macos" || echo "(no sidecars — good)"
+LEFT=$(ps -eo pid,command | grep -cE "[w]indower-(capture|control)-macos")
+[ "$LEFT" = "0" ] && check no_orphans "PASS" "no capture/control processes left" || check no_orphans "FAIL" "$LEFT process(es) left behind"
 
-echo "SESSION=$SESSION RUNID=$RUNID STATE=$FSTATE MAXCAPTURE=$MAXPROC BURST=$BURST_TOTAL BURSTFAIL=$BURST_FAIL" > "$OUT/ids.txt"
+echo "SESSION=$SESSION MAXCAPTURE=$MAXPROC BURST=$BURST_TOTAL BURSTFAIL=$BURST_FAIL" > "$OUT/ids.txt"
 echo "=== [$LABEL] done — artifacts in $OUT ==="

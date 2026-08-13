@@ -16,7 +16,6 @@ import { DAEMON_PROTOCOL_VERSION } from "./protocol.js";
 import type { DaemonHelloEnv, DaemonHelloRequest, DaemonHelloResult } from "./protocol.js";
 import { clearDaemonState, readDaemonState } from "./state-file.js";
 import { clearSidecarPids, readSidecarPids } from "./sidecar-pids.js";
-import { isTerminalOperatorRunState } from "../schemas/operator.js";
 
 /** Env var override for the daemon entrypoint, mirrors `WINDOWER_SIDECAR_BINARY_PATH`. */
 export const DAEMON_BIN_PATH_ENV = "WINDOWER_DAEMON_BIN_PATH";
@@ -138,11 +137,8 @@ export interface EnsureDaemonRunningOptions {
   windowerHomeOverride?: string;
   /**
    * Scoped env snapshot for `hello` — OPT IN per call, never sent by
-   * default. Per `contracts/daemon-rpc.md`'s `env` scoping rules: only the
-   * model's configured API-key var plus any `env:`-sourced `SecretRef`s
-   * explicitly named in the current command. Blocking `operate` (this
-   * repo's default path) never populates this; only `operate --detach` and
-   * MCP's `run_operator` do. Never logged.
+   * default. Per `contracts/daemon-rpc.md`'s `env` scoping rules. Never
+   * logged.
    */
   env?: DaemonHelloEnv;
   /**
@@ -157,44 +153,27 @@ export interface EnsureDaemonRunningOptions {
 interface SafetyCheck {
   safe: boolean;
   activeSessionIds: string[];
-  activeRunIds: string[];
 }
 
 /**
- * `list_sessions({state:"recording"})` + `list_operator_runs` (filtered to
- * non-terminal states) — the safety check `contracts/daemon-rpc.md`
- * requires before an automatic version-mismatch restart or a `windower
- * daemon restart` (without `--force`).
+ * `list_sessions({state:"recording"})` — the safety check
+ * `contracts/daemon-rpc.md` requires before an automatic version-mismatch
+ * restart or a `windower daemon restart` (without `--force`).
  */
 async function checkSafeToRestart(client: DaemonClient): Promise<SafetyCheck> {
-  const [sessionsResult, runsResult] = await Promise.all([
-    client.listSessions({ state: "recording" }),
-    client.listOperatorRuns({}),
-  ]);
+  const sessionsResult = await client.listSessions({ state: "recording" });
   const activeSessionIds = sessionsResult.sessions.map((s) => s.id);
-  const activeRunIds = runsResult.runs
-    .filter((r) => !isTerminalOperatorRunState(r.state))
-    .map((r) => r.id);
   return {
-    safe: activeSessionIds.length === 0 && activeRunIds.length === 0,
+    safe: activeSessionIds.length === 0,
     activeSessionIds,
-    activeRunIds,
   };
 }
 
 function busyMessage(safety: SafetyCheck, context: string): string {
-  const parts: string[] = [];
-  if (safety.activeSessionIds.length > 0) {
-    parts.push(`recording session(s) ${safety.activeSessionIds.join(", ")}`);
-  }
-  if (safety.activeRunIds.length > 0) {
-    parts.push(`operator run(s) ${safety.activeRunIds.join(", ")}`);
-  }
-  const active = parts.join(" and ");
+  const active = `recording session(s) ${safety.activeSessionIds.join(", ")}`;
   return (
-    `${context} — ${active} still active. Run "windower stop <id>" / ` +
-    `"windower operate abort <runId>" to clear it and retry, or ` +
-    `"windower daemon restart --force" to override.`
+    `${context} — ${active} still active. Run "windower stop <id>" ` +
+    `to clear it and retry, or "windower daemon restart --force" to override.`
   );
 }
 

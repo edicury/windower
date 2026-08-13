@@ -6,14 +6,19 @@
 > both must be signed and notarized — `scripts/codesign-notarize.sh` handles
 > one binary per invocation and the `codesign` npm script calls it twice.
 
-**Status: UNVERIFIED.** This scaffolding (`scripts/codesign-notarize.sh` +
-the `codesign` npm script) has never been run against a real Developer ID
-certificate or App Store Connect API key in this repo. No such credentials
-exist in this sandbox/dev environment. Treat this as a documented, believed
-correct implementation that still needs a first real run (ideally in CI with
-secrets, or manually by someone holding an Apple Developer account) before
-Phase 14's exit criteria ("sidecar binary is codesigned + notarized") can be
-marked done.
+**Status: wired into CI, still awaiting its first real run.** This
+scaffolding (`scripts/codesign-notarize.sh` + the `codesign` npm script) is
+now called for real by `native/macos/scripts/ci-build-and-sign.sh`, which
+Phase 23 wired into `.github/workflows/release.yml` (Job 1 — build + sign +
+notarize). No real macOS codesigning identity or Apple credentials have been
+exercised against it in *this* environment either, so this is not a claim
+that it now works end-to-end — only that the plumbing from "release
+triggered" to "this script runs with real secrets" now exists. Treat this as
+a documented, believed correct implementation that still needs its first
+real CI run against production secrets (`DEVELOPER_ID_CERT_P12`,
+`NOTARY_API_KEY_P8`, etc. — see the secrets table below) to confirm
+end-to-end before Phase 14's exit criteria ("sidecar binary is codesigned +
+notarized") can be marked done.
 
 ## Why this is needed
 
@@ -36,6 +41,16 @@ manual steps**, so each shipped sidecar binary must be:
 | `NOTARY_API_KEY_ID` | App Store Connect API key ID (short alphanumeric string shown when you create the key). |
 | `NOTARY_API_ISSUER_ID` | App Store Connect API issuer ID (a UUID, shared across all your keys). |
 | `NOTARY_API_KEY_PATH` | Filesystem path to the downloaded `.p8` private key file for the API key. |
+
+`NOTARY_API_KEY_PATH` is a **local filesystem path** and is the right shape
+for running the script by hand or from a machine that already has the `.p8`
+file on disk. CI has no persistent filesystem to keep a `.p8` file on, so
+`ci-build-and-sign.sh` instead takes a base64-encoded secret,
+`NOTARY_API_KEY_P8`, decodes it to a tempfile at job runtime, and sets
+`NOTARY_API_KEY_PATH` to point at that tempfile before calling this script —
+this script itself is unchanged either way, it always just wants a working
+`NOTARY_API_KEY_PATH`. Keep using `NOTARY_API_KEY_PATH` directly for local/
+manual runs; use `NOTARY_API_KEY_P8` only when adding or editing CI secrets.
 
 This uses **App Store Connect API key authentication** for `notarytool`
 (`--key`/`--key-id`/`--issuer`), not the deprecated Apple ID + app-specific
@@ -108,7 +123,16 @@ The script:
 3. Zips the binary (`ditto`) since `notarytool submit` requires a
    zip/dmg/pkg, not a bare executable.
 4. `xcrun notarytool submit ... --wait` (blocks until Apple's notarization
-   service returns Accepted/Invalid — can take a few minutes).
+   service returns Accepted/Invalid). **Turnaround varies a lot and "a few
+   minutes" is optimistic — plan for worse.** Observed range: ~45 minutes
+   for a first-ever submission from a given account/session, dropping to
+   under 2 minutes for a second binary submitted immediately after in the
+   same session. There's no visible signal ahead of time for which regime
+   you're in. Because of this, `ci-build-and-sign.sh`'s CI job step budgets
+   **60+ minutes** rather than a tight timeout, and relies on `notarytool
+   --wait`'s own internal polling rather than a hand-rolled poll loop on
+   top of it. If you're running this locally and it seems to hang, this is
+   almost certainly why — let it run rather than assuming it's stuck.
 5. `xcrun stapler staple <binary>` — best-effort; stapling a ticket directly
    onto a loose (non-bundled) Mach-O executable is not guaranteed to work
    the same way it does for `.app`/`.pkg`/`.dmg` since there's no resource
@@ -122,31 +146,51 @@ The script:
 
 ## How this fits into the release pipeline
 
-There is currently **no release/publish workflow** in this repo —
-`.github/workflows/ci.yml` only runs lint/typecheck/build/test on every push
-and PR to `main`, and does not build a distributable artifact. There is
-nothing to wire live secrets into yet, and no real Apple credentials exist to
-test this script against in this environment.
-
-When a release workflow is added (per Phase 14's npm-packaging bullets —
-`@windower/sidecar-macos-arm64`/`-x64` optional-dependency packages), the
-intended slot for this step is:
+There is now a real release workflow: `.github/workflows/release.yml`,
+triggered by a git tag push matching `v*` or a manual `workflow_dispatch`.
+It runs three jobs:
 
 ```
-swift build -c release   # per architecture (arm64 native; x64 via cross/Rosetta CI runner or a second job)
-  -> npm run codesign     # this script; requires the 4 secrets below in the job env
-  -> package the signed, notarized binary into @windower/sidecar-macos-<arch>
-  -> npm publish
+Job 1 — build + sign + notarize (runs-on: macos-14, timeout >= 60 minutes)
+  swift build -c release for arm64 (native) and an x64 build/cross-compile attempt
+  -> import DEVELOPER_ID_CERT_P12 into a temporary CI keychain
+  -> native/macos/scripts/ci-build-and-sign.sh
+       (wraps this script — scripts/codesign-notarize.sh — per binary/arch)
+  -> copy signed binaries into packages/sidecar-macos-{arm64,x64}/bin/
+
+Job 2 — sidecar permissions regression check
+  scripts/release/check-sidecar-permissions.sh
+  packs each sidecar package and asserts the shipped bin/ entries are
+  executable, so a repeat of the @windower/core@0.1.3 chmod bug fails the
+  build before anything publishes
+
+Job 3 — version bump + dependency-graph-ordered publish (gated on 1-2)
+  node scripts/release/release.mjs bump
+  node scripts/release/release.mjs publish
+  publishes core -> (engine, engine-narration) -> daemon -> cli
+  -> mcp-server -> (sidecar-macos-arm64, sidecar-macos-x64), authenticated
+  via NPM_TOKEN, hard-stopping (never retrying) on an "already exists"
+  registry error
 ```
 
-Suggested (not yet configured) GitHub Actions secrets for that future job:
-`DEVELOPER_ID_APPLICATION`, `NOTARY_API_KEY_ID`, `NOTARY_API_ISSUER_ID`, and
-a base64'd `NOTARY_API_KEY_P8` (decoded to a temp file at job start to
-populate `NOTARY_API_KEY_PATH`), plus a base64'd `DEVELOPER_ID_CERT_P12` +
-`DEVELOPER_ID_CERT_PASSWORD` to import the signing certificate into a
-temporary CI keychain. None of this is wired into `ci.yml` — deliberately
-left as a future addition once real credentials exist, rather than adding
-secret references that would just fail or be no-ops today.
+Versioning/publish ordering uses a custom script
+(`scripts/release/{graph,lib,bump,publish,release}.mjs`), not `changesets` —
+changesets' changelog-per-package/release-PR model didn't fit this repo's
+binary-artifact sidecar packages well (a rebuilt binary isn't a diffable
+change), so a small script that knows the exact 9-package dependency graph
+was built instead.
+
+## GitHub Actions secrets used by `release.yml`
+
+| Secret | Purpose |
+|---|---|
+| `DEVELOPER_ID_APPLICATION` | Same codesigning identity string as the local env var above. |
+| `NOTARY_API_KEY_ID` | Same App Store Connect API key ID as the local env var above. |
+| `NOTARY_API_ISSUER_ID` | Same App Store Connect API issuer ID as the local env var above. |
+| `NOTARY_API_KEY_P8` | Base64-encoded contents of the `.p8` notarization key. `ci-build-and-sign.sh` decodes this to a tempfile and points `NOTARY_API_KEY_PATH` at it — the CI counterpart of the local, file-path-based `NOTARY_API_KEY_PATH` above. |
+| `DEVELOPER_ID_CERT_P12` | Base64-encoded `.p12` export (certificate + private key) of the Developer ID Application identity. Imported into a temporary CI keychain at job start (`security create-keychain` / `security import`), per the standard GitHub Actions macOS codesigning pattern. |
+| `DEVELOPER_ID_CERT_PASSWORD` | The export password used when the `.p12` above was created. Required to import it into the temporary keychain. |
+| `NPM_TOKEN` | An npm **Automation**-type access token (bypasses interactive OTP/webauthn, which every manual `pnpm publish` this project has done so far required). Consumed by `scripts/release/publish.mjs` for Job 3's publish steps. |
 
 ## Verifying a signed/notarized binary manually
 

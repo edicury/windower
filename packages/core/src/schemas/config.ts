@@ -1,6 +1,5 @@
 import { z } from "zod";
 import { AudioSettingsSchema } from "./audio-settings.js";
-import { ModelConfigSchema, OperatorGuardrailsSchema } from "./operator.js";
 import { VideoSettingsSchema } from "./video-settings.js";
 
 /**
@@ -24,24 +23,5 @@ export const WindowerConfigSchema = z.object({
   daemonIdleTimeoutMs: z.number().positive().optional(),
   defaultVideo: VideoSettingsSchema.partial().optional(),
   defaultAudio: AudioSettingsSchema.partial().optional(),
-  /** Phase 19 — operator defaults, see data-model.md §WindowerConfig. */
-  operator: z
-    .object({
-      defaultModel: ModelConfigSchema.optional(),
-      /**
-       * Phase 22 — per-tier config defaults (data-model.md §WindowerConfig).
-       * Resolution order per tier, highest precedence first: the explicit
-       * flag (`--planner-model`/`--executor-model`) → the tier's own config
-       * default here → `--model`/`defaultModel` → error. The executor
-       * additionally falls back to the resolved planner, which is what makes
-       * a single `--model`/`defaultModel` run identical to a pre-Phase-22 run.
-       */
-      defaultPlannerModel: ModelConfigSchema.optional(),
-      defaultExecutorModel: ModelConfigSchema.optional(),
-      apiKeyEnvVar: z.string().optional(),
-      baseUrl: z.string().optional(),
-      guardrailDefaults: OperatorGuardrailsSchema.optional(),
-    })
-    .optional(),
 });
 export type WindowerConfig = z.infer<typeof WindowerConfigSchema>;

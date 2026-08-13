@@ -1,7 +1,6 @@
 import {
   DaemonError,
   type ResolvedWindowerConfig,
-  type WindowerConfig,
   WindowerConfigSchema,
   readConfig,
   readRawConfig,
@@ -22,12 +21,6 @@ const TOP_LEVEL_KEYS = [
   "daemonIdleTimeoutMs",
   "defaultVideo",
   "defaultAudio",
-  // Phase 19: contracts/operator.md — "Defaults (provider, model, base URL,
-  // guardrail values) live in a new `operator` block of WindowerConfig,
-  // read/written via the existing `windower config get|set` command".
-  // Written as one JSON object (no dotted sub-paths), e.g.
-  //   windower config set operator '{"defaultModel":{"provider":"anthropic","model":"claude-sonnet-5"}}'
-  "operator",
 ] as const;
 type TopLevelKey = (typeof TOP_LEVEL_KEYS)[number];
 
@@ -53,12 +46,8 @@ export interface ConfigGetResult {
   value: unknown;
 }
 
-/**
- * The view `config get` reads from: `readConfig()`'s defaulted view plus the
- * raw `operator` block, which has no universal default and so isn't part of
- * `ResolvedWindowerConfig`.
- */
-export type ConfigGetView = ResolvedWindowerConfig & Pick<WindowerConfig, "operator">;
+/** The view `config get` reads from: `readConfig()`'s defaulted view. */
+export type ConfigGetView = ResolvedWindowerConfig;
 
 /** Looks up `key` (must be a known top-level `WindowerConfig` field) in `config`. Throws `INVALID_ARGS` for unknown keys. */
 export function getConfigValue(config: ConfigGetView, key: string): ConfigGetResult {
@@ -159,8 +148,8 @@ export function registerConfigCommand(program: Command): void {
     .action(async (key: string, opts: { json?: boolean }) => {
       const json = Boolean(opts.json);
       try {
-        const [resolved, raw] = await Promise.all([readConfig(), readRawConfig()]);
-        const result = getConfigValue({ ...resolved, operator: raw.operator }, key);
+        const resolved = await readConfig();
+        const result = getConfigValue(resolved, key);
         printResult(json, result, renderConfigGetResult);
       } catch (err) {
         process.exitCode = printError(json, err);

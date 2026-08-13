@@ -82,8 +82,8 @@ export class SessionStore {
 
   /**
    * Synchronous single-session refresh, used by `get()`/`list()` so they stay
-   * sync (every caller in `RecordingEngine`/`OperatorRunEngine` calls them
-   * synchronously) while still picking up another process's writes. Uses
+   * sync (every caller in `RecordingEngine` calls them synchronously) while
+   * still picking up another process's writes. Uses
    * `statSync`/`readFileSync` rather than the async `refresh()` above, which
    * is reserved for `load()`'s full-directory scan at startup.
    */

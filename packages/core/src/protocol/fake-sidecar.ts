@@ -6,14 +6,8 @@ import { Duplex, PassThrough } from "node:stream";
 import type { CaptureTarget } from "../schemas/capture-target.js";
 import { TimelineEventSchema } from "../schemas/event-timeline.js";
 import type { TimelineEvent } from "../schemas/event-timeline.js";
-import {
-  type InputAction,
-  type InputActionKind,
-  inputActionCoordinates,
-} from "../schemas/input-action.js";
 import type { PermissionReport } from "../schemas/permissions.js";
 import type { Rect } from "../schemas/rect.js";
-import type { UIElement } from "../schemas/ui-element.js";
 import type { SidecarErrorCode } from "./errors.js";
 import { type JsonRpcId, JsonRpcLineSchema, classifyJsonRpcLine } from "./jsonrpc.js";
 import {
@@ -23,7 +17,6 @@ import {
   type SidecarMethod,
   type SidecarMethodMap,
   type SidecarNotificationMap,
-  requiredCapabilityForInputAction,
 } from "./methods.js";
 import { SidecarClient } from "./sidecar-client.js";
 
@@ -75,25 +68,6 @@ export interface FakeSidecarOptions {
   capabilities?: Capability[];
   targets?: CaptureTarget[];
   permissions?: Partial<PermissionReport>;
-  /**
-   * Phase 19: the fake "displays" `performInput` bounds-checks against. Any
-   * coordinate outside every rect here yields `INPUT_OUT_OF_BOUNDS`.
-   */
-  displayBounds?: Rect[];
-  /**
-   * Phase 19: action kinds this backend advertises but cannot synthesize —
-   * requesting one yields `INPUT_UNSUPPORTED`. (Distinct from dropping
-   * `input.mouse`/`input.keyboard` from `capabilities`, which yields
-   * `UNSUPPORTED_CAPABILITY`.)
-   */
-  unsupportedInputKinds?: InputActionKind[];
-  /**
-   * Phase 22: the fixture `enumerateElements` serves for a fresh walk (no
-   * `refs`). Seeds the fake's first "generation" — see `setElements` to
-   * simulate a subsequent walk (e.g. after the target window moved), which
-   * is what exercises `AX_ELEMENT_STALE` recovery in tests.
-   */
-  elements?: UIElement[];
 }
 
 interface FakeSession {
@@ -116,21 +90,7 @@ const DEFAULT_CAPABILITIES: Capability[] = [
   "eventTimeline.cursor",
   "eventTimeline.mouse",
   "eventTimeline.keyboard",
-  "input.mouse",
-  "input.keyboard",
-  "screenshot",
-  "ui.elements",
 ];
-
-const DEFAULT_DISPLAY_BOUNDS: Rect[] = [{ x: 0, y: 0, width: 1920, height: 1080 }];
-
-/**
- * A real, minimal 1x1 PNG — `captureFrame` must return something that actually
- * base64-decodes to a valid image so consumers (and the operator loop's
- * vision pipeline) can be exercised end-to-end against the fake.
- */
-const TINY_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
 export class FakeSidecar {
   private readonly stream: Duplex;
@@ -140,21 +100,6 @@ export class FakeSidecar {
   private readonly targets: CaptureTarget[];
   private readonly permissions: Partial<PermissionReport>;
   private readonly sessions = new Map<string, FakeSession>();
-  private readonly displayBounds: Rect[];
-  private readonly unsupportedInputKinds: Set<InputActionKind>;
-  private readonly performedInputs: InputAction[] = [];
-  private readonly capturedFrames: SidecarMethodMap["captureFrame"]["params"][] = [];
-  /**
-   * Phase 22 — `enumerateElements` fixture state. Mirrors the native backend's
-   * "retain at most the two most recent generations" rule
-   * (`ElementQuery.swift`): `elements`/`generation` are the current walk,
-   * `previousElements`/`previousGeneration` the one before it. A `refs`
-   * lookup against a ref that resolves in neither is `AX_ELEMENT_STALE`.
-   */
-  private elements: UIElement[];
-  private generation: string;
-  private previousElements: UIElement[] = [];
-  private nextGeneration = 1;
 
   constructor(stream: Duplex, options: FakeSidecarOptions = {}) {
     this.stream = stream;
@@ -169,10 +114,6 @@ export class FakeSidecar {
       daemonRunning: true,
       sidecarAvailable: true,
     };
-    this.displayBounds = options.displayBounds ?? DEFAULT_DISPLAY_BOUNDS;
-    this.unsupportedInputKinds = new Set(options.unsupportedInputKinds ?? []);
-    this.elements = options.elements ?? [];
-    this.generation = `gen-${this.nextGeneration++}`;
 
     const rl = createInterface({ input: stream, terminal: false });
     rl.on("line", (line) => this.handleLine(line));
@@ -183,44 +124,6 @@ export class FakeSidecar {
     // Parse so the `source` default ("user") is applied exactly as a real
     // sidecar's serialized event would be on the daemon side.
     this.sendNotification("event", { sessionId, event: TimelineEventSchema.parse(event) });
-  }
-
-  /**
-   * Test hook: every `InputAction` this sidecar has performed, in order.
-   * Actions from a call that threw are **not** recorded (the fake validates the
-   * whole batch before performing any of it, same as a real backend's single
-   * capability check per `performInput` call).
-   */
-  get performed(): readonly InputAction[] {
-    return this.performedInputs;
-  }
-
-  /** Test hook: every `captureFrame` request this sidecar has served, in order. */
-  get frameCaptures(): readonly SidecarMethodMap["captureFrame"]["params"][] {
-    return this.capturedFrames;
-  }
-
-  /** Test hook: drop recorded `performInput`/`captureFrame` history. */
-  clearRecordedCalls(): void {
-    this.performedInputs.length = 0;
-    this.capturedFrames.length = 0;
-  }
-
-  /**
-   * Test hook (Phase 22): replaces the `enumerateElements` fixture, minting a
-   * new generation and retaining the previous one — simulates a target window
-   * moving/resizing/re-rendering between an observation and a later `refs`
-   * re-resolve, which is what makes `AX_ELEMENT_STALE` recovery testable.
-   */
-  setElements(elements: UIElement[]): void {
-    this.previousElements = this.elements;
-    this.elements = elements;
-    this.generation = `gen-${this.nextGeneration++}`;
-  }
-
-  /** Test hook: the current `enumerateElements` generation id. */
-  get elementGeneration(): string {
-    return this.generation;
   }
 
   emitLog(payload: SidecarNotificationMap["log"]): void {
@@ -299,12 +202,6 @@ export class FakeSidecar {
         return this.stopCapture(params as SidecarMethodMap["stopCapture"]["params"]);
       case "cancelCapture":
         return this.cancelCapture(params as SidecarMethodMap["cancelCapture"]["params"]);
-      case "performInput":
-        return this.performInput(params as SidecarMethodMap["performInput"]["params"]);
-      case "captureFrame":
-        return this.captureFrame(params as SidecarMethodMap["captureFrame"]["params"]);
-      case "enumerateElements":
-        return this.enumerateElements(params as SidecarMethodMap["enumerateElements"]["params"]);
       default:
         throw new FakeSidecarError("UNSUPPORTED_CAPABILITY", `Unhandled method "${method}"`);
     }
@@ -425,140 +322,6 @@ export class FakeSidecar {
     }
     this.sessions.delete(params.sessionId);
     return { canceled: true };
-  }
-
-  /**
-   * `performInput` — validates the whole batch (permission → capability → kind
-   * support → bounds) *before* performing any of it, so a rejected call is
-   * atomic and leaves no partial input behind.
-   */
-  private performInput(
-    params: SidecarMethodMap["performInput"]["params"],
-  ): SidecarMethodMap["performInput"]["result"] {
-    // CGEventPost-equivalents are gated on Accessibility on macOS; other
-    // backends gate their own equivalent — the sidecar reports it through the
-    // same `accessibility` field, so this stays platform-agnostic here.
-    if (this.permissions.accessibility === "denied") {
-      throw new FakeSidecarError("PERMISSION_DENIED", "Accessibility permission not granted");
-    }
-    if (params.sessionId !== undefined && !this.sessions.has(params.sessionId)) {
-      throw new FakeSidecarError("SESSION_NOT_FOUND", `No session "${params.sessionId}"`);
-    }
-
-    for (const action of params.actions) {
-      const capability = requiredCapabilityForInputAction(action.kind);
-      if (capability && !this.hasCapability(capability)) {
-        throw new FakeSidecarError(
-          "UNSUPPORTED_CAPABILITY",
-          `Backend does not support ${capability}`,
-        );
-      }
-      if (this.unsupportedInputKinds.has(action.kind)) {
-        throw new FakeSidecarError(
-          "INPUT_UNSUPPORTED",
-          `Backend cannot synthesize input kind "${action.kind}"`,
-        );
-      }
-      for (const { x, y } of inputActionCoordinates(action)) {
-        if (!this.isWithinAnyDisplay(x, y)) {
-          throw new FakeSidecarError(
-            "INPUT_OUT_OF_BOUNDS",
-            `Coordinate (${x}, ${y}) is outside every known display`,
-          );
-        }
-      }
-    }
-
-    this.performedInputs.push(...params.actions);
-    return { performed: params.actions.length };
-  }
-
-  private isWithinAnyDisplay(x: number, y: number): boolean {
-    return this.displayBounds.some(
-      (b) => x >= b.x && x <= b.x + b.width && y >= b.y && y <= b.y + b.height,
-    );
-  }
-
-  /**
-   * `captureFrame` — returns a real (1x1) PNG so callers can base64-decode it.
-   * Reported `width`/`height` follow the target's bounds, downscaled to
-   * `maxWidth` when given, mirroring a real backend's contract; the pixel data
-   * itself is deliberately trivial.
-   */
-  private captureFrame(
-    params: SidecarMethodMap["captureFrame"]["params"],
-  ): SidecarMethodMap["captureFrame"]["result"] {
-    if (this.permissions.screenRecording === "denied") {
-      throw new FakeSidecarError("PERMISSION_DENIED", "Screen Recording permission not granted");
-    }
-    if (!this.hasCapability("screenshot")) {
-      throw new FakeSidecarError("UNSUPPORTED_CAPABILITY", "Backend does not support screenshot");
-    }
-
-    const { bounds } = params.target;
-    const scale = params.target.kind === "display" ? params.target.scaleFactor : 1;
-    let width = Math.max(1, Math.round(bounds.width));
-    let height = Math.max(1, Math.round(bounds.height));
-    if (params.maxWidth !== undefined && width > params.maxWidth) {
-      const ratio = params.maxWidth / width;
-      width = Math.max(1, Math.round(width * ratio));
-      height = Math.max(1, Math.round(height * ratio));
-    }
-
-    this.capturedFrames.push(params);
-    return { imageBase64: TINY_PNG_BASE64, width, height, scale };
-  }
-
-  /**
-   * `enumerateElements` (Phase 22) — control-surface, capture-free. Serves
-   * the injected fixture (`FakeSidecarOptions.elements` / `setElements`).
-   * Gated on Accessibility, same as `performInput`/`resizeWindow`
-   * (contracts/sidecar-protocol.md §Platform notes: same TCC grant,
-   * no new permission kind).
-   */
-  private enumerateElements(
-    params: SidecarMethodMap["enumerateElements"]["params"],
-  ): SidecarMethodMap["enumerateElements"]["result"] {
-    if (this.permissions.accessibility === "denied") {
-      throw new FakeSidecarError("PERMISSION_DENIED", "Accessibility permission not granted");
-    }
-    if (!this.hasCapability("ui.elements")) {
-      throw new FakeSidecarError("UNSUPPORTED_CAPABILITY", "Backend does not support ui.elements");
-    }
-
-    if (params.refs !== undefined) {
-      const resolved: UIElement[] = [];
-      for (const ref of params.refs) {
-        const found =
-          this.elements.find((e) => e.ref === ref) ??
-          this.previousElements.find((e) => e.ref === ref);
-        if (!found) {
-          throw new FakeSidecarError(
-            "AX_ELEMENT_STALE",
-            `Element ref "${ref}" no longer resolves to a live element`,
-          );
-        }
-        resolved.push(found);
-      }
-      return { elements: resolved, generation: this.generation, truncated: false };
-    }
-
-    const filter = params.filter ?? "interactable";
-    let filtered =
-      filter === "all"
-        ? this.elements
-        : this.elements.filter(
-            (e) => (e.actions !== undefined && e.actions.length > 0) || Boolean(e.label),
-          );
-
-    const maxElements = params.maxElements ?? 200;
-    let truncated = false;
-    if (filtered.length > maxElements) {
-      filtered = filtered.slice(0, maxElements);
-      truncated = true;
-    }
-
-    return { elements: filtered, generation: this.generation, truncated };
   }
 
   private sendResult(id: JsonRpcId, method: SidecarMethod, result: unknown): void {
