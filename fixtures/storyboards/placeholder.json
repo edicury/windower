@@ -1,0 +1,12 @@
+{
+  "title": "Placeholder",
+  "approved": false,
+  "scenes": [
+    {
+      "id": "s1",
+      "type": "title",
+      "headline": "Hello",
+      "narration": "Hello from the placeholder storyboard."
+    }
+  ]
+}

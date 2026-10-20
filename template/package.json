@@ -1,0 +1,26 @@
+{
+  "name": "windower-template",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "prepare-video": "node scripts/prepare.mjs",
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts Explainer",
+    "render:hello": "remotion render src/index.ts Hello out/hello.mp4"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.537",
+    "@remotion/transitions": "^4.0.537",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "remotion": "^4.0.537",
+    "shiki": "^4.5.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

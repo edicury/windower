@@ -1,0 +1,11 @@
+{
+  "name": "windower",
+  "owner": {"name": "edicury"},
+  "plugins": [
+    {
+      "name": "windower",
+      "source": "./",
+      "description": "Turn a slice of a software system into a short captioned explainer video (Remotion, optional ElevenLabs narration)."
+    }
+  ]
+}
