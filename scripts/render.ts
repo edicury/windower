@@ -7,7 +7,16 @@ import {pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
 import {UNAPPROVED_WARNING, approvalProblem} from './approval.js';
 import {buildCues, toSrt, toVtt} from './captions.js';
-import {EXIT, TEMPLATE, findFreePort, isPortFree, nodeMajor, propsProblem} from './lib.js';
+import {
+  EXIT,
+  TEMPLATE,
+  findFreePort,
+  isPortFree,
+  nodeMajor,
+  propsProblem,
+  saveShellToSharedCache,
+  sharedBrowserExecutable,
+} from './lib.js';
 
 export const RENDER_USAGE =
   'Usage: render <run-dir> [--still <sceneId>] [--out <dir>] [--port N] [--crf N] [--concurrency N] [--allow-unapproved]\n' +
@@ -55,14 +64,23 @@ async function pickPort(requested?: string): Promise<number> {
 /** Runs remotion, keeping the stderr tail for the failure message; retries once (transient fast-start failure). */
 function runRemotion(args: string[]): {ok: boolean; tail: string} {
   let tail = '';
+  const shared = sharedBrowserExecutable(); // reuse a Headless Shell downloaded by an earlier install
+  const browser = shared ? [`--browser-executable=${shared}`] : [];
   for (let attempt = 1; attempt <= 2; attempt++) {
-    const r = spawnSync('pnpm', ['exec', 'remotion', ...args], {
+    const r = spawnSync('pnpm', ['exec', 'remotion', ...args, ...browser], {
       cwd: TEMPLATE,
       stdio: ['ignore', 'inherit', 'pipe'],
       encoding: 'utf8',
     });
     if (r.stderr) process.stderr.write(r.stderr);
-    if (r.status === 0) return {ok: true, tail: ''};
+    if (r.status === 0) {
+      try {
+        saveShellToSharedCache();
+      } catch {
+        // the shared cache is an optimisation; never fail a render over it
+      }
+      return {ok: true, tail: ''};
+    }
     tail = (r.stderr ?? '').trim().split('\n').slice(-12).join('\n');
     if (attempt === 1) console.error('Render failed; retrying once.');
   }

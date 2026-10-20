@@ -92,7 +92,7 @@ async function runChecks(): Promise<CheckResult[]> {
       'headless-shell',
       'warn',
       'Headless Shell not cached',
-      'The first render downloads ~171 MB and needs network.',
+      'The first render downloads ~171 MB (one time; later installs reuse ~/.cache/windower) and needs network.',
     );
 
   // 6, 7 run dir

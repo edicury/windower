@@ -1,5 +1,14 @@
 import {spawnSync} from 'node:child_process';
-import {existsSync, readFileSync, readdirSync, statSync, statfsSync} from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  statfsSync,
+} from 'node:fs';
+import os from 'node:os';
 import net from 'node:net';
 import path from 'node:path';
 
@@ -66,10 +75,51 @@ export function hasBinary(name: string): boolean {
   return spawnSync(name, ['-version'], {stdio: 'ignore'}).status === 0;
 }
 
+const SHELL_BIN = 'chrome-headless-shell';
+
+/** Shared cache so a new plugin install (new node_modules) reuses the downloaded Headless Shell. */
+export function sharedShellDir(): string {
+  const base = process.env.WINDOWER_BROWSER_CACHE ?? path.join(os.homedir(), '.cache', 'windower');
+  return path.join(base, SHELL_BIN);
+}
+
+function localShellDirs(): string[] {
+  return [TEMPLATE, ROOT].map((b) => path.join(b, 'node_modules', '.remotion', SHELL_BIN));
+}
+
+/** Finds the headless shell executable inside a Remotion cache directory, if present. */
+export function findShellExecutable(dir: string): string | undefined {
+  if (!existsSync(dir)) return undefined;
+  const walk = (d: string, depth: number): string | undefined => {
+    for (const e of readdirSync(d, {withFileTypes: true})) {
+      const full = path.join(d, e.name);
+      if (e.isFile() && e.name === SHELL_BIN) return full;
+      if (e.isDirectory() && depth < 4) {
+        const hit = walk(full, depth + 1);
+        if (hit) return hit;
+      }
+    }
+    return undefined;
+  };
+  return walk(dir, 0);
+}
+
 export function headlessShellCached(): boolean {
-  return [TEMPLATE, ROOT].some((base) =>
-    existsSync(path.join(base, 'node_modules', '.remotion', 'chrome-headless-shell')),
-  );
+  return [...localShellDirs(), sharedShellDir()].some((d) => findShellExecutable(d) !== undefined);
+}
+
+/** Executable to pass as --browser-executable when only the shared cache has the shell; otherwise Remotion's own cache is used. */
+export function sharedBrowserExecutable(): string | undefined {
+  if (localShellDirs().some((d) => findShellExecutable(d))) return undefined;
+  return findShellExecutable(sharedShellDir());
+}
+
+/** After a render, keeps a copy of a freshly downloaded shell in the shared cache. */
+export function saveShellToSharedCache(): void {
+  const local = localShellDirs().find((d) => findShellExecutable(d));
+  if (!local || findShellExecutable(sharedShellDir())) return;
+  mkdirSync(path.dirname(sharedShellDir()), {recursive: true});
+  cpSync(local, sharedShellDir(), {recursive: true});
 }
 
 export function freeDiskGb(dir: string): number {
