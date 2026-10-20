@@ -17,10 +17,15 @@ import {
   nodeMajor,
   propsProblem,
 } from './lib.js';
+import {loadConfig} from './tts/config.js';
+import {providerChecks} from './tts/doctorChecks.js';
 
 const {values} = parseArgs({
   options: {
     voice: {type: 'boolean', default: false},
+    provider: {type: 'string'},
+    'no-voice': {type: 'boolean', default: false},
+    repo: {type: 'string'},
     'run-dir': {type: 'string'},
     port: {type: 'string', default: '3000'},
     json: {type: 'boolean', default: false},
@@ -122,21 +127,32 @@ async function runChecks(): Promise<CheckResult[]> {
     else add(7, 'props', 'pass', 'props.json is present and fresh');
   }
 
-  // 8 voice
-  if (values.voice) {
-    const problems: string[] = [];
-    if (!process.env.ELEVENLABS_API_KEY) problems.push('ELEVENLABS_API_KEY is not set');
-    if (!existsSync(path.join(TEMPLATE, 'public', 'audio')))
-      problems.push('template/public/audio is missing');
-    if (problems.length)
-      add(
-        8,
-        'voice',
-        'fail',
-        problems.join('; '),
-        'Export ELEVENLABS_API_KEY and create template/public/audio.',
-      );
-    else add(8, 'voice', 'pass', 'ELEVENLABS_API_KEY is set; public/audio exists');
+  // 8 voice: per-provider checks. Run with --voice, --provider <id> or --no-voice.
+  if (values.voice || values.provider || values['no-voice']) {
+    let config: {provider?: string} = {};
+    let root = values.repo;
+    if (!root && values['run-dir']) {
+      try {
+        const sb = JSON.parse(
+          readFileSync(path.join(values['run-dir'], 'storyboard.json'), 'utf8'),
+        );
+        if (typeof sb.repoRoot === 'string') root = path.resolve(values['run-dir'], sb.repoRoot);
+      } catch {
+        // no storyboard yet
+      }
+    }
+    if (root) {
+      try {
+        config = loadConfig(path.resolve(root));
+      } catch (e) {
+        add(8, 'config', 'fail', (e as Error).message);
+      }
+    }
+    const sel = providerChecks(
+      {flag: values.provider, noVoice: values['no-voice'], config},
+      {env: process.env, hasBinary},
+    );
+    for (const c of sel.checks) add(8, `voice:${c.name}`, c.level, c.message, c.fix);
   }
 
   // 9 disk

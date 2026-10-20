@@ -50,6 +50,36 @@ describe('buildSummary', () => {
     expect(s.costNote).not.toMatch(/\$|USD/);
   });
 
+  it('shows provider source, egress, approval note; piper has no cost', () => {
+    const s = buildSummary(raw, validation, {provider: 'openai', providerSource: 'env'});
+    const text = renderSummary(s);
+    expect(s.providerSource).toBe('env');
+    expect(text).toContain('chosen by env');
+    expect(text).toContain('Egress: narration text is sent to OpenAI');
+    expect(text).toContain('Nothing is sent to any service until you approve');
+    const p = buildSummary(raw, validation, {provider: 'piper', providerSource: 'flag'});
+    expect(p.costNote).toContain('no cost');
+    expect(p.egress).toContain('nothing leaves');
+  });
+
+  it('warns when voiced estimate x1.15 exceeds 120 s, never for silent', () => {
+    const base = raw as {scenes: {narration?: string}[]};
+    const mk = (n: number) => ({
+      ...base,
+      scenes: base.scenes.map((x) => ({...x, narration: Array(n).fill('word').join(' ')})),
+    });
+    const long = mk(40);
+    const short = mk(10);
+    expect(
+      buildSummary(short, validation, {provider: 'elevenlabs'}).voicedLengthWarning,
+    ).toBeUndefined();
+    const s = buildSummary(long, validation, {provider: 'elevenlabs'});
+    expect(s.totalSec).toBeGreaterThan(104.5);
+    expect(s.totalSec).toBeLessThanOrEqual(120);
+    expect(s.voicedLengthWarning).toContain('15% longer');
+    expect(buildSummary(long, validation).voicedLengthWarning).toBeUndefined();
+  });
+
   it('names MCP servers from the brief', () => {
     const brief =
       '## Sources consulted\n- code: used\n- Notion: used\n- Linear: absent\n\nsee [mcp:sentry issue]';

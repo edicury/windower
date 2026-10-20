@@ -6,6 +6,7 @@ import {parseArgs} from 'node:util';
 import {FPS, TRANSITION_FRAMES} from '../template/src/theme.js';
 import type {Caption} from '../template/src/types.js';
 import {EXIT} from './lib.js';
+import {readSynthFile, synthProblem, synthTimingOf, type SynthFile} from './tts/synthfile.js';
 
 export const WORDS_PER_SECOND = 2.9;
 export const PAD_S = 0.9;
@@ -71,10 +72,42 @@ export function captionsFor(narration: string, wps = WORDS_PER_SECOND): Caption[
   });
 }
 
-export function computeTiming(scenes: TimedInput[], opts: {wps?: number} = {}): Timing {
+/** Per-scene synthesis result consumed by voiced timing. `audio` is the composition's staticFile path. */
+export interface SynthTiming {
+  durationSec: number;
+  audio: string | null;
+  words: {text: string; startMs: number; endMs: number}[];
+}
+
+/** Captions from provider word times, clamped inside the scene (estimated providers included). */
+export function captionsFromWords(words: SynthTiming['words'], durationMs: number): Caption[] {
+  return words.map((w) => {
+    const startMs = Math.min(Math.max(Math.round(w.startMs), 0), durationMs);
+    const endMs = Math.min(Math.max(Math.round(w.endMs), startMs), durationMs);
+    return {
+      text: w.text,
+      startMs,
+      endMs,
+      timestampMs: Math.round((startMs + endMs) / 2),
+      confidence: null,
+    };
+  });
+}
+
+export function computeTiming(
+  scenes: TimedInput[],
+  opts: {wps?: number; synth?: Record<string, SynthTiming>} = {},
+): Timing {
   let cursor = 0;
+  let voiced = false;
   const out: TimingScene[] = scenes.map((s, i) => {
-    const durationFrames = Math.round(sceneSeconds(s, opts.wps) * FPS);
+    const syn = opts.synth?.[s.id];
+    if (opts.synth && !syn) throw new Error(`synth.json has no entry for scene ${s.id}`);
+    if (syn?.audio) voiced = true;
+    const seconds = syn
+      ? Math.max(syn.durationSec, s.minDurationSec ?? MIN_SCENE_S)
+      : sceneSeconds(s, opts.wps);
+    const durationFrames = Math.round(seconds * FPS);
     const transition = i === 0 ? 'none' : (s.transition ?? 'fade');
     const startFrame = i === 0 ? 0 : cursor - overlapFrames(transition);
     cursor = startFrame + durationFrames;
@@ -83,14 +116,16 @@ export function computeTiming(scenes: TimedInput[], opts: {wps?: number} = {}): 
       startFrame,
       durationFrames,
       transition,
-      audio: null,
-      captions: captionsFor(s.narration, opts.wps),
+      audio: syn ? syn.audio : null,
+      captions: syn
+        ? captionsFromWords(syn.words, Math.round((durationFrames / FPS) * 1000))
+        : captionsFor(s.narration, opts.wps),
     };
   });
   return {
     version: 1,
     fps: FPS,
-    mode: 'silent',
+    mode: voiced ? 'voiced' : 'silent',
     transitionFrames: TRANSITION_FRAMES,
     scenes: out,
     totalFrames: out.length ? cursor : 0,
@@ -113,7 +148,11 @@ export function checkTotal(timing: Timing): RangeVerdict {
   if (sec > HARD_RANGE_S[1])
     return {
       level: 'error',
-      message: `total length ${sec.toFixed(1)} s is above ${HARD_RANGE_S[1]} s; trim narration in the longest scenes: ${longest}`,
+      message:
+        `total length ${sec.toFixed(1)} s is above ${HARD_RANGE_S[1]} s; trim narration in the longest scenes: ${longest}` +
+        (timing.mode === 'voiced'
+          ? ' (voiced narration runs about 15% longer than the reading-speed estimate)'
+          : ''),
     };
   if (sec < HARD_RANGE_S[0])
     return {
@@ -138,8 +177,6 @@ function main(): void {
     console.error('Usage: timing <storyboard.json> [--synth synth.json]');
     process.exit(EXIT.validation);
   }
-  if (values.synth)
-    console.error('--synth is not supported before phase 5; using reading-speed timing.');
   if (!existsSync(file)) {
     console.error(`storyboard not found: ${file}`);
     process.exit(EXIT.validation);
@@ -157,7 +194,22 @@ function main(): void {
     );
     process.exit(EXIT.validation);
   }
-  const timing = computeTiming(sb.scenes);
+  const synthFile = values.synth ?? path.join(path.dirname(path.resolve(file)), 'synth.json');
+  let synth: SynthFile | undefined;
+  if (values.synth || existsSync(synthFile)) {
+    try {
+      synth = readSynthFile(synthFile);
+    } catch (e) {
+      console.error((e as Error).message);
+      process.exit(EXIT.validation);
+    }
+    const bad = synthProblem(synth, sb.scenes);
+    if (bad) {
+      console.error(bad);
+      process.exit(EXIT.validation);
+    }
+  }
+  const timing = computeTiming(sb.scenes, synth ? {synth: synthTimingOf(synth)} : {});
   const verdict = checkTotal(timing);
   if (verdict.level === 'error') {
     console.error(verdict.message);

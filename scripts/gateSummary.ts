@@ -1,5 +1,6 @@
 // Pure helpers for the approval gate (FR-SB-04, FR-SEC-03): summary, disclosures, approval edit.
 import {countWords} from '../template/src/schema.js';
+import {PROVIDER_META} from './tts/providers.js';
 import {TARGET_RANGE_S, checkTotal, computeTiming} from './timing.js';
 import type {ValidationResult} from './validate-storyboard.js';
 
@@ -10,23 +11,26 @@ export interface ProviderInfo {
   egress: string;
 }
 
-/** Mirrors contracts/tts-provider.md §1.1; the real registry (scripts/tts/providers.ts) lands in phase 5. */
-export const PROVIDERS: Record<string, ProviderInfo> = {
-  null: {id: 'null', voiced: false, implemented: true, egress: 'nothing leaves the machine'},
-  piper: {id: 'piper', voiced: false, implemented: false, egress: 'nothing leaves the machine'},
-  elevenlabs: {
-    id: 'elevenlabs',
-    voiced: true,
-    implemented: false,
-    egress: 'narration text is sent to ElevenLabs',
-  },
-  openai: {
-    id: 'openai',
-    voiced: true,
-    implemented: false,
-    egress: 'narration text is sent to OpenAI',
-  },
+/** Derived from the TTS registry (scripts/tts/providers.ts). `voiced` here means narration text leaves the machine. */
+export const PROVIDERS: Record<string, ProviderInfo> = Object.fromEntries(
+  Object.values(PROVIDER_META).map((m) => [
+    m.id,
+    {
+      id: m.id,
+      voiced: m.voiced && !m.egress.startsWith('nothing'),
+      implemented: m.implemented,
+      egress: m.egress,
+    },
+  ]),
+);
+
+const CREDIT_MODEL: Record<string, string> = {
+  elevenlabs: 'ElevenLabs bills credits per character; the rate depends on your plan and model',
+  openai: 'OpenAI bills per input token/character by model; the rate depends on your account',
 };
+
+/** Voiced narration runs about 15% longer than the reading-speed estimate (contract section 7). */
+export const VOICED_GROWTH = 1.15;
 
 export interface SceneRow {
   id: string;
@@ -34,6 +38,8 @@ export interface SceneRow {
   title: string;
   durationSec: number;
 }
+
+import type {ResolvedVoice} from './tts/voice.js';
 
 export interface GateSummary {
   title: string;
@@ -51,7 +57,16 @@ export interface GateSummary {
   narrationChars: number;
   narrationWords: number;
   provider: string;
+  /** Why this provider was chosen: flag, no-voice, config, env or default. */
+  providerSource: string;
+  /** Voice and model with their origin; null when the provider is null (silent). */
+  voice: ResolvedVoice | null;
+  egress: string;
+  /** Set when a voiced run would likely exceed the 120 s ceiling. */
+  voicedLengthWarning?: string;
   costNote: string;
+  /** Always states that nothing is sent before approval. */
+  approvalNote: string;
   disclosures: {service: string; receives: string}[];
   mcpServers: string[];
   /** External sources whose data entered the brief (4.C.2). */
@@ -143,7 +158,12 @@ export function mcpServersFromBrief(briefText: string | undefined): string[] {
 export function buildSummary(
   raw: unknown,
   validation: ValidationResult,
-  opts: {briefText?: string; provider?: string} = {},
+  opts: {
+    briefText?: string;
+    provider?: string;
+    providerSource?: string;
+    voice?: ResolvedVoice;
+  } = {},
 ): GateSummary {
   const sb: Loose = isObj(raw) ? raw : {};
   const scenesRaw = Array.isArray(sb.scenes) ? sb.scenes.filter(isObj) : [];
@@ -203,9 +223,18 @@ export function buildSummary(
       receives: 'already queried while gathering context for brief.md; no further data is sent',
     });
 
+  const local = !info?.voiced && providerId !== 'null' && info?.id === providerId;
   const costNote = info?.voiced
-    ? `${narrationChars} characters billed by ${providerId}; rate depends on your plan and model (no price hardcoded)`
-    : `silent, 0 characters billed (provider: ${providerId})`;
+    ? `${narrationChars} characters billed by ${providerId}; ${CREDIT_MODEL[providerId] ?? 'rate depends on your plan and model'} (no price hardcoded)`
+    : local
+      ? `no cost, runs locally (${providerId}); ${narrationChars} characters synthesized`
+      : `silent, 0 characters billed (provider: ${providerId})`;
+  const egress = info?.egress ?? 'unknown provider; assume narration text is sent';
+  const voiced = providerId !== 'null';
+  const voicedLengthWarning =
+    voiced && totalSec * VOICED_GROWTH > TARGET_RANGE_S[1]
+      ? `voiced narration runs about 15% longer than the silent estimate: ${totalSec.toFixed(1)} s -> ~${(totalSec * VOICED_GROWTH).toFixed(1)} s, over the ${TARGET_RANGE_S[1]} s ceiling; consider trimming narration`
+      : undefined;
 
   return {
     title: typeof sb.title === 'string' ? sb.title : '',
@@ -223,7 +252,12 @@ export function buildSummary(
     narrationChars,
     narrationWords,
     provider: providerId,
+    providerSource: opts.providerSource ?? (opts.provider ? 'flag' : 'default'),
+    voice: providerId === 'null' ? null : (opts.voice ?? null),
+    egress,
+    ...(voicedLengthWarning ? {voicedLengthWarning} : {}),
     costNote,
+    approvalNote: 'Nothing is sent to any service until you approve.',
     disclosures,
     mcpServers,
     externalSources: mcpServers.map((server) => ({server, status: 'used' as const})),
@@ -252,7 +286,15 @@ export function renderSummary(s: GateSummary): string {
     `Length: ${s.totalSec.toFixed(1)} s estimated (target ${s.target.minSec}-${s.target.maxSec} s): ${s.lengthVerdict}`,
     `Sources: ${s.sourceRefs} citations across scenes (${s.uniqueSources} unique)`,
     `Narration: ${s.narrationWords} words, ${s.narrationChars} characters`,
-    `Voice: ${s.costNote}`,
+    `Voice: ${s.provider} (chosen by ${s.providerSource}); ${s.costNote}`,
+    ...(s.voice
+      ? [
+          `Voice id: ${s.voice.voiceId} (${s.voice.voiceSource}); model: ${s.voice.modelId} (${s.voice.modelSource})`,
+        ]
+      : []),
+    `Egress: ${s.egress}`,
+    ...(s.voicedLengthWarning ? [`Length warning: ${s.voicedLengthWarning}`] : []),
+    s.approvalNote,
     '',
     'Data disclosure:',
   );

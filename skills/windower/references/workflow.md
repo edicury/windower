@@ -13,8 +13,10 @@ pnpm --silent --dir "$WINDOWER" ve:status "$RUN"
 Run once per machine and after any render failure. Before the storyboard and props exist, omit `--run-dir` (with it, the `storyboard` and `props` checks report FAIL and exit 3 for a run that is simply not that far yet; only the Node/ffmpeg/node_modules checks matter at this point):
 
 ```sh
-pnpm --silent --dir "$WINDOWER" ve:doctor --run-dir "$RUN"
+pnpm --silent --dir "$WINDOWER" ve:doctor --run-dir "$RUN" [--provider <id>] [--no-voice]
 ```
+
+With `--provider`, `--no-voice` or `--voice`, doctor also reports the selected TTS provider and why, whether its env key is set (never the value), the piper binary/model (`PIPER_BIN`, `PIPER_MODEL`), ffprobe for estimated-timing providers, and the egress statement. A missing key is a warning pointing to `--no-voice`, a failure only when that provider was requested with `--provider`.
 
 Exit 3 means a hard failure (Node < 18, no ffmpeg/ffprobe, missing `node_modules`); each failed check prints a fix. Warnings (port 3000 busy, first render downloads about 171 MB, low disk) do not block; the render wrapper picks a free port itself.
 
@@ -123,23 +125,35 @@ Add `--json` for machine-readable `{severity, sceneId, path, rule, message}` fin
 pnpm --silent --dir "$WINDOWER" ve:gate "$RUN" --no-voice      # summary on stderr
 ```
 
-v1 renders silent captioned video: use `--no-voice` unless the user asked for a voiced provider with `--provider <id>`. Show the user the scene list, the estimated length against the 60-120 s target, citation count, narration word count, TTS characters billed, and the data disclosure (only narration text goes to a TTS provider; MCP servers whose content entered the brief are named, plus URL hosts and skipped servers; relay this external-sources list to the user). Then stop and wait. After an explicit approval:
+The provider is resolved in this order: `--no-voice` (silent), `--provider <id>`, `provider` in the repo's `.windower.json`, then env auto-detect (`ELEVENLABS_API_KEY`, then `OPENAI_API_KEY`), else silent. The summary shows the chosen provider and why. Present the choice (elevenlabs, openai, piper, or silent) and pass `--provider <id>` / `--no-voice` only when the user picks.
+
+Voice and model resolve as `--voice <id>` / `--model <id>`, then `voice` / `model` in `.windower.json`, then the provider default; the summary shows each with its source. The voice is part of what the user approves. If they want another (or the provider is elevenlabs and they have not chosen and ask), list the account's voices and offer a short list:
 
 ```sh
-pnpm --silent --dir "$WINDOWER" ve:gate "$RUN" --approve --no-voice
+pnpm --silent --dir "$WINDOWER" ve:voices --json [--provider elevenlabs] [--search "warm"]   # name, id, category, description
+pnpm --silent --dir "$WINDOWER" ve:gate "$RUN" --provider elevenlabs --voice <id> [--model <id>]
+```
+
+Offer 3-5 by name with descriptions, then pass the chosen id as `--voice` to both `ve:gate` and `ve:synth`, or suggest persisting it as `voice` in `.windower.json` (an id, never a key). Changing voice or model changes the cache key and bills again.
+
+Show the user the scene list, the estimated length against the 60-120 s target (voiced narration runs about 15% longer; the gate warns when that passes 120 s), citation count, narration word count, characters billed with the provider's credit model (no price is hardcoded; piper and silent cost nothing), the per-provider egress statement (only narration text goes to a TTS provider; piper sends nothing), and the data disclosure (MCP servers whose content entered the brief are named, plus URL hosts and skipped servers; relay this external-sources list). The gate states that nothing is sent until approval. Then stop and wait. After an explicit approval:
+
+```sh
+pnpm --silent --dir "$WINDOWER" ve:gate "$RUN" --approve
 ```
 
 `--approve` writes `"approved": true` and `approvedAt` into storyboard.json, and refuses (exit 2) when validation fails.
 
-## 8. Timing, prepare, render
+## 8. Timing, synth, prepare, render
 
 ```sh
 pnpm --silent --dir "$WINDOWER" ve:timing  "$RUN/storyboard.json"
+pnpm --silent --dir "$WINDOWER" ve:synth   "$RUN" [--provider <id>] [--voice <id>] [--model <id>] [--no-voice]   # writes synth.json
 pnpm --silent --dir "$WINDOWER" ve:prepare "$RUN/storyboard.json"
 pnpm --silent --dir "$WINDOWER" ve:render  "$RUN"
 ```
 
-`ve:prepare` also writes `timing.json`, so `ve:timing` is only needed to check length early. Preview one scene with `ve:render "$RUN" --still s03` (writes `out/still-s03.png`; the frame is taken mid-scene, so reveal animations may be partial and the caption bar shows a fragment, which is expected). `ve:render` selects a free port, writes `out/video.mp4`, `out/captions.srt`, `out/captions.vtt`, and takes a few minutes on first run. Exit 2: props stale or storyboard unapproved (rerun prepare/gate); 3: environment (run doctor); 5: render failure (show the error tail, run doctor, retry once).
+`ve:synth` is the only step that sends narration text anywhere, and only after approval, to the provider shown at the gate. Keys come from the environment only (`export ELEVENLABS_API_KEY=...` or `export OPENAI_API_KEY=...`); never print them or write them into `.windower.json`, the brief or any artifact. Use `--fallback-silent` only if the user opted in to silent scenes on TTS failure. Exit 4 means TTS failed: show the error, then fix the key, retry, switch provider, or use `--no-voice`. `ve:prepare` and `ve:timing` consume `synth.json` automatically. `ve:prepare` also writes `timing.json`, so `ve:timing` is only needed to check length early. Preview one scene with `ve:render "$RUN" --still s03` (writes `out/still-s03.png`; the frame is taken mid-scene, so reveal animations may be partial and the caption bar shows a fragment, which is expected). `ve:render` selects a free port, writes `out/video.mp4`, `out/captions.srt`, `out/captions.vtt`, and takes a few minutes on first run. Exit 2: props stale or storyboard unapproved (rerun prepare/gate); 3: environment (run doctor); 5: render failure (show the error tail, run doctor, retry once).
 
 ## 9. Finish
 

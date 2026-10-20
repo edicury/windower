@@ -1,6 +1,14 @@
 // prepare: storyboard.json -> timing.json, props.json (+ Shiki-highlighted code), captions.srt/.vtt.
 // Port of template/scripts/prepare.mjs with validation and error wrapping (FR-SB-08).
-import {readFileSync, writeFileSync} from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
@@ -9,8 +17,9 @@ import type {CodeLine, ExplainerProps, Scene} from '../template/src/types.js';
 import {highlightCode} from './code-highlight.js';
 import {buildCues, toSrt, toVtt} from './captions.js';
 import {UNAPPROVED_WARNING, approvalProblem} from './approval.js';
-import {EXIT} from './lib.js';
+import {EXIT, TEMPLATE} from './lib.js';
 import {checkTotal, computeTiming, type Timing} from './timing.js';
+import {readSynthFile, synthProblem, synthTimingOf} from './tts/synthfile.js';
 import {formatIssue, validateFile} from './validate-storyboard.js';
 
 export const PREPARE_USAGE =
@@ -40,9 +49,34 @@ async function highlight(
   }
 }
 
+/** Copies each voiced scene's audio to <public>/audio/<id>.<ext> and removes stale files there. */
+function stageAudio(destDir: string, timing: Timing, sources: Record<string, string>): void {
+  const keep = new Set<string>();
+  for (const t of timing.scenes) {
+    const src = sources[t.id];
+    if (!t.audio || !src) continue;
+    keep.add(path.basename(t.audio));
+  }
+  if (existsSync(destDir))
+    for (const f of readdirSync(destDir))
+      if (!keep.has(f) && f !== '.gitkeep') rmSync(path.join(destDir, f), {force: true});
+  if (!keep.size) return;
+  mkdirSync(destDir, {recursive: true});
+  for (const t of timing.scenes) {
+    const src = sources[t.id];
+    if (t.audio && src) copyFileSync(src, path.join(destDir, path.basename(t.audio)));
+  }
+}
+
 export async function prepare(
   storyboardPath: string,
-  opts: {repoRoot?: string; log?: (m: string) => void; allowUnapproved?: boolean} = {},
+  opts: {
+    repoRoot?: string;
+    log?: (m: string) => void;
+    allowUnapproved?: boolean;
+    /** Remotion public dir that staticFile() resolves against (default template/public). */
+    publicDir?: string;
+  } = {},
 ): Promise<{timing: Timing; props: ExplainerProps; dir: string}> {
   const log = opts.log ?? (() => undefined);
   const file = path.resolve(storyboardPath);
@@ -62,7 +96,23 @@ export async function prepare(
   }
   const sb = Storyboard.parse(JSON.parse(readFileSync(file, 'utf8')));
 
-  const timing = computeTiming(sb.scenes);
+  // synth.json (ve:synth) makes the run voiced; without it timing is the reading-speed estimate.
+  const synthFile = path.join(dir, 'synth.json');
+  let synthTiming: ReturnType<typeof synthTimingOf> | undefined;
+  const synthAudio: Record<string, string> = {};
+  if (existsSync(synthFile)) {
+    try {
+      const synth = readSynthFile(synthFile);
+      const bad = synthProblem(synth, sb.scenes);
+      if (bad) throw new Error(bad);
+      synthTiming = synthTimingOf(synth);
+      for (const e of synth.scenes)
+        if (e.audioPath) synthAudio[e.id] = path.resolve(dir, e.audioPath);
+    } catch (e) {
+      throw new PrepareError((e as Error).message, EXIT.validation);
+    }
+  }
+  const timing = computeTiming(sb.scenes, synthTiming ? {synth: synthTiming} : {});
   const verdict = checkTotal(timing);
   if (verdict.level === 'error')
     throw new PrepareError(verdict.message ?? 'bad length', EXIT.validation);
@@ -89,6 +139,16 @@ export async function prepare(
     } else {
       scenes.push(common as unknown as Scene);
     }
+  }
+
+  const audioDest = path.join(opts.publicDir ?? path.join(TEMPLATE, 'public'), 'audio');
+  try {
+    stageAudio(audioDest, timing, synthAudio);
+  } catch (e) {
+    throw new PrepareError(
+      `cannot stage narration audio in ${audioDest}: ${(e as Error).message}`,
+      EXIT.environment,
+    );
   }
 
   const props: ExplainerProps = {
