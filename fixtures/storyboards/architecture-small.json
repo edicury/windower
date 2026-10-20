@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "slug": "architecture-small",
+  "title": "Architecture scene small",
+  "audience": "onboarding",
+  "repoRoot": "../repos/sample",
+  "scenes": [
+    {
+      "id": "s01",
+      "type": "title",
+      "headline": "Architecture scene at its limits",
+      "subtitle": "Nine nodes, twelve edges",
+      "badge": "Fixture",
+      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the auth service and the queue on its way, and how results flow back to the user.",
+      "sources": [],
+      "minDurationSec": 16
+    },
+    {
+      "id": "s02",
+      "type": "architecture",
+      "title": "Four nodes",
+      "nodes": [
+        {
+          "id": "client",
+          "label": "Browser client",
+          "sub": "React single page app",
+          "kind": "client",
+          "group": "Edge"
+        },
+        {
+          "id": "gateway",
+          "label": "API gateway",
+          "sub": "Routes every request",
+          "kind": "service",
+          "group": "Edge"
+        },
+        {
+          "id": "auth",
+          "label": "Auth service",
+          "sub": "Issues short-lived tokens",
+          "kind": "service",
+          "group": "Core"
+        },
+        {
+          "id": "orders",
+          "label": "Orders service",
+          "sub": "Validates and stores orders",
+          "kind": "service",
+          "group": "Core"
+        }
+      ],
+      "edges": [
+        {
+          "from": "client",
+          "to": "gateway",
+          "label": "call"
+        },
+        {
+          "from": "client",
+          "to": "auth"
+        },
+        {
+          "from": "gateway",
+          "to": "orders"
+        },
+        {
+          "from": "auth",
+          "to": "orders",
+          "label": "grant"
+        }
+      ],
+      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the auth service and the queue on its way, and how results flow back to the user.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:6-18"
+        }
+      ],
+      "minDurationSec": 16,
+      "flow": [
+        {
+          "path": ["client", "gateway", "orders"]
+        }
+      ]
+    },
+    {
+      "id": "s03",
+      "type": "bullets",
+      "heading": "What to remember",
+      "items": ["Nine nodes fill the three by three grid", "Edges link neighbouring boxes only"],
+      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the auth service and the queue on its way, and how results flow back to the user.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:6-18"
+        }
+      ],
+      "minDurationSec": 16
+    }
+  ]
+}

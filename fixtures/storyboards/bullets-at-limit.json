@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "slug": "bullets-at-limit",
+  "title": "bullets-at-limit",
+  "audience": "onboarding",
+  "repoRoot": "../repos/sample",
+  "scenes": [
+    {
+      "id": "s01",
+      "type": "title",
+      "headline": "Windower scene fixture",
+      "subtitle": "Layout checked at the declared limits",
+      "narration": "This scene walks through the idea step by step so that a new reader can follow the flow, see which parts matter most, and remember the main takeaway after the video ends today. We keep the pace steady, name every part clearly, and pause briefly between scenes.",
+      "sources": []
+    },
+    {
+      "id": "s02",
+      "type": "bullets",
+      "heading": "Hard limits keep every bullet above the captions bar, always",
+      "items": [
+        "Hard limits are enforced by the validator before any frame is rendered, so nothing is silently clipped ok",
+        "Wrapped text is budgeted at eight lines in total, which keeps every bullet above the captions bar now",
+        "Each bullet is revealed in order, spaced across the duration of the scene so that it follows narration",
+        "Short bullet one",
+        "Short bullet two"
+      ],
+      "narration": "This scene walks through the idea step by step so that a new reader can follow the flow, see which parts matter most, and remember the main takeaway after the video ends today. We keep the pace steady, name every part clearly, and pause briefly between scenes.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:1-24"
+        }
+      ],
+      "minDurationSec": 14
+    },
+    {
+      "id": "s03",
+      "type": "bullets",
+      "heading": "Recap",
+      "items": ["One", "Two"],
+      "narration": "This scene walks through the idea step by step so that a new reader can follow the flow, see which parts matter most, and remember the main takeaway after the video ends today. We keep the pace steady, name every part clearly, and pause briefly between scenes.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:1-24"
+        }
+      ]
+    }
+  ]
+}

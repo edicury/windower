@@ -94,6 +94,7 @@ interface CodeScene {
   file?: string;
   startLine?: number;
   endLine?: number;
+  code?: string;
 }
 
 /** Returns one problem per invalid code scene; each names the scene id. */
@@ -115,7 +116,12 @@ export function codeSceneProblems(
       continue;
     }
     const lines = readFileSync(file, 'utf8').split('\n').length;
-    const {startLine: a, endLine: b} = s;
+    const a = s.startLine;
+    const b =
+      s.endLine ??
+      (a !== undefined && s.code
+        ? a + s.code.replace(/\n$/, '').split('\n').length - 1
+        : undefined);
     if (!a || !b || a < 1 || a > b || b > lines) {
       problems.push(`scene ${id}: invalid line range ${a}-${b} (file has ${lines} lines)`);
     }

@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "slug": "outro",
+  "title": "outro",
+  "audience": "onboarding",
+  "repoRoot": "../repos/sample",
+  "scenes": [
+    {
+      "id": "s01",
+      "type": "title",
+      "headline": "Windower scene fixture",
+      "subtitle": "Layout checked at the declared limits",
+      "narration": "This scene walks through the idea step by step so that a new reader can follow the flow, see which parts matter most, and remember the main takeaway after the video ends today. We keep the pace steady, name every part clearly, and pause briefly between scenes.",
+      "sources": []
+    },
+    {
+      "id": "s02",
+      "type": "bullets",
+      "heading": "What to remember",
+      "items": ["Limits are enforced", "Stills are checked", "Captions stay clear"],
+      "narration": "This scene walks through the idea step by step so that a new reader can follow the flow, see which parts matter most, and remember the main takeaway after the video ends today. We keep the pace steady, name every part clearly, and pause briefly between scenes.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:1-24"
+        }
+      ],
+      "minDurationSec": 14
+    },
+    {
+      "id": "s03",
+      "type": "outro",
+      "headline": "Ninety characters is the longest outro headline that still fits in the card nicely",
+      "subtitle": "Eighty characters is the longest subtitle and it fits on the card as well",
+      "items": [
+        "Read the brief and the storyboard first",
+        "Run the validator before every render",
+        "Review the stills at full resolution"
+      ],
+      "narration": "This scene walks through the idea step by step so that a new reader can follow the flow, see which parts matter most, and remember the main takeaway after the video ends today. We keep the pace steady, name every part clearly, and pause briefly between scenes.",
+      "sources": []
+    }
+  ]
+}

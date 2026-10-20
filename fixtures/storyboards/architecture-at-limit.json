@@ -1,0 +1,183 @@
+{
+  "version": 1,
+  "slug": "architecture-at-limit",
+  "title": "Architecture scene at its limits",
+  "audience": "onboarding",
+  "repoRoot": "../repos/sample",
+  "scenes": [
+    {
+      "id": "s01",
+      "type": "title",
+      "headline": "Architecture scene at its limits",
+      "subtitle": "Nine nodes, twelve edges",
+      "badge": "Fixture",
+      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the auth service and the queue on its way, and how results flow back to the user.",
+      "sources": [],
+      "minDurationSec": 16
+    },
+    {
+      "id": "s02",
+      "type": "architecture",
+      "title": "Request path through the platform",
+      "nodes": [
+        {
+          "id": "client",
+          "label": "Browser client",
+          "sub": "React single page app",
+          "kind": "client",
+          "group": "Edge"
+        },
+        {
+          "id": "gateway",
+          "label": "API gateway",
+          "sub": "Routes every request",
+          "kind": "service",
+          "group": "Edge"
+        },
+        {
+          "id": "auth",
+          "label": "Auth service",
+          "sub": "Issues short-lived tokens",
+          "kind": "service",
+          "group": "Core"
+        },
+        {
+          "id": "web",
+          "label": "Web frontend",
+          "sub": "Server rendered pages",
+          "kind": "module",
+          "group": "Edge"
+        },
+        {
+          "id": "orders",
+          "label": "Orders service",
+          "sub": "Validates and stores orders",
+          "kind": "service",
+          "group": "Core"
+        },
+        {
+          "id": "queue",
+          "label": "Order events queue",
+          "sub": "Durable async delivery",
+          "kind": "queue",
+          "group": "Data"
+        },
+        {
+          "id": "cache",
+          "label": "Session cache",
+          "sub": "Keeps hot sessions",
+          "kind": "module",
+          "group": "Data"
+        },
+        {
+          "id": "database",
+          "label": "Orders database",
+          "sub": "Primary system of record",
+          "kind": "db",
+          "group": "Data"
+        },
+        {
+          "id": "mailer",
+          "label": "Email provider",
+          "sub": "External SMTP relay API",
+          "kind": "external",
+          "group": "Outside"
+        }
+      ],
+      "edges": [
+        {
+          "from": "client",
+          "to": "gateway",
+          "label": "HTTPS request"
+        },
+        {
+          "from": "gateway",
+          "to": "auth",
+          "label": "verify token"
+        },
+        {
+          "from": "web",
+          "to": "orders",
+          "label": "order form POST"
+        },
+        {
+          "from": "orders",
+          "to": "queue",
+          "label": "publish order"
+        },
+        {
+          "from": "cache",
+          "to": "database",
+          "label": "write behind"
+        },
+        {
+          "from": "database",
+          "to": "mailer",
+          "label": "send receipt mail"
+        },
+        {
+          "from": "client",
+          "to": "web",
+          "label": "page load"
+        },
+        {
+          "from": "gateway",
+          "to": "orders",
+          "label": "route to orders svc"
+        },
+        {
+          "from": "auth",
+          "to": "queue",
+          "label": "audit trail events"
+        },
+        {
+          "from": "web",
+          "to": "cache",
+          "label": "session lookup"
+        },
+        {
+          "from": "orders",
+          "to": "database",
+          "label": "store order record"
+        },
+        {
+          "from": "queue",
+          "to": "mailer",
+          "label": "notify"
+        }
+      ],
+      "flow": [
+        {
+          "path": ["client", "gateway", "orders", "database"],
+          "at": 0.4
+        },
+        {
+          "path": ["orders", "queue", "mailer"],
+          "at": 0.6
+        }
+      ],
+      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the auth service and the queue on its way, and how results flow back to the user. The orders service then stores the record and queues a receipt email.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:6-18"
+        }
+      ],
+      "minDurationSec": 16
+    },
+    {
+      "id": "s03",
+      "type": "bullets",
+      "heading": "What to remember",
+      "items": ["Nine nodes fill the three by three grid", "Edges link neighbouring boxes only"],
+      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the auth service and the queue on its way, and how results flow back to the user.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:6-18"
+        }
+      ],
+      "minDurationSec": 16
+    }
+  ]
+}

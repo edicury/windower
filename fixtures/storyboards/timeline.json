@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "slug": "timeline",
+  "title": "timeline",
+  "audience": "onboarding",
+  "repoRoot": "../repos/sample",
+  "scenes": [
+    {
+      "id": "s01",
+      "type": "title",
+      "headline": "Windower scene fixture",
+      "subtitle": "Layout checked at the declared limits",
+      "narration": "This scene walks through the idea step by step so that a new reader can follow the flow, see which parts matter most, and remember the main takeaway after the video ends today. We keep the pace steady, name every part clearly, and pause briefly between scenes.",
+      "sources": []
+    },
+    {
+      "id": "s02",
+      "type": "timeline",
+      "title": "From prototype to release",
+      "items": [
+        {
+          "label": "Prototype built",
+          "detail": "Single file proof of concept shared with two teams for review",
+          "when": "Jan 2026"
+        },
+        {
+          "label": "Stress test run",
+          "detail": "Forty lines of code and fifteen nodes broke the layout",
+          "when": "Mar 2026"
+        },
+        {
+          "label": "Limits written down",
+          "detail": "Per-scene limits enforced by the validator, not by hope",
+          "when": "Apr 2026"
+        },
+        {
+          "label": "Scene library done",
+          "detail": "Code, architecture, sequence and timeline scenes all render",
+          "when": "May 2026"
+        },
+        {
+          "label": "Voice and captions",
+          "detail": "Narration is synthesised and captions are burned in",
+          "when": "Jun 2026"
+        },
+        {
+          "label": "Plugin packaged",
+          "detail": "Skills, scripts and the template ship as one plugin",
+          "when": "Jul 2026"
+        },
+        {
+          "label": "First public release",
+          "detail": "Version one is tagged and announced to every team",
+          "when": "Aug 2026"
+        }
+      ],
+      "narration": "This scene walks through the idea step by step so that a new reader can follow the flow, see which parts matter most, and remember the main takeaway after the video ends today. We keep the pace steady, name every part clearly, and pause briefly between scenes.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:1-24"
+        }
+      ]
+    },
+    {
+      "id": "s03",
+      "type": "timeline",
+      "title": "Three step version",
+      "items": [
+        {
+          "label": "Plan",
+          "detail": "Write the brief",
+          "when": "Week 1"
+        },
+        {
+          "label": "Build",
+          "detail": "Render the scenes",
+          "when": "Week 2"
+        },
+        {
+          "label": "Ship",
+          "when": "Week 3"
+        }
+      ],
+      "narration": "This scene walks through the idea step by step so that a new reader can follow the flow, see which parts matter most, and remember the main takeaway after the video ends today. We keep the pace steady, name every part clearly, and pause briefly between scenes.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:1-24"
+        }
+      ]
+    },
+    {
+      "id": "s04",
+      "type": "outro",
+      "headline": "Thanks for watching",
+      "narration": "This scene walks through the idea step by step so that a new reader can follow the flow, see which parts matter most, and remember the main takeaway after the video ends today. We keep the pace steady, name every part clearly, and pause briefly between scenes.",
+      "sources": []
+    }
+  ]
+}

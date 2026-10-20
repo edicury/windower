@@ -25,7 +25,10 @@ export const Root = () => (
     calculateMetadata={({props}) => {
       // timing.json's totalFrames (carried in props.json) wins; fall back to summing the scenes.
       const sum = props.scenes.reduce((a, s) => a + s.durationFrames, 0);
-      const overlaps = Math.max(0, props.scenes.length - 1) * props.transitionFrames;
+      const overlaps = props.scenes.reduce(
+        (a, s, i) => a + (i === 0 || s.transition === 'none' ? 0 : props.transitionFrames),
+        0,
+      );
       const total = props.totalFrames > FPS ? props.totalFrames : sum - overlaps;
       return {durationInFrames: Math.max(FPS, total), fps: props.fps};
     }}

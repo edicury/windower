@@ -42,10 +42,11 @@
         }
       ],
       "type": "code",
-      "title": "Forty lines, one 186-char line",
       "file": "src/long.ts",
+      "language": "typescript",
       "startLine": 1,
-      "endLine": 40
+      "code": "// Deliberately oversized module for the over-limit stress fixture.\nexport const value2 = 2;\nexport const value3 = 3;\nexport const value4 = 4;\nexport const value5 = 5;\nexport const value6 = 6;\nexport const longLine =\n  'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx';\nexport const value8 = 8;\nexport const value9 = 9;\nexport const value10 = 10;\nexport const value11 = 11;\nexport const value12 = 12;\nexport const value13 = 13;\nexport const value14 = 14;\nexport const value15 = 15;\nexport const value16 = 16;\nexport const value17 = 17;\nexport const value18 = 18;\nexport const value19 = 19;\nexport const value20 = 20;\nexport const value21 = 21;\nexport const value22 = 22;\nexport const value23 = 23;\nexport const value24 = 24;\nexport const value25 = 25;\nexport const value26 = 26;\nexport const value27 = 27;\nexport const value28 = 28;\nexport const value29 = 29;\nexport const value30 = 30;\nexport const value31 = 31;\nexport const value32 = 32;\nexport const value33 = 33;\nexport const value34 = 34;\nexport const value35 = 35;\nexport const value36 = 36;\nexport const value37 = 37;\nexport const value38 = 38;\nexport const value39 = 39;",
+      "mode": "plain"
     },
     {
       "id": "s04",
@@ -62,14 +63,12 @@
         {
           "id": "a",
           "label": "A",
-          "x": 120,
-          "y": 200
+          "kind": "service"
         },
         {
           "id": "b",
           "label": "B",
-          "x": 740,
-          "y": 200
+          "kind": "service"
         }
       ],
       "edges": [
@@ -118,10 +117,11 @@
         }
       ],
       "type": "code",
-      "title": "Range past end of file",
       "file": "src/greeter.ts",
-      "startLine": 10,
-      "endLine": 99
+      "language": "typescript",
+      "startLine": 20,
+      "code": "    console.log(greet({name: 'world', excited: true}));\n    return;\n  }\n  for (const line of greetAll(names)) console.log(line);\n}\n// past the end\n// past the end\n// past the end\n// past the end\n// past the end",
+      "mode": "plain"
     },
     {
       "id": "s07",
@@ -133,10 +133,16 @@
         }
       ],
       "type": "code",
-      "title": "Start after end",
       "file": "src/greeter.ts",
-      "startLine": 12,
-      "endLine": 4
+      "language": "typescript",
+      "startLine": 1,
+      "code": "export interface GreeterOptions {\n  name: string;\n  excited?: boolean;\n}",
+      "mode": "plain",
+      "focus": [
+        {
+          "lines": [3, 9]
+        }
+      ]
     },
     {
       "id": "s08",
@@ -150,6 +156,331 @@
       "type": "bullets",
       "heading": "Recap",
       "items": ["one", "two"]
+    },
+    {
+      "id": "s09",
+      "narration": "This scene is deliberately broken so that the validator has to name the scene and the field that went wrong, and so that the fixture also keeps the total length above the minimum.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/long.ts:1-5"
+        }
+      ],
+      "type": "architecture",
+      "title": "Fifteen nodes and twenty edges",
+      "nodes": [
+        {
+          "id": "n0",
+          "label": "Node 0",
+          "kind": "service"
+        },
+        {
+          "id": "n1",
+          "label": "Node 1",
+          "kind": "service"
+        },
+        {
+          "id": "n2",
+          "label": "Node 2",
+          "kind": "service"
+        },
+        {
+          "id": "n3",
+          "label": "Node 3",
+          "kind": "service"
+        },
+        {
+          "id": "n4",
+          "label": "Node 4",
+          "kind": "service"
+        },
+        {
+          "id": "n5",
+          "label": "Node 5",
+          "kind": "service"
+        },
+        {
+          "id": "n6",
+          "label": "Node 6",
+          "kind": "service"
+        },
+        {
+          "id": "n7",
+          "label": "Node 7",
+          "kind": "service"
+        },
+        {
+          "id": "n8",
+          "label": "Node 8",
+          "kind": "service"
+        },
+        {
+          "id": "n9",
+          "label": "Node 9",
+          "kind": "service"
+        },
+        {
+          "id": "n10",
+          "label": "Node 10",
+          "kind": "service"
+        },
+        {
+          "id": "n11",
+          "label": "Node 11",
+          "kind": "service"
+        },
+        {
+          "id": "n12",
+          "label": "Node 12",
+          "kind": "service"
+        },
+        {
+          "id": "n13",
+          "label": "Node 13",
+          "kind": "service"
+        },
+        {
+          "id": "n14",
+          "label": "Node 14",
+          "kind": "service"
+        }
+      ],
+      "edges": [
+        {
+          "from": "n0",
+          "to": "n1"
+        },
+        {
+          "from": "n1",
+          "to": "n2"
+        },
+        {
+          "from": "n2",
+          "to": "n3"
+        },
+        {
+          "from": "n3",
+          "to": "n4"
+        },
+        {
+          "from": "n4",
+          "to": "n5"
+        },
+        {
+          "from": "n5",
+          "to": "n6"
+        },
+        {
+          "from": "n6",
+          "to": "n7"
+        },
+        {
+          "from": "n7",
+          "to": "n8"
+        },
+        {
+          "from": "n8",
+          "to": "n9"
+        },
+        {
+          "from": "n9",
+          "to": "n10"
+        },
+        {
+          "from": "n10",
+          "to": "n11"
+        },
+        {
+          "from": "n11",
+          "to": "n12"
+        },
+        {
+          "from": "n12",
+          "to": "n13"
+        },
+        {
+          "from": "n13",
+          "to": "n14"
+        },
+        {
+          "from": "n14",
+          "to": "n0"
+        },
+        {
+          "from": "n0",
+          "to": "n1"
+        },
+        {
+          "from": "n1",
+          "to": "n2"
+        },
+        {
+          "from": "n2",
+          "to": "n3"
+        },
+        {
+          "from": "n3",
+          "to": "n4"
+        },
+        {
+          "from": "n4",
+          "to": "n5"
+        }
+      ]
+    },
+    {
+      "id": "s10",
+      "narration": "This scene is deliberately broken so that the validator has to name the scene and the field that went wrong, and so that the fixture also keeps the total length above the minimum.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/long.ts:1-5"
+        }
+      ],
+      "type": "sequence",
+      "title": "Five participants, twelve messages",
+      "participants": ["Client", "Gateway", "Auth", "Queue", "Database"],
+      "messages": [
+        {
+          "from": 0,
+          "to": 1,
+          "text": "A request message that is definitely longer than forty characters",
+          "note": "A note that is definitely longer than thirty-six characters"
+        },
+        {
+          "from": 1,
+          "to": 2,
+          "text": "A request message that is definitely longer than forty characters",
+          "note": "A note that is definitely longer than thirty-six characters"
+        },
+        {
+          "from": 2,
+          "to": 3,
+          "text": "A request message that is definitely longer than forty characters",
+          "note": "A note that is definitely longer than thirty-six characters"
+        },
+        {
+          "from": 3,
+          "to": 4,
+          "text": "A request message that is definitely longer than forty characters",
+          "note": "A note that is definitely longer than thirty-six characters"
+        },
+        {
+          "from": 4,
+          "to": 0,
+          "text": "A request message that is definitely longer than forty characters",
+          "note": "A note that is definitely longer than thirty-six characters"
+        },
+        {
+          "from": 0,
+          "to": 1,
+          "text": "A request message that is definitely longer than forty characters",
+          "note": "A note that is definitely longer than thirty-six characters"
+        },
+        {
+          "from": 1,
+          "to": 2,
+          "text": "A request message that is definitely longer than forty characters",
+          "note": "A note that is definitely longer than thirty-six characters"
+        },
+        {
+          "from": 2,
+          "to": 3,
+          "text": "A request message that is definitely longer than forty characters",
+          "note": "A note that is definitely longer than thirty-six characters"
+        },
+        {
+          "from": 3,
+          "to": 4,
+          "text": "A request message that is definitely longer than forty characters",
+          "note": "A note that is definitely longer than thirty-six characters"
+        },
+        {
+          "from": 4,
+          "to": 0,
+          "text": "A request message that is definitely longer than forty characters",
+          "note": "A note that is definitely longer than thirty-six characters"
+        },
+        {
+          "from": 0,
+          "to": 1,
+          "text": "A request message that is definitely longer than forty characters",
+          "note": "A note that is definitely longer than thirty-six characters"
+        },
+        {
+          "from": 1,
+          "to": 2,
+          "text": "A request message that is definitely longer than forty characters",
+          "note": "A note that is definitely longer than thirty-six characters"
+        }
+      ]
+    },
+    {
+      "id": "s11",
+      "narration": "This scene is deliberately broken so that the validator has to name the scene and the field that went wrong, and so that the fixture also keeps the total length above the minimum.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/long.ts:1-5"
+        }
+      ],
+      "type": "timeline",
+      "title": "Eight items with long text",
+      "items": [
+        {
+          "label": "A label that is far too long to fit",
+          "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "when": "A very long date label here"
+        },
+        {
+          "label": "A label that is far too long to fit",
+          "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "when": "A very long date label here"
+        },
+        {
+          "label": "A label that is far too long to fit",
+          "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "when": "A very long date label here"
+        },
+        {
+          "label": "A label that is far too long to fit",
+          "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "when": "A very long date label here"
+        },
+        {
+          "label": "A label that is far too long to fit",
+          "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "when": "A very long date label here"
+        },
+        {
+          "label": "A label that is far too long to fit",
+          "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "when": "A very long date label here"
+        },
+        {
+          "label": "A label that is far too long to fit",
+          "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "when": "A very long date label here"
+        },
+        {
+          "label": "A label that is far too long to fit",
+          "detail": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "when": "A very long date label here"
+        }
+      ]
+    },
+    {
+      "id": "s12",
+      "narration": "This scene is deliberately broken so that the validator has to name the scene and the field that went wrong, and so that the fixture also keeps the total length above the minimum.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/long.ts:1-5"
+        }
+      ],
+      "type": "outro",
+      "headline": "HHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHHH",
+      "items": ["one", "two", "three", "four"]
     }
   ]
 }

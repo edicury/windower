@@ -6,6 +6,16 @@ import {pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
 import type {ZodIssue} from 'zod';
 import {LIMITS, Storyboard} from '../template/src/schema.js';
+import {splitCode} from '../template/src/codeLines.js';
+import {isKnownLanguage} from './code-highlight.js';
+import {
+  H_LABEL_CHARS,
+  H_LABEL_W,
+  MAX_H_LABEL_LINES,
+  adjacent,
+  hLabelLines,
+  layoutGrid,
+} from '../template/src/scenes/architectureLayout.js';
 import {EXIT} from './lib.js';
 import {checkTotal, computeTiming, SCENE_SOFT_CAP_S} from './timing.js';
 
@@ -62,7 +72,7 @@ function mapZodIssue(issue: ZodIssue, scenes: unknown): Omit<Issue, 'severity'> 
       sceneId && Array.isArray(scenes) && typeof p[1] === 'number'
         ? (scenes[p[1]] as Loose)?.type
         : undefined;
-    message = `unknown scene type ${JSON.stringify(t)}; expected title, bullets, code, architecture or sequence`;
+    message = `unknown scene type ${JSON.stringify(t)}; expected title, bullets, code, architecture, sequence, timeline or outro`;
     rule = 'scene-type';
   } else if (issue.code === 'unrecognized_keys') {
     const keys = (issue as {keys?: string[]}).keys ?? [];
@@ -177,7 +187,7 @@ export function validateStoryboard(raw: unknown, opts: ValidateOptions = {}): Va
       }
     }
 
-    const isFirstTitle = i === 0 && s.type === 'title';
+    const isFirstTitle = (i === 0 && s.type === 'title') || s.type === 'outro'; // outro may cite nothing (FR-SB-02)
     const sources = s.sources;
     if (!isFirstTitle && Array.isArray(sources) && sources.length === 0)
       addErr(
@@ -212,15 +222,15 @@ export function validateStoryboard(raw: unknown, opts: ValidateOptions = {}): Va
         if (Array.isArray(s.items)) {
           // ~68 chars fit per line at 46 px inside the 1560 px text column; budget is 8 wrapped lines.
           const lines = s.items.reduce<number>(
-            (a, it) => a + Math.max(1, Math.ceil(String(it).length / 68)),
+            (a, it) => a + Math.max(1, Math.ceil(String(it).length / LIMITS.bulletsCharsPerLine)),
             0,
           );
-          if (lines > 8)
-            addWarn(
+          if (lines > LIMITS.bulletsWrappedLines)
+            addErr(
               id,
               'items',
-              'layout',
-              `about ${lines} wrapped lines; more than 8 may run under the captions bar`,
+              'limit',
+              `about ${lines} wrapped lines; at most ${LIMITS.bulletsWrappedLines} fit above the captions bar (shorten items or split the scene)`,
             );
         }
         break;
@@ -232,12 +242,12 @@ export function validateStoryboard(raw: unknown, opts: ValidateOptions = {}): Va
   const last = scenes[scenes.length - 1];
   if (isObj(first) && first.type !== 'title')
     addErr(idOf(first, 0), 'type', 'R2', 'the first scene must be a title');
-  if (isObj(last) && last.type !== 'title' && last.type !== 'bullets')
+  if (isObj(last) && last.type !== 'title' && last.type !== 'bullets' && last.type !== 'outro')
     addErr(
       idOf(last, scenes.length - 1),
       'type',
       'R2',
-      'the last scene must be a title or bullets (recap)',
+      'the last scene must be a title, bullets (recap) or outro',
     );
 
   // 3. Duration (R5). Needs a valid storyboard so narration is trustworthy.
@@ -267,8 +277,16 @@ type Add = (sceneId: string | null, p: string, rule: string, message: string) =>
 
 function checkCode(s: Loose, id: string, root: string | undefined, addErr: Add): void {
   const file = str(s.file);
-  const a = int(s.startLine);
-  const b = int(s.endLine);
+  const start = int(s.startLine);
+  const code = str(s.code);
+  const lang = str(s.language);
+  if (lang && !isKnownLanguage(lang))
+    addErr(
+      id,
+      'language',
+      'referential',
+      `unknown language "${lang}" (use a Shiki language id or "text")`,
+    );
   if (!root) {
     addErr(
       id,
@@ -288,56 +306,111 @@ function checkCode(s: Loose, id: string, root: string | undefined, addErr: Add):
     addErr(id, 'file', 'referential', `file not found under repoRoot ${root}: ${file}`);
     return;
   }
-  if (a === undefined || b === undefined) return;
-  const lines = fileLines(full);
-  if (a > b) addErr(id, 'startLine', 'referential', `startLine ${a} > endLine ${b}`);
-  else if (b > lines.length)
+  if (start === undefined || start < 1 || code === undefined) return;
+  const diff = s.mode === 'diff';
+  const snippet = splitCode(code);
+  const fileText = fileLines(full);
+  // Lines of the new side: every row in plain mode, context and added rows in diff mode.
+  const count = diff ? snippet.filter((l) => !l.startsWith('-')).length : snippet.length;
+  const end = start + count - 1;
+  if (end > fileText.length) {
     addErr(
       id,
-      'endLine',
+      'code',
       'referential',
-      `endLine ${b} is past the end of ${file} (${lines.length} lines)`,
+      `snippet lines ${start}-${end} end past the end of ${file} (${fileText.length} lines)`,
     );
-  else {
-    lines.slice(a - 1, b).forEach((line, k) => {
-      if (line.length > LIMITS.codeLineChars)
-        addErr(
-          id,
-          'file',
-          'limit',
-          `line length > ${LIMITS.codeLineChars}: line ${a + k} has ${line.length} chars`,
-        );
-    });
+    return;
   }
-  if (Array.isArray(s.focus)) {
-    s.focus.forEach((f, k) => {
-      if (!Array.isArray(f) || f.length !== 2) return;
-      const [fa, fb] = f as number[];
-      if (fa === undefined || fb === undefined) return;
-      if (fa > fb || fa < a || fb > b)
-        addErr(
-          id,
-          `focus[${k}]`,
-          'referential',
-          `focus range ${fa}-${fb} is outside the snippet ${a}-${b}`,
-        );
-    });
-  }
+  if (diff) return; // diff snippets are not verbatim (testing: validator compares unless mode is diff)
+  let shown = 0;
+  snippet.forEach((line, k) => {
+    if (shown >= 3) return; // first few mismatches are enough to fix the snippet
+    const want = fileText[start - 1 + k];
+    if (line !== want) {
+      shown += 1;
+      addErr(
+        id,
+        'code',
+        'verbatim',
+        `line ${k + 1} differs from ${file}:${start + k}: expected ${JSON.stringify(want)}, got ${JSON.stringify(line)}`,
+      );
+    }
+  });
 }
 
 function checkArchitecture(s: Loose, id: string, addErr: Add): void {
-  const ids = new Set(
-    (Array.isArray(s.nodes) ? s.nodes : [])
-      .filter(isObj)
-      .map((n) => str(n.id))
-      .filter(Boolean),
-  );
-  (Array.isArray(s.edges) ? s.edges : []).forEach((e, k) => {
+  const nodes = Array.isArray(s.nodes) ? s.nodes : [];
+  const edges = Array.isArray(s.edges) ? s.edges : [];
+  const order: string[] = [];
+  const ids = new Set<string>();
+  nodes.forEach((n, k) => {
+    if (!isObj(n)) return;
+    const nid = str(n.id);
+    if (nid === undefined) return;
+    if (ids.has(nid)) addErr(id, `nodes[${k}].id`, 'referential', `duplicate node id "${nid}"`);
+    else {
+      ids.add(nid);
+      order.push(nid);
+    }
+  });
+  // Grid placement follows node order (row-major), so adjacency is decided by the layout helper.
+  const placed = layoutGrid(order);
+  const pairs = new Set<string>();
+  edges.forEach((e, k) => {
     if (!isObj(e)) return;
+    let known = true;
     for (const end of ['from', 'to'] as const) {
       const v = str(e[end]);
-      if (v !== undefined && !ids.has(v))
+      if (v !== undefined && !ids.has(v)) {
+        known = false;
         addErr(id, `edges[${k}].${end}`, 'referential', `edge ${end} "${v}" is not a node id`);
+      }
+    }
+    const from = str(e.from);
+    const to = str(e.to);
+    if (!known || from === undefined || to === undefined) return;
+    if (from === to) {
+      addErr(id, `edges[${k}]`, 'layout', `edge from "${from}" to itself is not allowed`);
+      return;
+    }
+    pairs.add([from, to].sort().join('\u0000'));
+    const a = placed.get(from);
+    const b = placed.get(to);
+    if (a && b && !adjacent(a, b))
+      addErr(
+        id,
+        `edges[${k}]`,
+        'layout',
+        `edge "${from}" -> "${to}" joins non-adjacent grid nodes (${from} is at row ${a.row + 1}, col ${a.col + 1}; ${to} at row ${b.row + 1}, col ${b.col + 1}); only neighbouring nodes can be linked, reorder nodes or route through an intermediate node`,
+      );
+    const label = str(e.label);
+    if (label && a && b && a.row === b.row && hLabelLines(label).length > MAX_H_LABEL_LINES)
+      addErr(
+        id,
+        `edges[${k}].label`,
+        'limit',
+        `label "${label}" needs more than ${MAX_H_LABEL_LINES} lines in the ${H_LABEL_W} px gap; shorten it or use words under ${H_LABEL_CHARS} chars`,
+      );
+  });
+  (Array.isArray(s.flow) ? s.flow : []).forEach((fl, k) => {
+    if (!isObj(fl) || !Array.isArray(fl.path)) return;
+    const path = fl.path;
+    path.forEach((nid, j) => {
+      if (typeof nid === 'string' && !ids.has(nid))
+        addErr(id, `flow[${k}].path[${j}]`, 'referential', `flow node "${nid}" is not a node id`);
+    });
+    for (let j = 0; j + 1 < path.length; j++) {
+      const x = path[j];
+      const y = path[j + 1];
+      if (typeof x !== 'string' || typeof y !== 'string' || !ids.has(x) || !ids.has(y)) continue;
+      if (!pairs.has([x, y].sort().join('\u0000')))
+        addErr(
+          id,
+          `flow[${k}].path[${j + 1}]`,
+          'referential',
+          `flow step "${x}" -> "${y}" has no edge between those nodes`,
+        );
     }
   });
 }
@@ -354,6 +427,19 @@ function checkSequence(s: Loose, id: string, addErr: Add): void {
           `messages[${k}].${end}`,
           'referential',
           `participant index ${v} is out of range (0-${n - 1})`,
+        );
+    }
+    const from = m.from;
+    const to = m.to;
+    if (typeof from === 'number' && typeof to === 'number') {
+      if (from === to)
+        addErr(id, `messages[${k}].to`, 'layout', 'a message needs two different participants');
+      else if (typeof m.note === 'string' && Math.max(from, to) === n - 1)
+        addErr(
+          id,
+          `messages[${k}].note`,
+          'layout',
+          'no note on a message that ends at the rightmost participant (it would clip at the frame edge)',
         );
     }
   });

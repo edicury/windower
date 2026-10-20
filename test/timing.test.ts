@@ -30,6 +30,21 @@ describe('reading-speed timing', () => {
     expect(t.scenes[0]?.audio).toBeNull();
   });
 
+  it('applies per-scene transitions: none is a hard cut with no overlap', () => {
+    const t = computeTiming([
+      {id: 's01', narration: words(29)},
+      {id: 's02', narration: words(29), transition: 'slide'},
+      {id: 's03', narration: words(29), transition: 'none'},
+      {id: 's04', narration: words(29), transition: 'fade'},
+    ]);
+    const d = Math.round(10.9 * 30);
+    expect(t.scenes.map((s) => s.transition)).toEqual(['none', 'slide', 'none', 'fade']);
+    expect(t.scenes.map((s) => s.startFrame)).toEqual([0, d - 12, 2 * d - 12, 3 * d - 24]);
+    expect(t.totalFrames).toBe(4 * d - 24);
+    // captions stay scene-relative, so a scene's audio/captions offset is its startFrame.
+    expect(t.scenes[2]?.startFrame).toBe((t.scenes[1]?.startFrame ?? 0) + d);
+  });
+
   it('produces word captions with Caption fields starting after a 200 ms lead', () => {
     const c = captionsFor('one two three');
     expect(c).toHaveLength(3);
@@ -43,7 +58,16 @@ describe('reading-speed timing', () => {
     fps: 30,
     mode: 'silent',
     transitionFrames: 12,
-    scenes: [{id: 's01', startFrame: 0, durationFrames: sec * 30, audio: null, captions: []}],
+    scenes: [
+      {
+        id: 's01',
+        startFrame: 0,
+        durationFrames: sec * 30,
+        transition: 'none',
+        audio: null,
+        captions: [],
+      },
+    ],
     totalFrames: sec * 30,
   });
 

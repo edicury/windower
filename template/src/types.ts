@@ -22,20 +22,31 @@ type Base = {
 export type TitleScene = Base & {type: 'title'; headline: string; subtitle?: string; badge?: string};
 export type BulletsScene = Base & {type: 'bullets'; heading: string; items: string[]};
 export type CodeToken = {c: string; color?: string};
-export type CodeLine = {n: number; tokens: CodeToken[]};
+/** `n` is the snippet line number (startLine + row index); `kind` is set in diff mode. */
+export type CodeLine = {n: number; kind?: 'add' | 'del' | 'ctx'; tokens: CodeToken[]};
 export type CodeScene = Base & {
-  type: 'code'; title: string; file: string; startLine: number; endLine: number;
-  focus: [number, number][]; lines: CodeLine[];
+  type: 'code'; file: string; language: string; startLine: number; mode: 'plain' | 'diff';
+  caption?: string; focus: {lines: [number, number]; at?: number}[]; lines: CodeLine[];
 };
-export type ArchNode = {id: string; label: string; sub?: string; x: number; y: number; tone?: 'green' | 'violet'};
+export type ArchNode = {
+  id: string; label: string; sub?: string; group?: string;
+  kind: 'service' | 'db' | 'queue' | 'client' | 'external' | 'module';
+};
 export type ArchScene = Base & {
-  type: 'architecture'; title: string; nodes: ArchNode[]; edges: {from: string; to: string; label?: string}[];
+  type: 'architecture'; title: string; nodes: ArchNode[];
+  edges: {from: string; to: string; label?: string}[];
+  flow?: {path: string[]; at?: number}[];
 };
 export type SequenceScene = Base & {
   type: 'sequence'; title: string; participants: string[];
   messages: {from: number; to: number; text: string; note?: string}[];
 };
-export type Scene = TitleScene | BulletsScene | CodeScene | ArchScene | SequenceScene;
+export type TimelineScene = Base & {
+  type: 'timeline'; title: string; orientation?: 'horizontal';
+  items: {label: string; detail?: string; when?: string}[];
+};
+export type OutroScene = Base & {type: 'outro'; headline: string; subtitle?: string; items?: string[]};
+export type Scene = TitleScene | BulletsScene | CodeScene | ArchScene | SequenceScene | TimelineScene | OutroScene;
 export type ExplainerProps = {
   title: string;
   fps: number;

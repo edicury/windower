@@ -82,8 +82,8 @@ describe('stress-over-limit fixture (testing.md 2.1, phase 1 rows)', () => {
     expect(has(r.errors, 's02', 'items[0]', 'item length > 110')).toBe(true);
   });
   it('rejects the 40-line code scene with a 186-char line', () => {
-    expect(has(r.errors, 's03', 'endLine', 'lines > 16')).toBe(true);
-    expect(has(r.errors, 's03', 'file', 'line length > 100')).toBe(true);
+    expect(has(r.errors, 's03', 'code', 'lines > 16')).toBe(true);
+    expect(has(r.errors, 's03', 'code', 'line length > 100')).toBe(true);
   });
   it('rejects an edge to an unknown node id', () => {
     expect(has(r.errors, 's04', 'edges[1].to', 'ghost')).toBe(true);
@@ -91,9 +91,29 @@ describe('stress-over-limit fixture (testing.md 2.1, phase 1 rows)', () => {
   it('rejects a sequence index out of range', () => {
     expect(has(r.errors, 's05', 'messages[1].to', 'out of range')).toBe(true);
   });
-  it('rejects endLine past EOF and startLine > endLine', () => {
-    expect(has(r.errors, 's06', 'endLine', 'past the end')).toBe(true);
-    expect(has(r.errors, 's07', 'startLine', '>')).toBe(true);
+  it('rejects a snippet past EOF and a focus outside the snippet', () => {
+    expect(has(r.errors, 's06', 'code', 'past the end')).toBe(true);
+    expect(has(r.errors, 's07', 'focus[0]', 'outside the snippet')).toBe(true);
+  });
+  it('rejects 15 nodes / 20 edges (nodes > 9, edges > 12)', () => {
+    expect(has(r.errors, 's09', 'nodes', 'nodes > 9')).toBe(true);
+    expect(has(r.errors, 's09', 'edges', 'edges > 12')).toBe(true);
+  });
+  it('rejects the over-limit sequence (messages > 8, text > 40, note > 36, rightmost note)', () => {
+    expect(has(r.errors, 's10', 'messages', 'messages > 8')).toBe(true);
+    expect(has(r.errors, 's10', 'messages[0].text', 'text > 40')).toBe(true);
+    expect(has(r.errors, 's10', 'messages[0].note', 'note > 36')).toBe(true);
+    expect(has(r.errors, 's10', 'messages[3].note', 'rightmost')).toBe(true);
+  });
+  it('rejects an over-limit timeline and outro', () => {
+    expect(has(r.errors, 's11', 'items', 'items > 7')).toBe(true);
+    expect(has(r.errors, 's11', 'items[0].detail', 'detail > 80')).toBe(true);
+    expect(has(r.errors, 's12', 'headline', 'headline > 90')).toBe(true);
+    expect(has(r.errors, 's12', 'items', 'items > 3')).toBe(true);
+  });
+  it('rejects the six over-wrapped bullets with a split suggestion', () => {
+    expect(has(r.errors, 's02', 'items', 'wrapped lines')).toBe(true);
+    expect(has(r.errors, 's02', 'items', 'split the scene')).toBe(true);
   });
   it('every error names a scene id or is storyboard-level', () => {
     for (const e of r.errors) expect(e.path).not.toBe('');

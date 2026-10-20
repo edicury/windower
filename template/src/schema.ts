@@ -1,6 +1,7 @@
 // Storyboard schema (contracts/storyboard-schema.md). Zod is the source of truth; the validator
 // (scripts/validate-storyboard.ts) adds cross-scene, referential and duration rules on top.
 import {z} from 'zod';
+import {codeTextProblems} from './codeLines';
 
 export const PLUGIN_VERSION = '0.1.0';
 
@@ -13,8 +14,29 @@ export const LIMITS = {
   bulletsItemChars: 110,
   codeLines: 16,
   codeLineChars: 100,
+  archNodes: {min: 2, max: 9},
+  archEdges: {min: 1, max: 12},
+  archLabel: 20,
+  archSub: 30,
+  archEdgeLabel: 24,
   narrationWords: {min: 8, max: 60},
   scenes: {min: 3, max: 14},
+  seqParticipants: {min: 2, max: 5},
+  seqParticipantChars: 18,
+  seqMessages: {min: 2, max: 8},
+  seqTextChars: 40,
+  seqNoteChars: 36,
+  timelineItems: {min: 3, max: 7},
+  timelineLabelChars: 24,
+  timelineDetailChars: 80,
+  timelineWhenChars: 20,
+  outroHeadline: 90,
+  outroSubtitle: 80,
+  outroItems: 3,
+  outroItemChars: 60,
+  /** Bullets: wrapped-line budget (46 px text, ~68 chars per line in the 1560 px column). */
+  bulletsWrappedLines: 8,
+  bulletsCharsPerLine: 68,
 } as const;
 
 export const countWords = (text: string): number => {
@@ -67,22 +89,33 @@ export const BulletsScene = z.strictObject({
     .max(LIMITS.bulletsItems.max, {error: `items > ${LIMITS.bulletsItems.max}`}),
 });
 
-// Prototype scenes: kept working in phase 1, reshaped and limited in phase 2.
+// Code scene (FR-SCN-03). `focus[].lines` are snippet line numbers: startLine + row index (in diff
+// mode rows include removed lines). `focus[].at` is the fraction of the scene when the focus starts.
 export const CodeScene = z
   .strictObject({
     ...base,
     type: z.literal('code'),
-    title: z.string().min(1),
     file: z.string().min(1),
-    language: z.string().optional(),
+    language: z.string().min(1),
     startLine: z.number().int().min(1),
-    endLine: z.number().int().min(1),
-    focus: z.array(z.tuple([z.number().int(), z.number().int()])).optional(),
+    code: z.string().min(1),
+    focus: z
+      .array(
+        z.strictObject({
+          lines: z.tuple([z.number().int(), z.number().int()]),
+          at: z.number().min(0).max(1).optional(),
+        }),
+      )
+      .optional(),
+    mode: z.enum(['plain', 'diff']).default('plain'),
+    caption: z.string().max(100, {error: 'caption > 100 chars'}).optional(),
   })
-  .refine((s) => s.endLine < s.startLine || s.endLine - s.startLine + 1 <= LIMITS.codeLines, {
-    path: ['endLine'],
-    error: `lines > ${LIMITS.codeLines}`,
+  .superRefine((s, ctx) => {
+    for (const p of codeTextProblems(s, {lines: LIMITS.codeLines, chars: LIMITS.codeLineChars}))
+      ctx.addIssue({code: 'custom', path: p.path, message: p.message});
   });
+
+export const ARCH_KINDS = ['service', 'db', 'queue', 'client', 'external', 'module'] as const;
 
 export const ArchitectureScene = z.strictObject({
   ...base,
@@ -92,34 +125,88 @@ export const ArchitectureScene = z.strictObject({
     .array(
       z.strictObject({
         id: z.string().min(1),
-        label: z.string().min(1),
-        sub: z.string().optional(),
-        x: z.number(),
-        y: z.number(),
-        tone: z.enum(['green', 'violet']).optional(),
+        label: z.string().min(1).max(LIMITS.archLabel, {error: `label > ${LIMITS.archLabel} chars`}),
+        sub: z.string().max(LIMITS.archSub, {error: `sub > ${LIMITS.archSub} chars`}).optional(),
+        kind: z.enum(ARCH_KINDS),
+        group: z.string().min(1).max(LIMITS.archLabel, {error: `group > ${LIMITS.archLabel} chars`}).optional(),
       }),
     )
-    .min(1),
+    .min(LIMITS.archNodes.min, {error: `nodes < ${LIMITS.archNodes.min}`})
+    .max(LIMITS.archNodes.max, {error: `nodes > ${LIMITS.archNodes.max}`}),
   edges: z
-    .array(z.strictObject({from: z.string(), to: z.string(), label: z.string().optional()}))
-    .min(1),
+    .array(
+      z.strictObject({
+        from: z.string(),
+        to: z.string(),
+        label: z.string().max(LIMITS.archEdgeLabel, {error: `label > ${LIMITS.archEdgeLabel} chars`}).optional(),
+      }),
+    )
+    .min(LIMITS.archEdges.min, {error: `edges < ${LIMITS.archEdges.min}`})
+    .max(LIMITS.archEdges.max, {error: `edges > ${LIMITS.archEdges.max}`}),
+  flow: z
+    .array(
+      z.strictObject({
+        path: z.array(z.string()).min(2, {error: 'flow path needs at least 2 node ids'}),
+        at: z.number().min(0).max(1).optional(),
+      }),
+    )
+    .optional(),
 });
 
 export const SequenceScene = z.strictObject({
   ...base,
   type: z.literal('sequence'),
-  title: z.string().min(1),
-  participants: z.array(z.string().min(1)).min(2),
+  title: z.string().min(1).max(60, {error: 'title > 60 chars'}),
+  participants: z
+    .array(
+      z
+        .string()
+        .min(1)
+        .max(LIMITS.seqParticipantChars, {error: `participant name > ${LIMITS.seqParticipantChars} chars`}),
+    )
+    .min(LIMITS.seqParticipants.min, {error: `participants < ${LIMITS.seqParticipants.min}`})
+    .max(LIMITS.seqParticipants.max, {error: `participants > ${LIMITS.seqParticipants.max}`}),
   messages: z
     .array(
       z.strictObject({
         from: z.number().int(),
         to: z.number().int(),
-        text: z.string(),
-        note: z.string().optional(),
+        text: z.string().min(1).max(LIMITS.seqTextChars, {error: `text > ${LIMITS.seqTextChars} chars`}),
+        note: z.string().max(LIMITS.seqNoteChars, {error: `note > ${LIMITS.seqNoteChars} chars`}).optional(),
       }),
     )
-    .min(1),
+    .min(LIMITS.seqMessages.min, {error: `messages < ${LIMITS.seqMessages.min}`})
+    .max(LIMITS.seqMessages.max, {error: `messages > ${LIMITS.seqMessages.max}`}),
+});
+
+// Timeline (FR-SCN-06): 3-7 events revealed in order along a horizontal axis.
+export const TimelineScene = z.strictObject({
+  ...base,
+  type: z.literal('timeline'),
+  title: z.string().min(1).max(60, {error: 'title > 60 chars'}),
+  orientation: z.literal('horizontal').default('horizontal'),
+  items: z
+    .array(
+      z.strictObject({
+        label: z.string().min(1).max(LIMITS.timelineLabelChars, {error: `label > ${LIMITS.timelineLabelChars} chars`}),
+        detail: z.string().max(LIMITS.timelineDetailChars, {error: `detail > ${LIMITS.timelineDetailChars} chars`}).optional(),
+        when: z.string().max(LIMITS.timelineWhenChars, {error: `when > ${LIMITS.timelineWhenChars} chars`}).optional(),
+      }),
+    )
+    .min(LIMITS.timelineItems.min, {error: `items < ${LIMITS.timelineItems.min}`})
+    .max(LIMITS.timelineItems.max, {error: `items > ${LIMITS.timelineItems.max}`}),
+});
+
+// Outro card (FR-SCN-07): title-style payload plus up to 3 takeaway lines. `sources` may be empty.
+export const OutroScene = z.strictObject({
+  ...base,
+  type: z.literal('outro'),
+  headline: z.string().min(1).max(LIMITS.outroHeadline, {error: `headline > ${LIMITS.outroHeadline} chars`}),
+  subtitle: z.string().max(LIMITS.outroSubtitle, {error: `subtitle > ${LIMITS.outroSubtitle} chars`}).optional(),
+  items: z
+    .array(z.string().min(1).max(LIMITS.outroItemChars, {error: `item length > ${LIMITS.outroItemChars} chars`}))
+    .max(LIMITS.outroItems, {error: `items > ${LIMITS.outroItems}`})
+    .optional(),
 });
 
 export const Scene = z.discriminatedUnion('type', [
@@ -128,6 +215,8 @@ export const Scene = z.discriminatedUnion('type', [
   CodeScene,
   ArchitectureScene,
   SequenceScene,
+  TimelineScene,
+  OutroScene,
 ]);
 
 export const Storyboard = z.strictObject({

@@ -20,6 +20,8 @@ export interface TimingScene {
   id: string;
   startFrame: number;
   durationFrames: number;
+  /** Transition INTO this scene; `none` means a hard cut with no overlap (the first scene has none). */
+  transition: 'fade' | 'slide' | 'none';
   audio: string | null;
   captions: Caption[];
 }
@@ -37,6 +39,15 @@ interface TimedInput {
   id: string;
   narration: string;
   minDurationSec?: number;
+  transition?: 'fade' | 'slide' | 'none';
+}
+
+/** Frames a scene overlaps its predecessor: `transitionFrames` for fade/slide, 0 for a hard cut. */
+export function overlapFrames(
+  transition: 'fade' | 'slide' | 'none' | undefined,
+  transitionFrames = TRANSITION_FRAMES,
+): number {
+  return transition === 'none' ? 0 : transitionFrames;
 }
 
 export function wordsOf(narration: string): string[] {
@@ -64,12 +75,14 @@ export function computeTiming(scenes: TimedInput[], opts: {wps?: number} = {}): 
   let cursor = 0;
   const out: TimingScene[] = scenes.map((s, i) => {
     const durationFrames = Math.round(sceneSeconds(s, opts.wps) * FPS);
-    const startFrame = i === 0 ? 0 : cursor - TRANSITION_FRAMES;
+    const transition = i === 0 ? 'none' : (s.transition ?? 'fade');
+    const startFrame = i === 0 ? 0 : cursor - overlapFrames(transition);
     cursor = startFrame + durationFrames;
     return {
       id: s.id,
       startFrame,
       durationFrames,
+      transition,
       audio: null,
       captions: captionsFor(s.narration, opts.wps),
     };

@@ -1,0 +1,377 @@
+{
+  "version": 1,
+  "slug": "all-scenes",
+  "title": "All scene types",
+  "audience": "onboarding",
+  "repoRoot": "../repos/sample",
+  "targetSec": 100,
+  "scenes": [
+    {
+      "id": "s01",
+      "type": "title",
+      "headline": "A tour of the greeter module",
+      "subtitle": "One small file, three exported functions",
+      "badge": "Onboarding",
+      "narration": "This short video walks through the greeter module in the sample repository, what it exports, and how the command line entry point uses it.",
+      "sources": []
+    },
+    {
+      "id": "s02",
+      "type": "bullets",
+      "heading": "Hard limits keep every bullet above the captions bar, always",
+      "items": [
+        "Hard limits are enforced by the validator before any frame is rendered, so nothing is silently clipped ok",
+        "Wrapped text is budgeted at eight lines in total, which keeps every bullet above the captions bar now",
+        "Each bullet is revealed in order, spaced across the duration of the scene so that it follows narration",
+        "Short bullet one",
+        "Short bullet two"
+      ],
+      "narration": "Five short points cover the essentials here. Each one stays within the line budget, so the list reads cleanly from top to bottom without crowding the captions at the bottom.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:1-24"
+        }
+      ],
+      "minDurationSec": 14,
+      "transition": "fade"
+    },
+    {
+      "id": "s03",
+      "narration": "This function turns records into display rows. Each label is padded, upper-cased and clipped to one hundred columns, then a summary row reports the widest label, so no row ever exceeds the limit.",
+      "type": "code",
+      "file": "src/wide.ts",
+      "language": "typescript",
+      "startLine": 2,
+      "code": "export interface WideRecord {\n  readonly identifier: string;\n  readonly displayName: string;\n}\n\nexport function describeRecords(records: readonly WideRecord[], separator = ' | '): string[] {\n  const rows: string[] = [];\n  for (const record of records) {\n    const id = record.identifier.padEnd(12, '.');\n    const label = `${id}${separator}${record.displayName.toUpperCase()}`; // upper-case display name\n    const clipped = label.length <= 100 ? label : `${label.slice(0, 97)}...`; // max 100 cols\n    rows.push(clipped);\n  }\n  const widest = Math.max(0, ...rows.map((row) => row.length)); // widest label\n  rows.push(`${rows.length} record(s) described; the widest label has ${widest} characters.`);\n  return rows;",
+      "focus": [
+        {
+          "lines": [8, 10],
+          "at": 0.2
+        },
+        {
+          "lines": [11, 13],
+          "at": 0.5
+        },
+        {
+          "lines": [14, 17],
+          "at": 0.75
+        }
+      ],
+      "mode": "plain",
+      "caption": "Sixteen lines of up to one hundred characters each: the label is clipped, then summarised.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/wide.ts:2-17"
+        }
+      ],
+      "transition": "slide"
+    },
+    {
+      "id": "s04",
+      "narration": "This function turns records into display rows. Each label is padded, upper-cased and clipped to one hundred columns, then a summary row reports the widest label, so no row ever exceeds the limit.",
+      "type": "code",
+      "file": "src/wide.ts",
+      "language": "typescript",
+      "startLine": 8,
+      "code": "   const rows: string[] = [];\n   for (const record of records) {\n-    rows.push(`${record.identifier} | ${record.displayName}`);\n+    const id = record.identifier.padEnd(12, '.');\n+    rows.push(`${id} | ${record.displayName.toUpperCase()}`);\n   }\n   return rows;",
+      "focus": [
+        {
+          "lines": [10, 13],
+          "at": 0.3
+        }
+      ],
+      "mode": "diff",
+      "caption": "The change pads the identifier and upper-cases the display name before pushing the row.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/wide.ts:8-14"
+        }
+      ],
+      "transition": "fade"
+    },
+    {
+      "id": "s05",
+      "type": "architecture",
+      "title": "Request path through the platform",
+      "nodes": [
+        {
+          "id": "client",
+          "label": "Browser client",
+          "sub": "React single page app",
+          "kind": "client",
+          "group": "Edge"
+        },
+        {
+          "id": "gateway",
+          "label": "API gateway",
+          "sub": "Routes every request",
+          "kind": "service",
+          "group": "Edge"
+        },
+        {
+          "id": "auth",
+          "label": "Auth service",
+          "sub": "Issues short-lived tokens",
+          "kind": "service",
+          "group": "Core"
+        },
+        {
+          "id": "web",
+          "label": "Web frontend",
+          "sub": "Server rendered pages",
+          "kind": "module",
+          "group": "Edge"
+        },
+        {
+          "id": "orders",
+          "label": "Orders service",
+          "sub": "Validates and stores orders",
+          "kind": "service",
+          "group": "Core"
+        },
+        {
+          "id": "queue",
+          "label": "Order events queue",
+          "sub": "Durable async delivery",
+          "kind": "queue",
+          "group": "Data"
+        },
+        {
+          "id": "cache",
+          "label": "Session cache",
+          "sub": "Keeps hot sessions",
+          "kind": "module",
+          "group": "Data"
+        },
+        {
+          "id": "database",
+          "label": "Orders database",
+          "sub": "Primary system of record",
+          "kind": "db",
+          "group": "Data"
+        },
+        {
+          "id": "mailer",
+          "label": "Email provider",
+          "sub": "External SMTP relay API",
+          "kind": "external",
+          "group": "Outside"
+        }
+      ],
+      "edges": [
+        {
+          "from": "client",
+          "to": "gateway",
+          "label": "HTTPS request"
+        },
+        {
+          "from": "gateway",
+          "to": "auth",
+          "label": "verify token"
+        },
+        {
+          "from": "web",
+          "to": "orders",
+          "label": "order form POST"
+        },
+        {
+          "from": "orders",
+          "to": "queue",
+          "label": "publish order"
+        },
+        {
+          "from": "cache",
+          "to": "database",
+          "label": "write behind"
+        },
+        {
+          "from": "database",
+          "to": "mailer",
+          "label": "send receipt mail"
+        },
+        {
+          "from": "client",
+          "to": "web",
+          "label": "page load"
+        },
+        {
+          "from": "gateway",
+          "to": "orders",
+          "label": "route to orders svc"
+        },
+        {
+          "from": "auth",
+          "to": "queue",
+          "label": "audit trail events"
+        },
+        {
+          "from": "web",
+          "to": "cache",
+          "label": "session lookup"
+        },
+        {
+          "from": "orders",
+          "to": "database",
+          "label": "store order record"
+        },
+        {
+          "from": "queue",
+          "to": "mailer",
+          "label": "notify"
+        }
+      ],
+      "flow": [
+        {
+          "path": ["client", "gateway", "orders", "database"],
+          "at": 0.4
+        },
+        {
+          "path": ["orders", "queue", "mailer"],
+          "at": 0.6
+        }
+      ],
+      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the auth service and the queue on its way, and how results flow back to the user. The orders service then stores the record and queues a receipt email.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:6-18"
+        }
+      ],
+      "minDurationSec": 16,
+      "transition": "slide"
+    },
+    {
+      "id": "s06",
+      "type": "sequence",
+      "title": "Login to invoice, five participants",
+      "participants": [
+        "Browser client app",
+        "API gateway server",
+        "Auth token service",
+        "Billing job queue",
+        "Postgres database"
+      ],
+      "messages": [
+        {
+          "from": 0,
+          "to": 1,
+          "text": "POST /login with credentials and nonce",
+          "note": "rate limited at 20 per minute here"
+        },
+        {
+          "from": 1,
+          "to": 2,
+          "text": "Forward request with trace header added"
+        },
+        {
+          "from": 2,
+          "to": 1,
+          "text": "Verify password hash and session rules",
+          "note": "argon2id with 64 MiB memory cost"
+        },
+        {
+          "from": 1,
+          "to": 3,
+          "text": "Return signed token and refresh handle"
+        },
+        {
+          "from": 1,
+          "to": 3,
+          "text": "Charge plan fee through billing worker",
+          "note": "idempotency key on every request!!"
+        },
+        {
+          "from": 3,
+          "to": 4,
+          "text": "Enqueue invoice job for nightly batch"
+        },
+        {
+          "from": 4,
+          "to": 3,
+          "text": "Persist invoice row and audit log entry"
+        },
+        {
+          "from": 1,
+          "to": 0,
+          "text": "Reply 200 with profile and plan summary"
+        }
+      ],
+      "narration": "The sequence shows five participants exchanging eight messages in order. Each arrow appears as the narration reaches it, and the notes explain what happens at the key steps along the way.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:1-24"
+        }
+      ],
+      "minDurationSec": 20,
+      "transition": "fade"
+    },
+    {
+      "id": "s07",
+      "type": "timeline",
+      "title": "From prototype to release",
+      "items": [
+        {
+          "label": "Prototype built",
+          "detail": "Single file proof of concept shared with two teams for review",
+          "when": "Jan 2026"
+        },
+        {
+          "label": "Stress test run",
+          "detail": "Forty lines of code and fifteen nodes broke the layout",
+          "when": "Mar 2026"
+        },
+        {
+          "label": "Limits written down",
+          "detail": "Per-scene limits enforced by the validator, not by hope",
+          "when": "Apr 2026"
+        },
+        {
+          "label": "Scene library done",
+          "detail": "Code, architecture, sequence and timeline scenes all render",
+          "when": "May 2026"
+        },
+        {
+          "label": "Voice and captions",
+          "detail": "Narration is synthesised and captions are burned in",
+          "when": "Jun 2026"
+        },
+        {
+          "label": "Plugin packaged",
+          "detail": "Skills, scripts and the template ship as one plugin",
+          "when": "Jul 2026"
+        },
+        {
+          "label": "First public release",
+          "detail": "Version one is tagged and announced to every team",
+          "when": "Aug 2026"
+        }
+      ],
+      "narration": "The timeline walks through seven milestones from left to right. Every item reveals in turn, with a short label, a detail line, and a date, so the order of events is easy to follow.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:1-24"
+        }
+      ],
+      "transition": "none"
+    },
+    {
+      "id": "s08",
+      "type": "outro",
+      "headline": "Ninety characters is the longest outro headline that still fits in the card nicely",
+      "subtitle": "Eighty characters is the longest subtitle and it fits on the card as well",
+      "items": [
+        "Read the brief and the storyboard first",
+        "Run the validator before every render",
+        "Review the stills at full resolution"
+      ],
+      "narration": "That covers every scene type in the library. Read the brief and the storyboard first, validate before each render, and review the stills at full resolution before sharing the result.",
+      "sources": [],
+      "transition": "fade"
+    }
+  ]
+}

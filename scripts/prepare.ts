@@ -4,13 +4,13 @@ import {readFileSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
-import {codeToTokens, type BundledLanguage} from 'shiki';
 import {Storyboard} from '../template/src/schema.js';
 import type {CodeLine, ExplainerProps, Scene} from '../template/src/types.js';
+import {highlightCode} from './code-highlight.js';
 import {buildCues, toSrt, toVtt} from './captions.js';
 import {EXIT} from './lib.js';
 import {checkTotal, computeTiming, type Timing} from './timing.js';
-import {formatIssue, resolveRepoRoot, validateFile} from './validate-storyboard.js';
+import {formatIssue, validateFile} from './validate-storyboard.js';
 
 export const PREPARE_USAGE =
   'Usage: prepare <storyboard.json> [--repo <root>] [--quiet]\n' +
@@ -25,34 +25,15 @@ export class PrepareError extends Error {
   }
 }
 
-/** Highlights exactly the lines a code scene shows; every failure names the scene id and repoRoot. */
+/** Highlights the scene's own code text; failures name the scene id. */
 async function highlight(
   scene: Extract<Storyboard['scenes'][number], {type: 'code'}>,
-  repoRoot: string,
 ): Promise<CodeLine[]> {
-  const file = path.join(repoRoot, scene.file);
-  let text: string;
   try {
-    text = readFileSync(file, 'utf8');
+    return await highlightCode(scene);
   } catch (e) {
     throw new PrepareError(
-      `scene ${scene.id}: cannot read ${scene.file} under repoRoot ${repoRoot}: ${(e as Error).message}`,
-      EXIT.validation,
-    );
-  }
-  const src = text.split('\n').slice(scene.startLine - 1, scene.endLine);
-  try {
-    const {tokens} = await codeToTokens(src.join('\n'), {
-      lang: (scene.language ?? 'ts') as BundledLanguage,
-      theme: 'github-dark',
-    });
-    return tokens.map((line, i) => ({
-      n: scene.startLine + i,
-      tokens: line.map((tk) => ({c: tk.content, color: tk.color})),
-    }));
-  } catch (e) {
-    throw new PrepareError(
-      `scene ${scene.id}: cannot highlight ${scene.file} as "${scene.language ?? 'ts'}": ${(e as Error).message}`,
+      `scene ${scene.id}: cannot highlight ${scene.file} as "${scene.language}": ${(e as Error).message}`,
       EXIT.validation,
     );
   }
@@ -74,10 +55,6 @@ export async function prepare(
     );
   }
   const sb = Storyboard.parse(JSON.parse(readFileSync(file, 'utf8')));
-  const repoRoot = resolveRepoRoot(sb, {
-    repoRoot: opts.repoRoot,
-    baseDir: dir,
-  });
 
   const timing = computeTiming(sb.scenes);
   const verdict = checkTotal(timing);
@@ -97,10 +74,10 @@ export async function prepare(
       audio: t.audio,
     };
     if (s.type === 'code') {
-      const lines = await highlight(s, repoRoot ?? '');
+      const lines = await highlight(s);
       scenes.push({
         ...common,
-        focus: s.focus ?? [[s.startLine, s.endLine]],
+        focus: s.focus ?? [],
         lines,
       } as unknown as Scene);
     } else {
