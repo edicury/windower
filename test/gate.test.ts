@@ -58,6 +58,33 @@ describe('buildSummary', () => {
       buildSummary(raw, validation, {briefText: brief}).disclosures.map((d) => d.service),
     ).toContain('MCP server "notion"');
   });
+
+  it('discloses external sources: used servers, context URLs by host, skipped servers', () => {
+    const brief = [
+      '## Context (from tickets/docs)',
+      '- C01 Ask. [url https://linear.app/x/issue/A-1] [url https://linear.app/x/issue/A-1]',
+      '- C02 Doc. [url https://notion.so/p/1]',
+      '## Sources consulted',
+      '- code: used',
+      '- mcp:linear: used',
+      '## Excluded / redacted',
+      '- mcp:sentry: unavailable',
+      '',
+    ].join('\n');
+    expect(mcpServersFromBrief(brief)).toEqual(['linear']);
+    const s = buildSummary(raw, validation, {briefText: brief});
+    expect(s.externalSources).toEqual([{server: 'linear', status: 'used'}]);
+    expect(s.externalUrls).toEqual([
+      {host: 'linear.app', urls: ['https://linear.app/x/issue/A-1']},
+      {host: 'notion.so', urls: ['https://notion.so/p/1']},
+    ]);
+    expect(s.skippedServers).toEqual(['sentry']);
+    const out = renderSummary(s);
+    expect(out).toContain('mcp:linear: used');
+    expect(out).toContain('linear.app: https://linear.app/x/issue/A-1');
+    expect(out).toContain('mcp:sentry: unavailable, skipped');
+    expect(renderSummary(buildSummary(raw, validation))).not.toContain('External sources');
+  });
 });
 
 describe('applyApproval', () => {

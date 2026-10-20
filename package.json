@@ -16,6 +16,8 @@
     "ve:timing": "tsx scripts/timing.ts",
     "ve:status": "tsx scripts/status.ts",
     "ve:redact": "tsx scripts/redact.ts",
+    "ve:sources": "tsx scripts/sources.ts",
+    "ve:brief": "tsx scripts/brief.ts",
     "typecheck": "tsc --noEmit && pnpm --filter windower-template exec tsc --noEmit",
     "lint": "eslint .",
     "format:check": "prettier --check .",

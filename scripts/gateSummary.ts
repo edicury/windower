@@ -54,6 +54,12 @@ export interface GateSummary {
   costNote: string;
   disclosures: {service: string; receives: string}[];
   mcpServers: string[];
+  /** External sources whose data entered the brief (4.C.2). */
+  externalSources: {server: string; status: 'used'}[];
+  /** [url ...] citations from Context items, grouped by host. */
+  externalUrls: {host: string; urls: string[]}[];
+  /** MCP servers recorded as unavailable; skipped (4.B.2). */
+  skippedServers: string[];
 }
 
 type Loose = Record<string, unknown>;
@@ -67,9 +73,56 @@ function sceneTitle(s: Loose): string {
   return '';
 }
 
+const SKIPPED = /\b(unavailable|not available|failed|failing|skipped|unreachable)\b/i;
+
+function sectionBody(briefText: string, heading: string): string {
+  const re = new RegExp(`^##\\s+${heading}[^\\n]*$([\\s\\S]*?)(?=^##\\s|(?![\\s\\S]))`, 'im');
+  return re.exec(briefText)?.[1] ?? '';
+}
+
+/** Servers recorded as unavailable under Excluded or Sources consulted; their data never entered the brief. */
+export function skippedServersFromBrief(briefText: string | undefined): string[] {
+  if (!briefText) return [];
+  const found = new Set<string>();
+  for (const sec of ['Excluded', 'Sources consulted']) {
+    for (const line of sectionBody(briefText, sec).split('\n')) {
+      if (!SKIPPED.test(line)) continue;
+      const m = /\bmcp[:/ ]+([A-Za-z0-9_.-]+)/i.exec(line);
+      const name = m?.[1]?.toLowerCase();
+      if (name && !/^(server|servers|tool|tools)$/.test(name)) found.add(name);
+    }
+  }
+  return [...found].sort();
+}
+
+/** Distinct `[url ...]` citations from Context items, grouped by host. */
+export function contextUrlsFromBrief(
+  briefText: string | undefined,
+): {host: string; urls: string[]}[] {
+  if (!briefText) return [];
+  const byHost = new Map<string, Set<string>>();
+  for (const line of sectionBody(briefText, 'Context').split('\n')) {
+    if (!/^\s*[-*]\s+C\d+\b/.test(line)) continue;
+    for (const m of line.matchAll(/\[url\s+([^\]\s]+)[^\]]*\]/gi)) {
+      const url = m[1] ?? '';
+      let host = '(unparsed)';
+      try {
+        host = new URL(url).host || host;
+      } catch {
+        // keep placeholder host
+      }
+      byHost.set(host, (byHost.get(host) ?? new Set()).add(url));
+    }
+  }
+  return [...byHost]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([host, u]) => ({host, urls: [...u].sort()}));
+}
+
 /** MCP servers named in brief.md: `mcp:<name>` tags and "Sources consulted" bullets marked used. */
 export function mcpServersFromBrief(briefText: string | undefined): string[] {
   if (!briefText) return [];
+  const skipped = new Set(skippedServersFromBrief(briefText));
   const found = new Set<string>();
   for (const m of briefText.matchAll(/\bmcp[:/ ]+([A-Za-z0-9_.-]+)/gi)) {
     const name = m[1];
@@ -80,11 +133,11 @@ export function mcpServersFromBrief(briefText: string | undefined): string[] {
     for (const line of section[1].split('\n')) {
       const m = /^\s*[-*]\s*([A-Za-z][\w .-]*?)\s*[:(—-].*\bused\b/i.exec(line);
       const name = m?.[1]?.trim().toLowerCase();
-      if (name && !/^(code|git|gh|github|github cli|repo|repository|files?)$/.test(name))
+      if (name && !/^(mcp|code|git|gh|github|github cli|repo|repository|files?)$/.test(name))
         found.add(name);
     }
   }
-  return [...found].sort();
+  return [...found].filter((n) => !skipped.has(n)).sort();
 }
 
 export function buildSummary(
@@ -129,6 +182,8 @@ export function buildSummary(
   const info = PROVIDERS[opts.provider ?? 'null'];
   const providerId = info?.id ?? opts.provider ?? 'null';
   const mcpServers = mcpServersFromBrief(opts.briefText);
+  const skippedServers = skippedServersFromBrief(opts.briefText);
+  const externalUrls = contextUrlsFromBrief(opts.briefText);
 
   const disclosures: GateSummary['disclosures'] = [];
   if (info?.voiced) {
@@ -171,6 +226,9 @@ export function buildSummary(
     costNote,
     disclosures,
     mcpServers,
+    externalSources: mcpServers.map((server) => ({server, status: 'used' as const})),
+    externalUrls,
+    skippedServers,
   };
 }
 
@@ -199,6 +257,12 @@ export function renderSummary(s: GateSummary): string {
     'Data disclosure:',
   );
   for (const d of s.disclosures) L.push(`  ${d.service}: ${d.receives}`);
+  if (s.externalSources.length || s.externalUrls.length || s.skippedServers.length) {
+    L.push('', 'External sources:');
+    for (const e of s.externalSources) L.push(`  mcp:${e.server}: ${e.status}`);
+    for (const g of s.externalUrls) L.push(`  ${g.host}: ${g.urls.join(', ')}`);
+    for (const n of s.skippedServers) L.push(`  mcp:${n}: unavailable, skipped`);
+  }
   if (s.errors.length) L.push('', 'Errors:', ...s.errors.map((e) => `  ${e}`));
   if (s.warnings.length) L.push('', 'Warnings:', ...s.warnings.map((w) => `  ${w}`));
   return L.join('\n');
