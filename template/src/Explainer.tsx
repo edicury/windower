@@ -20,7 +20,7 @@ const renderScene = (s: Scene) => {
   }
 };
 
-export const Explainer = ({scenes}: ExplainerProps) => (
+export const Explainer = ({scenes, transitionFrames = TRANSITION_FRAMES, burnIn = true}: ExplainerProps) => (
   <AbsoluteFill style={{background: theme.bg, fontFamily: theme.font, color: theme.text}}>
     <TransitionSeries>
       {scenes.flatMap((s, i) => {
@@ -28,7 +28,7 @@ export const Explainer = ({scenes}: ExplainerProps) => (
           <TransitionSeries.Sequence key={s.id} durationInFrames={s.durationFrames}>
             <AbsoluteFill>
               {renderScene(s)}
-              <Captions words={s.words} />
+              {burnIn && <Captions captions={s.captions} />}
               {s.audio && <Audio src={staticFile(s.audio)} />}
             </AbsoluteFill>
           </TransitionSeries.Sequence>
@@ -39,7 +39,7 @@ export const Explainer = ({scenes}: ExplainerProps) => (
               <TransitionSeries.Transition
                 key={`t-${s.id}`}
                 presentation={fade()}
-                timing={linearTiming({durationInFrames: TRANSITION_FRAMES})}
+                timing={linearTiming({durationInFrames: transitionFrames})}
               />,
               seq,
             ];

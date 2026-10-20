@@ -30,13 +30,21 @@ export const LICENSE_NOTE =
 export const ESBUILD_NOTE =
   'The "Ignored build scripts: esbuild" install warning is harmless: bundling and rendering work regardless.';
 
-export function isPortFree(port: number): Promise<boolean> {
+function canListen(port: number, host: string): Promise<boolean> {
   return new Promise((resolve) => {
     const server = net.createServer();
-    server.once('error', () => resolve(false));
+    server.once('error', (e: NodeJS.ErrnoException) => resolve(e.code === 'EADDRNOTAVAIL'));
     server.once('listening', () => server.close(() => resolve(true)));
-    server.listen(port, '127.0.0.1');
+    server.listen(port, host);
   });
+}
+
+/** Free only if every interface a dev server could clash on accepts a listen (another app may hold ::1 or 0.0.0.0 only). */
+export async function isPortFree(port: number): Promise<boolean> {
+  for (const host of ['127.0.0.1', '::1', '0.0.0.0', '::']) {
+    if (!(await canListen(port, host))) return false;
+  }
+  return true;
 }
 
 export function findFreePort(): Promise<number> {
@@ -89,9 +97,13 @@ interface CodeScene {
 }
 
 /** Returns one problem per invalid code scene; each names the scene id. */
-export function codeSceneProblems(storyboard: {repoRoot?: string; scenes?: CodeScene[]}): string[] {
+export function codeSceneProblems(
+  storyboard: {repoRoot?: string; scenes?: CodeScene[]},
+  baseDir = process.cwd(),
+): string[] {
   const problems: string[] = [];
-  const {repoRoot, scenes = []} = storyboard;
+  const {scenes = []} = storyboard;
+  const repoRoot = storyboard.repoRoot ? path.resolve(baseDir, storyboard.repoRoot) : undefined;
   if (!repoRoot || !existsSync(repoRoot)) {
     return [`repoRoot does not exist: ${repoRoot ?? '(unset)'}`];
   }

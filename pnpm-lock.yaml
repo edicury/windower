@@ -20,6 +20,9 @@ importers:
       prettier:
         specifier: ^3.3.0
         version: 3.9.10
+      shiki:
+        specifier: 4.5.0
+        version: 4.5.0
       tsx:
         specifier: ^4.19.0
         version: 4.23.15
@@ -32,6 +35,9 @@ importers:
       vitest:
         specifier: ^2.1.0
         version: 2.1.9(@types/node@22.20.5)(supports-color@8.1.1)(terser@5.51.2)
+      zod:
+        specifier: 4.5.4
+        version: 4.5.4
 
   template:
     dependencies:

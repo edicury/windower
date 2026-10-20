@@ -1,0 +1,163 @@
+// prepare: storyboard.json -> timing.json, props.json (+ Shiki-highlighted code), captions.srt/.vtt.
+// Port of template/scripts/prepare.mjs with validation and error wrapping (FR-SB-08).
+import {readFileSync, writeFileSync} from 'node:fs';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+import {parseArgs} from 'node:util';
+import {codeToTokens, type BundledLanguage} from 'shiki';
+import {Storyboard} from '../template/src/schema.js';
+import type {CodeLine, ExplainerProps, Scene} from '../template/src/types.js';
+import {buildCues, toSrt, toVtt} from './captions.js';
+import {EXIT} from './lib.js';
+import {checkTotal, computeTiming, type Timing} from './timing.js';
+import {formatIssue, resolveRepoRoot, validateFile} from './validate-storyboard.js';
+
+export const PREPARE_USAGE =
+  'Usage: prepare <storyboard.json> [--repo <root>] [--quiet]\n' +
+  '  Writes timing.json, props.json, captions.srt and captions.vtt next to the storyboard.';
+
+export class PrepareError extends Error {
+  constructor(
+    message: string,
+    readonly exitCode: number,
+  ) {
+    super(message);
+  }
+}
+
+/** Highlights exactly the lines a code scene shows; every failure names the scene id and repoRoot. */
+async function highlight(
+  scene: Extract<Storyboard['scenes'][number], {type: 'code'}>,
+  repoRoot: string,
+): Promise<CodeLine[]> {
+  const file = path.join(repoRoot, scene.file);
+  let text: string;
+  try {
+    text = readFileSync(file, 'utf8');
+  } catch (e) {
+    throw new PrepareError(
+      `scene ${scene.id}: cannot read ${scene.file} under repoRoot ${repoRoot}: ${(e as Error).message}`,
+      EXIT.validation,
+    );
+  }
+  const src = text.split('\n').slice(scene.startLine - 1, scene.endLine);
+  try {
+    const {tokens} = await codeToTokens(src.join('\n'), {
+      lang: (scene.language ?? 'ts') as BundledLanguage,
+      theme: 'github-dark',
+    });
+    return tokens.map((line, i) => ({
+      n: scene.startLine + i,
+      tokens: line.map((tk) => ({c: tk.content, color: tk.color})),
+    }));
+  } catch (e) {
+    throw new PrepareError(
+      `scene ${scene.id}: cannot highlight ${scene.file} as "${scene.language ?? 'ts'}": ${(e as Error).message}`,
+      EXIT.validation,
+    );
+  }
+}
+
+export async function prepare(
+  storyboardPath: string,
+  opts: {repoRoot?: string; log?: (m: string) => void} = {},
+): Promise<{timing: Timing; props: ExplainerProps; dir: string}> {
+  const log = opts.log ?? (() => undefined);
+  const file = path.resolve(storyboardPath);
+  const dir = path.dirname(file);
+  const result = validateFile(file, {repoRoot: opts.repoRoot});
+  for (const w of result.warnings) log(formatIssue(w));
+  if (result.errors.length) {
+    throw new PrepareError(
+      `${file} is invalid:\n` + result.errors.map((i) => `  ${formatIssue(i)}`).join('\n'),
+      EXIT.validation,
+    );
+  }
+  const sb = Storyboard.parse(JSON.parse(readFileSync(file, 'utf8')));
+  const repoRoot = resolveRepoRoot(sb, {
+    repoRoot: opts.repoRoot,
+    baseDir: dir,
+  });
+
+  const timing = computeTiming(sb.scenes);
+  const verdict = checkTotal(timing);
+  if (verdict.level === 'error')
+    throw new PrepareError(verdict.message ?? 'bad length', EXIT.validation);
+  if (verdict.level === 'warn') log(`warning: ${verdict.message}`);
+
+  const scenes: Scene[] = [];
+  for (const [i, s] of sb.scenes.entries()) {
+    const t = timing.scenes[i];
+    if (!t) throw new PrepareError(`scene ${s.id}: no timing entry`, EXIT.error);
+    const common = {
+      ...s,
+      durationFrames: t.durationFrames,
+      startFrame: t.startFrame,
+      captions: t.captions,
+      audio: t.audio,
+    };
+    if (s.type === 'code') {
+      const lines = await highlight(s, repoRoot ?? '');
+      scenes.push({
+        ...common,
+        focus: s.focus ?? [[s.startLine, s.endLine]],
+        lines,
+      } as unknown as Scene);
+    } else {
+      scenes.push(common as unknown as Scene);
+    }
+  }
+
+  const props: ExplainerProps = {
+    title: sb.title,
+    fps: timing.fps,
+    transitionFrames: timing.transitionFrames,
+    totalFrames: timing.totalFrames,
+    burnIn: true,
+    scenes,
+  };
+  try {
+    writeFileSync(path.join(dir, 'timing.json'), JSON.stringify(timing, null, 2));
+    writeFileSync(path.join(dir, 'props.json'), JSON.stringify(props, null, 2));
+    const cues = buildCues(timing.scenes, timing.fps);
+    writeFileSync(path.join(dir, 'captions.srt'), toSrt(cues));
+    writeFileSync(path.join(dir, 'captions.vtt'), toVtt(cues));
+  } catch (e) {
+    throw new PrepareError(
+      `cannot write outputs in ${dir}: ${(e as Error).message}`,
+      EXIT.environment,
+    );
+  }
+  return {timing, props, dir};
+}
+
+async function main(): Promise<void> {
+  const {values, positionals} = parseArgs({
+    options: {repo: {type: 'string'}, quiet: {type: 'boolean'}},
+    allowPositionals: true,
+  });
+  const file = positionals[0];
+  if (!file) {
+    console.error(PREPARE_USAGE);
+    process.exit(EXIT.validation);
+  }
+  try {
+    const {timing, dir} = await prepare(file, {
+      repoRoot: values.repo ? path.resolve(values.repo) : undefined,
+      log: (m) => console.error(m),
+    });
+    if (!values.quiet)
+      console.error(
+        `Wrote props.json, timing.json, captions.srt, captions.vtt in ${dir} (${timing.scenes.length} scenes, ${(timing.totalFrames / timing.fps).toFixed(1)} s)`,
+      );
+  } catch (e) {
+    if (e instanceof PrepareError) {
+      console.error(e.message);
+      process.exit(e.exitCode);
+    }
+    console.error(`prepare failed unexpectedly: ${(e as Error).message}`);
+    process.exit(EXIT.error);
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();

@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "slug": "greeter-tour",
+  "title": "A tour of the greeter module",
+  "audience": "onboarding",
+  "repoRoot": "../repos/sample",
+  "targetSec": 80,
+  "scenes": [
+    {
+      "id": "s01",
+      "type": "title",
+      "headline": "A tour of the greeter module",
+      "subtitle": "One small file, three exported functions",
+      "badge": "Onboarding",
+      "narration": "Short but valid narration with exactly enough words in it.",
+      "sources": []
+    },
+    {
+      "id": "s02",
+      "type": "bullets",
+      "heading": "What the module offers",
+      "items": [
+        "greet builds one greeting line for a single person",
+        "greetAll maps a list of names to a list of greetings",
+        "main reads names from the command line and prints them"
+      ],
+      "narration": "Short but valid narration with exactly enough words in it.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:6-18"
+        }
+      ]
+    },
+    {
+      "id": "s03",
+      "type": "title",
+      "narration": "Short but valid narration with exactly enough words in it.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:1-11"
+        }
+      ],
+      "headline": "Bye"
+    }
+  ]
+}

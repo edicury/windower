@@ -1,0 +1,134 @@
+{
+  "version": 2,
+  "slug": "greeter-tour",
+  "title": "A tour of the greeter module",
+  "audience": "onboarding",
+  "repoRoot": "../repos/sample",
+  "targetSec": 80,
+  "scenes": [
+    {
+      "id": "s01",
+      "type": "title",
+      "headline": "A tour of the greeter module",
+      "subtitle": "One small file, three exported functions",
+      "badge": "Onboarding",
+      "narration": "This short video walks through the greeter module in the sample repository, what it exports, and how the command line entry point uses it.",
+      "sources": []
+    },
+    {
+      "id": "s02",
+      "type": "bullets",
+      "heading": "What the module offers",
+      "items": [
+        "greet builds one greeting line for a single person",
+        "greetAll maps a list of names to a list of greetings",
+        "main reads names from the command line and prints them"
+      ],
+      "narration": "The module exports three functions. The first builds a greeting for one person. The second applies it to a whole list of names. The third is a small command line entry point that prints the results.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:6-18"
+        }
+      ]
+    },
+    {
+      "id": "s03",
+      "type": "bullets",
+      "heading": "How greet decides the punctuation",
+      "items": [
+        "Options carry a required name and an optional excited flag",
+        "Excited greetings end with an exclamation mark",
+        "Everything else ends with a plain full stop"
+      ],
+      "narration": "The greet function takes an options object. The name is required, and an excited flag is optional and defaults to false. When excited, the greeting ends with an exclamation mark, otherwise it ends with a plain full stop.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:1-11"
+        }
+      ]
+    },
+    {
+      "id": "s04",
+      "type": "bullets",
+      "heading": "Greeting a whole list",
+      "items": [
+        "greetAll never mutates its input array",
+        "Each name goes through greet with default options",
+        "The result is a new array, one line per person"
+      ],
+      "narration": "For several people, greetAll maps over the array of names. It never mutates its input. Each name goes through greet with default options, so the result is a new array holding one plain greeting per person.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:13-16"
+        }
+      ]
+    },
+    {
+      "id": "s05",
+      "type": "bullets",
+      "heading": "The command line entry point",
+      "items": [
+        "Arguments after the program name are treated as names",
+        "With no names, it greets the world with excitement",
+        "Otherwise it prints one line per name"
+      ],
+      "narration": "The main function skips the first two arguments, which are the runtime and the script path. Whatever remains is treated as a list of names. With no names at all, it greets the world with some excitement. Otherwise it prints one line per name.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:18-24"
+        }
+      ]
+    },
+    {
+      "id": "s06",
+      "type": "bullets",
+      "heading": "Why it is shaped this way",
+      "items": [
+        "Pure functions are trivial to unit test",
+        "Only main touches the console",
+        "Types document the options object"
+      ],
+      "narration": "The design keeps side effects at the edge. Greet and greetAll are pure functions, which makes them trivial to test. Only main touches the console. The exported interface documents the shape of the options object for every caller.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:1-24"
+        }
+      ]
+    },
+    {
+      "id": "s07",
+      "type": "bullets",
+      "heading": "Recap",
+      "items": [
+        "greet formats one person",
+        "greetAll formats many",
+        "main wires it to the terminal"
+      ],
+      "narration": "To recap, greet formats a greeting for one person, greetAll formats many of them at once, and main wires both to the terminal. That is the whole module, small enough to read in a couple of minutes.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:1-24"
+        }
+      ]
+    },
+    {
+      "id": "s08",
+      "type": "title",
+      "headline": "Small modules, clear edges",
+      "subtitle": "Pure core, thin command line shell",
+      "narration": "Thanks for watching. Small modules with a pure core and a thin shell are easy to read, easy to test, and easy to change when requirements move.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:1-24"
+        }
+      ]
+    }
+  ]
+}

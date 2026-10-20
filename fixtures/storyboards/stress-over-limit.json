@@ -1,0 +1,155 @@
+{
+  "version": 1,
+  "slug": "stress-over-limit",
+  "title": "Stress: over-limit scenes",
+  "audience": "onboarding",
+  "repoRoot": "../repos/sample",
+  "scenes": [
+    {
+      "id": "s01",
+      "narration": "This scene is deliberately broken so that the validator has to name the scene and the field that went wrong, and so that the fixture also keeps the total length above the minimum.",
+      "sources": [],
+      "type": "title",
+      "headline": "Ninety-three characters of headline text that is accepted by the prototype but is above our l"
+    },
+    {
+      "id": "s02",
+      "narration": "This scene is deliberately broken so that the validator has to name the scene and the field that went wrong, and so that the fixture also keeps the total length above the minimum.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/long.ts:1-5"
+        }
+      ],
+      "type": "bullets",
+      "heading": "Six bullets of about 125 characters each",
+      "items": [
+        "Bullet number 1 is far too long for the layout because it keeps going and going well beyond the one hundred and ten character",
+        "Bullet number 2 is far too long for the layout because it keeps going and going well beyond the one hundred and ten character",
+        "Bullet number 3 is far too long for the layout because it keeps going and going well beyond the one hundred and ten character",
+        "Bullet number 4 is far too long for the layout because it keeps going and going well beyond the one hundred and ten character",
+        "Bullet number 5 is far too long for the layout because it keeps going and going well beyond the one hundred and ten character",
+        "Bullet number 6 is far too long for the layout because it keeps going and going well beyond the one hundred and ten character"
+      ]
+    },
+    {
+      "id": "s03",
+      "narration": "This scene is deliberately broken so that the validator has to name the scene and the field that went wrong, and so that the fixture also keeps the total length above the minimum.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/long.ts:1-5"
+        }
+      ],
+      "type": "code",
+      "title": "Forty lines, one 186-char line",
+      "file": "src/long.ts",
+      "startLine": 1,
+      "endLine": 40
+    },
+    {
+      "id": "s04",
+      "narration": "This scene is deliberately broken so that the validator has to name the scene and the field that went wrong, and so that the fixture also keeps the total length above the minimum.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/long.ts:1-5"
+        }
+      ],
+      "type": "architecture",
+      "title": "Edge to an unknown node",
+      "nodes": [
+        {
+          "id": "a",
+          "label": "A",
+          "x": 120,
+          "y": 200
+        },
+        {
+          "id": "b",
+          "label": "B",
+          "x": 740,
+          "y": 200
+        }
+      ],
+      "edges": [
+        {
+          "from": "a",
+          "to": "b"
+        },
+        {
+          "from": "b",
+          "to": "ghost"
+        }
+      ]
+    },
+    {
+      "id": "s05",
+      "narration": "This scene is deliberately broken so that the validator has to name the scene and the field that went wrong, and so that the fixture also keeps the total length above the minimum.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/long.ts:1-5"
+        }
+      ],
+      "type": "sequence",
+      "title": "Participant index out of range",
+      "participants": ["Client", "Server"],
+      "messages": [
+        {
+          "from": 0,
+          "to": 1,
+          "text": "request"
+        },
+        {
+          "from": 1,
+          "to": 5,
+          "text": "reply"
+        }
+      ]
+    },
+    {
+      "id": "s06",
+      "narration": "This scene is deliberately broken so that the validator has to name the scene and the field that went wrong, and so that the fixture also keeps the total length above the minimum.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/long.ts:1-5"
+        }
+      ],
+      "type": "code",
+      "title": "Range past end of file",
+      "file": "src/greeter.ts",
+      "startLine": 10,
+      "endLine": 99
+    },
+    {
+      "id": "s07",
+      "narration": "This scene is deliberately broken so that the validator has to name the scene and the field that went wrong, and so that the fixture also keeps the total length above the minimum.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/long.ts:1-5"
+        }
+      ],
+      "type": "code",
+      "title": "Start after end",
+      "file": "src/greeter.ts",
+      "startLine": 12,
+      "endLine": 4
+    },
+    {
+      "id": "s08",
+      "narration": "This scene is deliberately broken so that the validator has to name the scene and the field that went wrong, and so that the fixture also keeps the total length above the minimum.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/long.ts:1-5"
+        }
+      ],
+      "type": "bullets",
+      "heading": "Recap",
+      "items": ["one", "two"]
+    }
+  ]
+}

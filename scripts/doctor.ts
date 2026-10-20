@@ -103,7 +103,7 @@ async function runChecks(): Promise<CheckResult[]> {
       add(6, 'storyboard', 'fail', `${sbPath} not found`, 'Author the storyboard first.');
     else {
       try {
-        const problems = codeSceneProblems(JSON.parse(readFileSync(sbPath, 'utf8')));
+        const problems = codeSceneProblems(JSON.parse(readFileSync(sbPath, 'utf8')), runDir);
         if (problems.length)
           add(
             6,

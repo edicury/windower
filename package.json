@@ -9,6 +9,9 @@
   "scripts": {
     "ve:doctor": "tsx scripts/doctor.ts",
     "ve:render": "tsx scripts/render.ts",
+    "ve:prepare": "tsx scripts/prepare.ts",
+    "ve:validate": "tsx scripts/validate-storyboard.ts",
+    "ve:timing": "tsx scripts/timing.ts",
     "typecheck": "tsc --noEmit && pnpm --filter windower-template exec tsc --noEmit",
     "lint": "eslint .",
     "format:check": "prettier --check .",
@@ -20,9 +23,11 @@
     "@types/node": "^22.0.0",
     "eslint": "^9.0.0",
     "prettier": "^3.3.0",
+    "shiki": "4.5.0",
     "tsx": "^4.19.0",
     "typescript": "^5.6.0",
     "typescript-eslint": "^8.0.0",
-    "vitest": "^2.1.0"
+    "vitest": "^2.1.0",
+    "zod": "4.5.4"
   }
 }
