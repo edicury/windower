@@ -2,6 +2,10 @@
 
 A Claude Code plugin that turns a slice of a software system (a module, feature, PR, ticket or doc) into a short, captioned explainer video of 60-120 seconds. Claude reads the code, git history and any connected MCP source (Notion, Linear, Slack, ...), writes a cited brief and a validated storyboard, waits for your explicit approval, then renders an mp4 with captions using [Remotion](https://www.remotion.dev/).
 
+[![Watch Windower explain itself (about 2 minutes, with narration)](https://media.windower.io/explainer-poster.jpg)](https://media.windower.io/explainer.mp4)
+
+_The video above was made with windower itself, narrated with a text-to-speech voice._
+
 ## Install
 
 From the Claude Code marketplace:
