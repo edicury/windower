@@ -1,14 +1,16 @@
 export const theme = {
-  bg: '#0b1020',
-  panel: '#131a33',
-  border: '#27315a',
-  text: '#e8ecff',
-  muted: '#98a2cf',
-  accent: '#6ea8ff',
+  bg: 'var(--ve-bg, #0b1020)',
+  panel: 'var(--ve-panel, #131a33)',
+  border: 'var(--ve-border, #27315a)',
+  text: 'var(--ve-text, #e8ecff)',
+  muted: 'var(--ve-muted, #98a2cf)',
+  accent: 'var(--ve-accent, #6ea8ff)',
   green: '#4ade80',
+  /** Brand accent for the outro bar (falls back to green). */
+  accent2: 'var(--ve-accent2, #4ade80)',
   violet: '#a78bfa',
   amber: '#fbbf24',
-  font: 'Inter, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif',
+  font: 'var(--ve-font, Inter, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif)',
   mono: '"JetBrains Mono", "SF Mono", Menlo, Consolas, monospace',
 };
 export const FPS = 30;

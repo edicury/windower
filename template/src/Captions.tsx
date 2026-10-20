@@ -14,7 +14,7 @@ export const Captions = ({captions}: {captions: Caption[]}) => {
   return (
     <AbsoluteFill style={{justifyContent: 'flex-end', alignItems: 'center', paddingBottom: SAFE.captionsBottom}}>
       <div style={{
-        background: 'rgba(5,8,20,0.82)', padding: '14px 32px', borderRadius: 14,
+        background: 'var(--ve-capbg, rgba(5,8,20,0.82))', padding: '14px 32px', borderRadius: 14,
         fontSize: 44, fontWeight: 600, letterSpacing: 0.2, maxWidth: 1600, textAlign: 'center',
         border: `1px solid ${theme.border}`,
       }}>

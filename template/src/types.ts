@@ -1,4 +1,5 @@
 import type {SourceRef} from './schema';
+import type {Brand} from './brand';
 
 /** Same field names as `Caption` from @remotion/captions (verified against 4.0.537). Times are ms from scene start. */
 export type Caption = {
@@ -54,5 +55,7 @@ export type ExplainerProps = {
   totalFrames: number;
   /** Burn captions into the video (FR-CAP-03); sidecar SRT/VTT are always exported. */
   burnIn?: boolean;
+  /** From .windower.json; absent means the built-in theme. */
+  brand?: Brand;
   scenes: Scene[];
 };

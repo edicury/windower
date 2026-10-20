@@ -14,11 +14,13 @@ import {pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
 import {Storyboard} from '../template/src/schema.js';
 import type {CodeLine, ExplainerProps, Scene} from '../template/src/types.js';
+import {DEFAULT_TEXT, contrastRatio, type Brand} from '../template/src/brand.js';
 import {highlightCode} from './code-highlight.js';
 import {buildCues, toSrt, toVtt} from './captions.js';
 import {UNAPPROVED_WARNING, approvalProblem} from './approval.js';
 import {EXIT, TEMPLATE} from './lib.js';
 import {checkTotal, computeTiming, type Timing} from './timing.js';
+import {loadConfigWithWarnings} from './tts/config.js';
 import {readSynthFile, synthProblem, synthTimingOf} from './tts/synthfile.js';
 import {formatIssue, validateFile} from './validate-storyboard.js';
 
@@ -66,6 +68,38 @@ function stageAudio(destDir: string, timing: Timing, sources: Record<string, str
     const src = sources[t.id];
     if (t.audio && src) copyFileSync(src, path.join(destDir, path.basename(t.audio)));
   }
+}
+
+/** Reads the repo's .windower.json brand into props form (logo embedded as a data URI). */
+export function resolveBrand(repoRoot: string, log: (m: string) => void): Brand | undefined {
+  let loaded: ReturnType<typeof loadConfigWithWarnings>;
+  try {
+    loaded = loadConfigWithWarnings(repoRoot);
+  } catch (e) {
+    throw new PrepareError((e as Error).message, EXIT.validation);
+  }
+  for (const w of loaded.warnings) log(`warning: ${w}`);
+  const b = loaded.config.brand;
+  if (!b) return undefined;
+  const brand: Brand = {primary: b.primary, background: b.background};
+  if (b.accent) brand.accent = b.accent;
+  if (b.text) brand.text = b.text;
+  if (b.font) brand.font = b.font;
+  if (b.logoFile) {
+    const mime = b.logoFile.toLowerCase().endsWith('.svg') ? 'image/svg+xml' : 'image/png';
+    brand.logo = `data:${mime};base64,${readFileSync(b.logoFile).toString('base64')}`;
+  }
+  const ratio = contrastRatio(brand.text ?? DEFAULT_TEXT, brand.background);
+  if (ratio < 4.5)
+    log(
+      `warning: brand text/background contrast is ${ratio.toFixed(1)}:1 (below 4.5:1); captions and text may be hard to read`,
+    );
+  const onPrimary = contrastRatio(brand.primary, brand.background);
+  if (onPrimary < 3)
+    log(
+      `warning: brand.primary on brand.background contrast is ${onPrimary.toFixed(1)}:1 (below 3:1)`,
+    );
+  return brand;
 }
 
 export async function prepare(
@@ -151,12 +185,21 @@ export async function prepare(
     );
   }
 
+  const sbRaw = JSON.parse(readFileSync(file, 'utf8')) as {repoRoot?: unknown};
+  const configRoot = opts.repoRoot
+    ? path.resolve(opts.repoRoot)
+    : typeof sbRaw.repoRoot === 'string'
+      ? path.resolve(dir, sbRaw.repoRoot)
+      : undefined;
+  const brand = configRoot ? resolveBrand(configRoot, log) : undefined;
+
   const props: ExplainerProps = {
     title: sb.title,
     fps: timing.fps,
     transitionFrames: timing.transitionFrames,
     totalFrames: timing.totalFrames,
     burnIn: true,
+    ...(brand ? {brand} : {}),
     scenes,
   };
   try {

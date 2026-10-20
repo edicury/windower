@@ -5,6 +5,7 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
 import {EXIT} from './lib.js';
+import {loadConfig} from './tts/config.js';
 import {actionFor, computeStatus, uniqueSlug, type RunFacts, type RunStatus} from './stages.js';
 import {formatIssue, validateFile} from './validate-storyboard.js';
 
@@ -91,7 +92,19 @@ function main(): void {
       process.exit(EXIT.error);
     }
     const r = initRun(second, values.root);
-    console.log(values.json ? JSON.stringify(r) : r.dir);
+    // defaultLengthSec from <root>/.windower.json, for the skill to use as the target length.
+    let defaultLengthSec: number | undefined;
+    try {
+      defaultLengthSec = loadConfig(path.resolve(values.root ?? process.cwd())).defaultLengthSec;
+    } catch (e) {
+      console.error((e as Error).message);
+      process.exit(EXIT.validation);
+    }
+    console.log(
+      values.json
+        ? JSON.stringify(defaultLengthSec === undefined ? r : {...r, defaultLengthSec})
+        : r.dir,
+    );
     process.exit(EXIT.ok);
   }
   if (!first) {

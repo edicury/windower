@@ -107,12 +107,63 @@ export async function runSnapshots(
   });
 }
 
+export const BRANDING = path.join(ROOT, 'fixtures', 'storyboards', 'branding.json');
+export const BRANDED_REPO = path.join(ROOT, 'fixtures', 'repos', 'branded');
+export const BRANDING_DIR = path.join(SNAPSHOT_DIR, 'branding');
+
+/** Prepares the branding storyboard against `repo` and renders its stills into `<workDir>/out`. */
+async function renderBranding(workDir: string, repo: string): Promise<Map<string, string>> {
+  mkdirSync(workDir, {recursive: true});
+  const sb = path.join(workDir, 'storyboard.json');
+  writeFileSync(sb, readFileSync(BRANDING));
+  await prepare(sb, {repoRoot: repo, allowUnapproved: true});
+  const shots = await renderSnapshots(workDir, path.join(workDir, 'out'));
+  return new Map(shots.map(({scene, file}) => [`${scene.type}`, file]));
+}
+
+/**
+ * Branding snapshots (FR-CFG, G6-3): the title and outro scenes with no config (default) and with the
+ * branded fixture repo. Baselines live in fixtures/snapshots/branding/. Returns the diff of each
+ * baseline plus how far the branded title is from the default one.
+ */
+export async function runBrandingSnapshots(
+  workDir: string,
+  opts: {update?: boolean} = {},
+): Promise<{results: SnapshotResult[]; brandedVsDefault: number}> {
+  const plain = await renderBranding(
+    path.join(workDir, 'default'),
+    path.join(ROOT, 'fixtures', 'repos', 'sample'),
+  );
+  const branded = await renderBranding(path.join(workDir, 'branded'), BRANDED_REPO);
+  const pairs: [string, string | undefined][] = [
+    ['default-title.png', plain.get('title')],
+    ['branded-title.png', branded.get('title')],
+    ['branded-outro.png', branded.get('outro')],
+  ];
+  mkdirSync(BRANDING_DIR, {recursive: true});
+  const results = pairs.map(([name, file]): SnapshotResult => {
+    if (!file) return {name, diff: null, ok: false};
+    const base = path.join(BRANDING_DIR, name);
+    if (opts.update || !existsSync(base)) {
+      writeFileSync(base, readFileSync(file));
+      return {name, diff: opts.update ? 0 : null, ok: !!opts.update};
+    }
+    const diff = pixelDiff(readFileSync(base), readFileSync(file));
+    return {name, diff, ok: diff <= TOLERANCE};
+  });
+  const [p, b] = [plain.get('title'), branded.get('title')];
+  const brandedVsDefault = p && b ? pixelDiff(readFileSync(p), readFileSync(b)) : 0;
+  return {results, brandedVsDefault};
+}
+
 async function main(): Promise<void> {
   const {values} = parseArgs({
     options: {update: {type: 'boolean'}, work: {type: 'string'}},
   });
   const work = path.resolve(values.work ?? path.join(ROOT, '.windower', 'snapshots'));
   const results = await runSnapshots(work, {update: values.update});
+  const branding = await runBrandingSnapshots(path.join(work, 'branding'), {update: values.update});
+  results.push(...branding.results);
   for (const r of results)
     console.error(
       `${r.ok ? 'ok  ' : 'FAIL'} ${r.name}${r.diff === null ? ' (no baseline)' : ` diff ${(r.diff * 100).toFixed(3)}%`}`,

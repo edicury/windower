@@ -20,6 +20,7 @@
     "ve:sources": "tsx scripts/sources.ts",
     "ve:voices": "tsx scripts/voices.ts",
     "ve:brief": "tsx scripts/brief.ts",
+    "ve:eval": "tsx scripts/eval.ts",
     "typecheck": "tsc --noEmit && pnpm --filter windower-template exec tsc --noEmit",
     "lint": "eslint .",
     "format:check": "prettier --check .",

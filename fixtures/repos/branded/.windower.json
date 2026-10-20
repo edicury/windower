@@ -1,0 +1,11 @@
+{
+  "brand": {
+    "primary": "#ff6b35",
+    "background": "#fff7ed",
+    "text": "#1c1917",
+    "accent": "#0d9488",
+    "font": "Georgia",
+    "logo": "./logo.svg"
+  },
+  "defaultLengthSec": 90
+}

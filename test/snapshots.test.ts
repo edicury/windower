@@ -8,6 +8,7 @@ import {
   SNAPSHOT_DIR,
   TOLERANCE,
   pixelDiff,
+  runBrandingSnapshots,
   runSnapshots,
   snapshotName,
 } from '../scripts/snapshots.js';
@@ -49,5 +50,15 @@ describe('scene still snapshots (T3, G2-2)', () => {
     const bad = results.filter((r) => !r.ok).map((r) => `${r.name}: ${r.diff}`);
     expect(bad, `snapshot mismatches (update with: pnpm ve:snapshots --update)`).toEqual([]);
     expect(results).toHaveLength(scenes.length);
+  }, 300_000);
+});
+
+describe('branding snapshots (G6-3)', () => {
+  it('branded title/outro match baselines and differ visibly from the default render', async () => {
+    const work = mkdtempSync(path.join(os.tmpdir(), 've-brand-snap-'));
+    const {results, brandedVsDefault} = await runBrandingSnapshots(work);
+    const bad = results.filter((r) => !r.ok).map((r) => `${r.name}: ${r.diff}`);
+    expect(bad, 'update with: pnpm ve:snapshots --update').toEqual([]);
+    expect(brandedVsDefault).toBeGreaterThan(TOLERANCE * 10);
   }, 300_000);
 });
