@@ -4,5 +4,4 @@ node_modules
 out
 .windower
 template/public/audio
-/template/node_modules/** */
-**/template/** */
+specs/

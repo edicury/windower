@@ -1,5 +1,5 @@
 // validate-storyboard: Zod schema + rules R1-R5 + per-scene limits (FR-SB-07) + referential checks
-// (FR-SB-08). Every issue names the scene id and field. R6 (redaction) lands with phase 3.
+// (FR-SB-08), R6 redaction (FR-SEC). Every issue names the scene id and field.
 import {existsSync, readFileSync, statSync} from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
@@ -17,6 +17,7 @@ import {
   layoutGrid,
 } from '../template/src/scenes/architectureLayout.js';
 import {EXIT} from './lib.js';
+import {isSecretFile, scanText} from './redaction.js';
 import {checkTotal, computeTiming, SCENE_SOFT_CAP_S} from './timing.js';
 
 export interface Issue {
@@ -42,6 +43,8 @@ export interface ValidateOptions {
   baseDir?: string;
   /** Contents of brief.md; when given, every source ref must appear in it (R4). */
   briefText?: string;
+  /** Do not flag emails and phone numbers (R6). */
+  allowPii?: boolean;
 }
 
 type Loose = Record<string, unknown>;
@@ -208,6 +211,8 @@ export function validateStoryboard(raw: unknown, opts: ValidateOptions = {}): Va
       });
     }
 
+    checkRedaction(s, id, opts.allowPii, addErr);
+
     switch (s.type) {
       case 'code':
         checkCode(s, id, root, addErr);
@@ -271,6 +276,39 @@ export function validateStoryboard(raw: unknown, opts: ValidateOptions = {}): Va
   }
 
   return {errors, warnings, estimatedSec};
+}
+
+/** Joins an object path for messages, e.g. `items[1]`. */
+function joinPath(base: string, seg: string | number): string {
+  return typeof seg === 'number' ? `${base}[${seg}]` : base ? `${base}.${seg}` : seg;
+}
+
+/** R6: no string field of a scene may match a redaction pattern (FR-SEC-01); code snippets are verbatim, so a match there means the file region itself holds a secret (FR-SEC-02). */
+function checkRedaction(s: Loose, id: string, allowPii: boolean | undefined, addErr: Add): void {
+  const walk = (v: unknown, p: string): void => {
+    if (typeof v === 'string') {
+      const seen = new Set<string>();
+      for (const f of scanText(v, {allowPii})) {
+        if (seen.has(f.rule)) continue;
+        seen.add(f.rule);
+        const where = s.type === 'code' && p === 'code' ? `line ${f.line} of the snippet: ` : '';
+        const hint =
+          s.type === 'code' && p === 'code'
+            ? 'a code scene quotes the file verbatim, so choose lines without the secret or a different file (FR-SEC-02)'
+            : 'remove or replace it with a description (FR-SEC-01)';
+        addErr(id, p, 'R6', `${where}looks like a ${f.label} (${f.preview}); ${hint}`);
+      }
+    } else if (Array.isArray(v)) v.forEach((x, i) => walk(x, joinPath(p, i)));
+    else if (isObj(v)) for (const [k, x] of Object.entries(v)) walk(x, joinPath(p, k));
+  };
+  walk(s, '');
+  if (s.type === 'code' && typeof s.file === 'string' && isSecretFile(s.file))
+    addErr(
+      id,
+      'file',
+      'R6',
+      `${s.file} is a secret-bearing file type (.env*, keys, keystores); never quote it in a code scene (FR-SEC-02)`,
+    );
 }
 
 type Add = (sceneId: string | null, p: string, rule: string, message: string) => void;
@@ -474,6 +512,7 @@ function main(): void {
     options: {
       repo: {type: 'string'},
       brief: {type: 'string'},
+      'allow-pii': {type: 'boolean'},
       json: {type: 'boolean'},
       quiet: {type: 'boolean'},
     },
@@ -482,7 +521,7 @@ function main(): void {
   const file = positionals[0];
   if (!file) {
     console.error(
-      'Usage: validate-storyboard <storyboard.json> [--repo <root>] [--brief <brief.md>] [--json]',
+      'Usage: validate-storyboard <storyboard.json> [--repo <root>] [--brief <brief.md>] [--allow-pii] [--json]',
     );
     process.exit(EXIT.validation);
   }
@@ -498,6 +537,7 @@ function main(): void {
   const result = validateFile(file, {
     repoRoot: values.repo ? path.resolve(values.repo) : undefined,
     briefText,
+    allowPii: values['allow-pii'],
   });
   const all = [...result.errors, ...result.warnings];
   if (values.json) console.log(JSON.stringify(all, null, 2));

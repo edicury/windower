@@ -5,11 +5,12 @@ import {existsSync, mkdirSync, readFileSync, statSync, writeFileSync} from 'node
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
+import {UNAPPROVED_WARNING, approvalProblem} from './approval.js';
 import {buildCues, toSrt, toVtt} from './captions.js';
 import {EXIT, TEMPLATE, findFreePort, isPortFree, nodeMajor, propsProblem} from './lib.js';
 
 export const RENDER_USAGE =
-  'Usage: render <run-dir> [--still <sceneId>] [--out <dir>] [--port N] [--crf N] [--concurrency N]\n' +
+  'Usage: render <run-dir> [--still <sceneId>] [--out <dir>] [--port N] [--crf N] [--concurrency N] [--allow-unapproved]\n' +
   '       render Hello [--out <file>]';
 
 interface PropsScene {
@@ -83,6 +84,7 @@ async function main(): Promise<void> {
       still: {type: 'string'},
       crf: {type: 'string'},
       concurrency: {type: 'string'},
+      'allow-unapproved': {type: 'boolean'},
     },
     allowPositionals: true,
   });
@@ -112,6 +114,12 @@ async function main(): Promise<void> {
     );
   const shape = propsShapeProblem(runDir);
   if (shape) fail(EXIT.validation, shape);
+
+  const unapproved = approvalProblem(path.join(runDir, 'storyboard.json'));
+  if (unapproved) {
+    if (!values['allow-unapproved']) fail(EXIT.validation, unapproved);
+    console.error(UNAPPROVED_WARNING);
+  }
 
   const propsFile = path.join(runDir, 'props.json');
   const props = JSON.parse(readFileSync(propsFile, 'utf8')) as {

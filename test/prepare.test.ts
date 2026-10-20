@@ -13,7 +13,10 @@ describe('prepare', () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), 've-prep-'));
     cpSync('fixtures/storyboards/minimal.json', path.join(dir, 'storyboard.json'));
     const repo = path.resolve('fixtures/repos/sample');
-    const {props, timing} = await prepare(path.join(dir, 'storyboard.json'), {repoRoot: repo});
+    const {props, timing} = await prepare(path.join(dir, 'storyboard.json'), {
+      repoRoot: repo,
+      allowUnapproved: true,
+    });
     for (const f of ['props.json', 'timing.json', 'captions.srt', 'captions.vtt'])
       expect(existsSync(path.join(dir, f))).toBe(true);
     const onDisk = JSON.parse(readFileSync(path.join(dir, 'props.json'), 'utf8'));

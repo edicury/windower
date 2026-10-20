@@ -89,7 +89,10 @@ export async function runSnapshots(
   mkdirSync(workDir, {recursive: true});
   const sb = path.join(workDir, 'storyboard.json');
   writeFileSync(sb, readFileSync(ALL_SCENES));
-  await prepare(sb, {repoRoot: path.join(ROOT, 'fixtures', 'repos', 'sample')});
+  await prepare(sb, {
+    repoRoot: path.join(ROOT, 'fixtures', 'repos', 'sample'),
+    allowUnapproved: true, // fixture storyboards are never approved
+  });
   const shots = await renderSnapshots(workDir, path.join(workDir, 'out'));
   mkdirSync(SNAPSHOT_DIR, {recursive: true});
   return shots.map(({scene, file}) => {

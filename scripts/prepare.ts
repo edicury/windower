@@ -8,12 +8,13 @@ import {Storyboard} from '../template/src/schema.js';
 import type {CodeLine, ExplainerProps, Scene} from '../template/src/types.js';
 import {highlightCode} from './code-highlight.js';
 import {buildCues, toSrt, toVtt} from './captions.js';
+import {UNAPPROVED_WARNING, approvalProblem} from './approval.js';
 import {EXIT} from './lib.js';
 import {checkTotal, computeTiming, type Timing} from './timing.js';
 import {formatIssue, validateFile} from './validate-storyboard.js';
 
 export const PREPARE_USAGE =
-  'Usage: prepare <storyboard.json> [--repo <root>] [--quiet]\n' +
+  'Usage: prepare <storyboard.json> [--repo <root>] [--quiet] [--allow-unapproved]\n' +
   '  Writes timing.json, props.json, captions.srt and captions.vtt next to the storyboard.';
 
 export class PrepareError extends Error {
@@ -41,7 +42,7 @@ async function highlight(
 
 export async function prepare(
   storyboardPath: string,
-  opts: {repoRoot?: string; log?: (m: string) => void} = {},
+  opts: {repoRoot?: string; log?: (m: string) => void; allowUnapproved?: boolean} = {},
 ): Promise<{timing: Timing; props: ExplainerProps; dir: string}> {
   const log = opts.log ?? (() => undefined);
   const file = path.resolve(storyboardPath);
@@ -53,6 +54,11 @@ export async function prepare(
       `${file} is invalid:\n` + result.errors.map((i) => `  ${formatIssue(i)}`).join('\n'),
       EXIT.validation,
     );
+  }
+  const unapproved = approvalProblem(file);
+  if (unapproved) {
+    if (!opts.allowUnapproved) throw new PrepareError(unapproved, EXIT.validation);
+    log(UNAPPROVED_WARNING);
   }
   const sb = Storyboard.parse(JSON.parse(readFileSync(file, 'utf8')));
 
@@ -110,7 +116,11 @@ export async function prepare(
 
 async function main(): Promise<void> {
   const {values, positionals} = parseArgs({
-    options: {repo: {type: 'string'}, quiet: {type: 'boolean'}},
+    options: {
+      repo: {type: 'string'},
+      quiet: {type: 'boolean'},
+      'allow-unapproved': {type: 'boolean'},
+    },
     allowPositionals: true,
   });
   const file = positionals[0];
@@ -121,6 +131,7 @@ async function main(): Promise<void> {
   try {
     const {timing, dir} = await prepare(file, {
       repoRoot: values.repo ? path.resolve(values.repo) : undefined,
+      allowUnapproved: values['allow-unapproved'],
       log: (m) => console.error(m),
     });
     if (!values.quiet)

@@ -232,6 +232,7 @@ export const Storyboard = z.strictObject({
     .default({width: 1920, height: 1080}),
   repoRoot: z.string().optional(),
   approved: z.boolean().optional(),
+  approvedAt: z.string().optional(),
   targetSec: z.number().positive().optional(),
   scenes: z
     .array(Scene)
