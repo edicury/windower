@@ -6,7 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
-- framekit replaces Remotion as the only render engine. `template/` imports `@windower/framekit-*` compat entries and links the sibling framekit checkout; `--engine` and `WINDOWER_ENGINE` accept only `framekit` (any other value exits 2); the Remotion engine, `studio` script, parity harness and `ve:make-template-framekit` are removed; `ve:doctor` check 5 reports the framekit browser; license note is the framekit MIT sentence.
+- framekit replaces Remotion as the only render engine. `template/` imports the compat entries of the published `@windower/framekit` package (installed from npm, no sibling checkout); `--engine` and `WINDOWER_ENGINE` accept only `framekit` (any other value exits 2); the Remotion engine, `studio` script, parity harness and `ve:make-template-framekit` are removed; `ve:doctor` check 5 reports the framekit browser; license note is the framekit MIT sentence.
 
 ### Added
 

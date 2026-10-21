@@ -28,10 +28,7 @@
     "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test"
   },
   "devDependencies": {
-    "@windower/framekit-bundler": "link:../framekit/packages/bundler",
-    "@windower/framekit-cli": "link:../framekit/packages/cli",
-    "@windower/framekit-renderer": "link:../framekit/packages/renderer",
-    "@windower/framekit-test-utils": "link:../framekit/packages/test-utils",
+    "@windower/framekit": "0.1.0",
     "@eslint/js": "^9.0.0",
     "@types/node": "^22.0.0",
     "@types/pngjs": "^6.0.5",

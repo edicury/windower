@@ -1,5 +1,5 @@
 // framekit engine (FR-ADOPT-02, FR-CLI-16): programmatic API for bundle/select/still, the framekit CLI for media.
-// The template is `template/`, which imports the framekit compat entries and links the sibling framekit checkout.
+// The template is `template/`, which imports the framekit compat entries from the published `@windower/framekit` package.
 import {spawnSync} from 'node:child_process';
 import {existsSync} from 'node:fs';
 import {createRequire} from 'node:module';
@@ -8,7 +8,7 @@ import {LICENSE_NOTE, TEMPLATE, findShellExecutable, sharedShellDir} from '../li
 import type {CheckResult} from '../lib.js';
 import type {Engine, MediaOptions, RunResult, SelectOptions, StillOptions} from './types.js';
 
-const INSTALL_HINT = 'Run `pnpm install` (the template links the sibling framekit checkout).';
+const INSTALL_HINT = 'Run `pnpm install` (it installs the published @windower/framekit package).';
 const BROWSER_INSTALL = 'framekit browsers install';
 
 /** Exit codes that retrying cannot fix: validation (2), environment (3), network (4). */
@@ -27,8 +27,8 @@ export function browserExecutable(): string | undefined {
 }
 
 function cliBin(): string {
-  const pkg = createRequire(import.meta.url).resolve('@windower/framekit-cli/package.json');
-  return path.join(path.dirname(pkg), 'dist', 'bin.js');
+  const pkg = createRequire(import.meta.url).resolve('@windower/framekit/package.json');
+  return path.join(path.dirname(pkg), 'dist', 'cli', 'bin.js');
 }
 
 /** Arguments with `--browser-executable` appended unless the caller set one. */
@@ -39,11 +39,11 @@ export function withBrowser(args: string[], exe = browserExecutable()): string[]
   return exe && !set ? [...args, `--browser-executable=${exe}`] : args;
 }
 
-/** `--public-dir` appended for render/still: prepare stages narration audio in `template/public`. */
+/** `--public-dir` appended for render/still: prepare stages narration audio in `template/public` (skipped when that directory does not exist yet). */
 export function withPublicDir(args: string[], dir = path.join(TEMPLATE, 'public')): string[] {
   const media = args[0] === 'render' || args[0] === 'still';
   const set = args.some((a) => a === '--public-dir' || a.startsWith('--public-dir='));
-  return media && !set ? [...args, `--public-dir=${dir}`] : args;
+  return media && !set && existsSync(dir) ? [...args, `--public-dir=${dir}`] : args;
 }
 
 function tailOf(stderr: string | null | undefined): string {
@@ -87,12 +87,12 @@ function sessionOptions(o: {serveUrl: string; port: number}) {
 }
 
 async function selectComposition(o: SelectOptions): Promise<unknown> {
-  const {selectComposition: select} = await import('@windower/framekit-renderer');
+  const {selectComposition: select} = await import('@windower/framekit/renderer');
   return select({...sessionOptions(o), id: o.id, inputProps: o.inputProps as never});
 }
 
 async function renderStill(o: StillOptions): Promise<void> {
-  const {renderStill: still} = await import('@windower/framekit-renderer');
+  const {renderStill: still} = await import('@windower/framekit/renderer');
   await still({
     ...sessionOptions(o),
     composition: o.composition as never,
@@ -152,7 +152,7 @@ function doctorChecks(): CheckResult[] {
 function precheck(): string | undefined {
   if (!existsSync(path.join(TEMPLATE, 'src', 'index.ts')))
     return `template/ is missing. ${INSTALL_HINT}`;
-  if (!existsSync(path.join(TEMPLATE, 'node_modules', '@windower', 'framekit-core')))
+  if (!existsSync(path.join(TEMPLATE, 'node_modules', '@windower', 'framekit')))
     return `Template dependencies are missing. ${INSTALL_HINT}`;
   return undefined;
 }
@@ -162,7 +162,7 @@ export const framekitEngine: Engine = {
   licenseNote: LICENSE_NOTE,
   precheck,
   async bundle(entryPoint) {
-    const {bundle} = await import('@windower/framekit-bundler/compat');
+    const {bundle} = await import('@windower/framekit/bundler/compat');
     return bundle({entryPoint, rootDir: TEMPLATE});
   },
   selectComposition,

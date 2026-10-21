@@ -1,4 +1,4 @@
-import {AbsoluteFill, Easing, interpolate, useCurrentFrame} from '@windower/framekit-core/compat';
+import {AbsoluteFill, Easing, interpolate, useCurrentFrame} from '@windower/framekit/core/compat';
 import {CODE_FONT_FLOOR, SAFE, theme} from '../theme';
 import type {CodeScene} from '../types';
 

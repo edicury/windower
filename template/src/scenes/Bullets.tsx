@@ -1,4 +1,4 @@
-import {AbsoluteFill, interpolate, useCurrentFrame} from '@windower/framekit-core/compat';
+import {AbsoluteFill, interpolate, useCurrentFrame} from '@windower/framekit/core/compat';
 import {FONT_FLOOR, SAFE, theme} from '../theme';
 import type {BulletsScene} from '../types';
 

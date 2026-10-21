@@ -1,7 +1,7 @@
-import {AbsoluteFill, Audio, staticFile} from '@windower/framekit-core/compat';
-import {TransitionSeries, linearTiming} from '@windower/framekit-transitions/compat';
-import {fade} from '@windower/framekit-transitions/compat/fade';
-import {slide} from '@windower/framekit-transitions/compat/slide';
+import {AbsoluteFill, Audio, staticFile} from '@windower/framekit/core/compat';
+import {TransitionSeries, linearTiming} from '@windower/framekit/transitions/compat';
+import {fade} from '@windower/framekit/transitions/compat/fade';
+import {slide} from '@windower/framekit/transitions/compat/slide';
 import {Captions} from './Captions';
 import {Title} from './scenes/Title';
 import {Bullets} from './scenes/Bullets';
