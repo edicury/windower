@@ -78,7 +78,7 @@ describe('scanText', () => {
       'const sk = require("x");',
       'AKIA[0-9A-Z]{16} is the shape of an AWS key id',
       'released 2026-10-20 at 1920x1080, 30 fps, v1.2.3, port 3000',
-      'import {x} from "@windower/framekit-bundler";',
+      'import {x} from "@windower/framekit/bundler";',
       'mail noreply@anthropic.com or someone@example.com',
       '// 12345678901234567890',
     ].join('\n');

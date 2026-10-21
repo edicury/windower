@@ -1,4 +1,4 @@
-import {AbsoluteFill, Img} from '@windower/framekit-core/compat';
+import {AbsoluteFill, Img} from '@windower/framekit/core/compat';
 import {SAFE} from './theme';
 
 /** Brand logo, top-right of title/outro scenes. Renders nothing without a logo. */

@@ -2,3 +2,5 @@ packages:
   - template
 allowBuilds:
   esbuild: true
+minimumReleaseAgeExclude:
+  - '@windower/framekit@0.1.0'

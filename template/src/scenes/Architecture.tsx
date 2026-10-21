@@ -1,4 +1,4 @@
-import {AbsoluteFill, Easing, interpolate, useCurrentFrame} from '@windower/framekit-core/compat';
+import {AbsoluteFill, Easing, interpolate, useCurrentFrame} from '@windower/framekit/core/compat';
 import {SAFE, theme} from '../theme';
 import type {ArchNode, ArchScene} from '../types';
 import {

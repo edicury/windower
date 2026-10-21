@@ -6,13 +6,9 @@
     "prepare-video": "node scripts/prepare.mjs"
   },
   "dependencies": {
-    "@windower/framekit-bundler": "link:../../framekit/packages/bundler",
-    "@windower/framekit-cli": "link:../../framekit/packages/cli",
-    "@windower/framekit-core": "link:../../framekit/packages/core",
-    "@windower/framekit-renderer": "link:../../framekit/packages/renderer",
-    "@windower/framekit-transitions": "link:../../framekit/packages/transitions",
-    "react": "link:../../framekit/packages/core/node_modules/react",
-    "react-dom": "link:../../framekit/packages/core/node_modules/react-dom",
+    "@windower/framekit": "0.1.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "shiki": "^4.5.0"
   },
   "devDependencies": {

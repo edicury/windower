@@ -1,4 +1,4 @@
-import {AbsoluteFill, useCurrentFrame, useVideoConfig} from '@windower/framekit-core/compat';
+import {AbsoluteFill, useCurrentFrame, useVideoConfig} from '@windower/framekit/core/compat';
 import {chunkCaptions} from './captionChunks';
 import {SAFE, theme} from './theme';
 import type {Caption} from './types';

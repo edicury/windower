@@ -1,4 +1,4 @@
-import {AbsoluteFill, interpolate, useCurrentFrame} from '@windower/framekit-core/compat';
+import {AbsoluteFill, interpolate, useCurrentFrame} from '@windower/framekit/core/compat';
 
 export const Hello = () => {
   const frame = useCurrentFrame();
