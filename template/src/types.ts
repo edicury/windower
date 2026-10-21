@@ -1,7 +1,7 @@
 import type {SourceRef} from './schema';
 import type {Brand} from './brand';
 
-/** Same field names as `Caption` from @remotion/captions (verified against 4.0.537). Times are ms from scene start. */
+/** Same field names as `Caption` from the captions package convention. Times are ms from scene start. */
 export type Caption = {
   text: string;
   startMs: number;

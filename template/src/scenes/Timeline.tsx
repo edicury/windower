@@ -1,4 +1,4 @@
-import {AbsoluteFill, interpolate, useCurrentFrame} from 'remotion';
+import {AbsoluteFill, interpolate, useCurrentFrame} from '@windower/framekit-core/compat';
 import {FONT_FLOOR, SAFE, theme} from '../theme';
 import type {TimelineScene} from '../types';
 
