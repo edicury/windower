@@ -5,7 +5,7 @@ description: Turn a slice of a software system (a module, feature, PR, ticket, o
 
 # windower
 
-You turn a slice of a software system into a short explainer video. Work in stages, leave an artifact after each one, and stop at the approval gate. Artifacts live in the user's repo under `.windower/<slug>/` and nothing else is written there (FR-RND-05).
+You turn a slice of a software system into a short explainer video. Work in stages, leave an artifact after each one, and stop at the approval gate. Artifacts live under `.windower/<slug>/` in the current working directory and nothing else is written there (FR-RND-05). If the cwd is the repo being explained, that puts `.windower/` inside it; recommend running from a scratch/working directory instead and treat the repo as a read-only source: pass it by absolute path as `repoRoot` in the storyboard and in `ve:eval --repo`. `ve:status init --root <dir>` chooses where `.windower/` is created.
 
 ```
 scope -> init/status -> gather -> brief.md -> redact -> storyboard.json -> validate (loop)

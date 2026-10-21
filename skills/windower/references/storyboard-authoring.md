@@ -26,15 +26,15 @@ Write `$RUN/storyboard.json` from the redacted brief. The shipped Zod schema is 
 
 ## Limits at a glance
 
-| Scene         | Key limits                                                                                                             |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| any           | narration 8-60 words, plain text; ids `s01..`; sources per rule above                                                  |
-| title / outro | headline <= 90, subtitle <= 80; title badge <= 24; outro items <= 3 x 60                                               |
-| bullets       | heading <= 60; 2-5 items x <= 110; <= 8 wrapped lines total                                                            |
-| code          | <= 16 lines x <= 100 chars; one diff hunk; verbatim; focus inside snippet; caption <= 100                              |
-| architecture  | 2-9 nodes, 1-12 edges, label <= 20, sub <= 30, edge label <= 24, adjacent grid cells only                              |
-| sequence      | 2-5 participants x <= 18; 2-8 messages, text <= 40, note <= 36; indexes valid; no note ending at rightmost participant |
-| timeline      | 3-7 items; label <= 24, detail <= 80, when <= 20                                                                       |
+| Scene         | Key limits                                                                                                                                                                                         |
+| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| any           | narration 8-60 words, plain text; ids `s01..`; sources per rule above                                                                                                                              |
+| title / outro | headline <= 90, subtitle <= 80; title badge <= 24; outro items <= 3 x 60                                                                                                                           |
+| bullets       | heading <= 60; 2-5 items x <= 110; <= 8 wrapped lines total                                                                                                                                        |
+| code          | <= 16 lines x <= 100 chars; one diff hunk; verbatim; focus inside snippet; caption <= 100                                                                                                          |
+| architecture  | 2-9 nodes, 1-12 edges, label <= 20, sub <= 30, edge label <= 24, adjacent grid cells only                                                                                                          |
+| sequence      | 2-5 participants x <= 18; 2-8 messages, text <= 40, note <= 36; indexes valid and `from` != `to` (no self-messages: use a separate participant or a note); no note ending at rightmost participant |
+| timeline      | 3-7 items; label <= 24, detail <= 80, when <= 20                                                                                                                                                   |
 
 ## Fixing validator findings
 

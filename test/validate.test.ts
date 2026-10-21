@@ -91,6 +91,19 @@ describe('stress-over-limit fixture (testing.md 2.1, phase 1 rows)', () => {
   it('rejects a sequence index out of range', () => {
     expect(has(r.errors, 's05', 'messages[1].to', 'out of range')).toBe(true);
   });
+  it('explains that a sequence self-message is unsupported', () => {
+    const sb = JSON.parse(readFileSync(fx('sequence-at-limit.json'), 'utf8')) as {
+      scenes: {type: string; messages?: {from: number; to: number}[]}[];
+    };
+    const seq = sb.scenes.find((x) => x.type === 'sequence' && x.messages);
+    seq!.messages![0]!.to = seq!.messages![0]!.from;
+    const r = validateStoryboard(sb);
+    expect(
+      r.errors.some(
+        (i) => i.path.endsWith('.to') && /self-message.*unsupported.*note/.test(i.message),
+      ),
+    ).toBe(true);
+  });
   it('rejects a snippet past EOF and a focus outside the snippet', () => {
     expect(has(r.errors, 's06', 'code', 'past the end')).toBe(true);
     expect(has(r.errors, 's07', 'focus[0]', 'outside the snippet')).toBe(true);

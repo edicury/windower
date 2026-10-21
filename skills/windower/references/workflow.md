@@ -2,6 +2,8 @@
 
 Commands assume `$WINDOWER` (plugin root) and `$RUN` (absolute run dir) as defined in SKILL.md. All paths are absolute because `--dir` moves the working directory to the plugin.
 
+Output location: `--root "$PWD"` decides where `.windower/<slug>/` is created, so runs land in the current directory. To keep the repo being explained untouched, run from a scratch/working directory (or pass another `--root`), and give the repo as an absolute `repoRoot` (read-only source) in the storyboard and `ve:eval --repo`.
+
 ```sh
 WINDOWER=<plugin root>            # ${CLAUDE_PLUGIN_ROOT}, or two levels above the skill's base directory
 RUN=$(pnpm --silent --dir "$WINDOWER" ve:status init "How checkout works" --root "$PWD")

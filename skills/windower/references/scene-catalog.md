@@ -39,7 +39,7 @@ Layout is automatic, row-major on a grid: 2 nodes use 2 columns, 3 use 3 columns
 
 ## sequence
 
-`title` (<= 60), `participants` (2-5 names, each <= 18), `messages` (2-8: `from` and `to` are **participant indexes** (0-based, must differ), `text` <= 40, `note?` <= 36). No `note` on a message that ends at the rightmost participant.
+`title` (<= 60), `participants` (2-5 names, each <= 18), `messages` (2-8: `from` and `to` are **participant indexes** (0-based, must differ: self-messages, a participant messaging itself, are unsupported; use a separate participant or a note on another message), `text` <= 40, `note?` <= 36). No `note` on a message that ends at the rightmost participant.
 
 ## timeline
 

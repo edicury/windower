@@ -6,6 +6,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- Docs: runs write `.windower/<slug>/` under the current working directory; recommend a scratch directory with the explained repo passed as absolute read-only `repoRoot`. README Quickstart covers the `$WINDOWER` install step, framekit from npm and the first-run Headless Shell download.
+- Sequence validation: the self-message error now says it is unsupported and suggests a separate participant or a note step; documented in the scene catalog and authoring reference.
 - framekit replaces Remotion as the only render engine. `template/` imports the compat entries of the published `@windower/framekit` package (installed from npm, no sibling checkout); `--engine` and `WINDOWER_ENGINE` accept only `framekit` (any other value exits 2); the Remotion engine, `studio` script, parity harness and `ve:make-template-framekit` are removed; `ve:doctor` check 5 reports the framekit browser; license note is the framekit MIT sentence.
 
 ### Added

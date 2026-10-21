@@ -471,7 +471,12 @@ function checkSequence(s: Loose, id: string, addErr: Add): void {
     const to = m.to;
     if (typeof from === 'number' && typeof to === 'number') {
       if (from === to)
-        addErr(id, `messages[${k}].to`, 'layout', 'a message needs two different participants');
+        addErr(
+          id,
+          `messages[${k}].to`,
+          'layout',
+          'a message from a participant to itself (self-message) is unsupported; use a separate participant for the second step, or a note step (a note on another message) instead',
+        );
       else if (typeof m.note === 'string' && Math.max(from, to) === n - 1)
         addErr(
           id,

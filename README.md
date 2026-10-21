@@ -36,13 +36,14 @@ For a git checkout, point Claude Code at it with `claude --plugin-dir /path/to/w
 
 ## Quickstart
 
-In the repository you want to explain:
+1. Install the plugin (see Install above). With the marketplace it lives under `~/.claude/plugins/cache/windower/windower/<version>`; Claude resolves it as `$WINDOWER` (`${CLAUDE_PLUGIN_ROOT}`, or two directories above `skills/windower`). Run `pnpm install --dir "$WINDOWER"` once if its `node_modules` is missing (the skill does this for you). framekit, the renderer, comes from npm (`@windower/framekit`); no sibling checkout is needed. The Chrome Headless Shell is downloaded on the first render (or reused from `WINDOWER_BROWSER_CACHE`, default `~/.cache/windower`).
+2. Open Claude Code, ideally in a scratch or working directory, and pass the repository you want to explain:
 
 ```
 /explain-video the checkout retry logic --audience onboarding
 ```
 
-The slice can be paths, a symbol, a feature description, a PR number or URL, or a link to a ticket or doc. The audience is one of `onboarding`, `pr-review`, `stakeholder`, `docs`. Output lands in `.windower/<slug>/`, with the video at `out/video.mp4` and captions as `out/captions.srt` and `out/captions.vtt`.
+The slice can be paths, a symbol, a feature description, a PR number or URL, or a link to a ticket or doc. The audience is one of `onboarding`, `pr-review`, `stakeholder`, `docs`. Runs are written under the current working directory as `.windower/<slug>/`, so starting Claude Code inside the repo being explained writes there. The repo being explained is only read (it is referenced by an absolute `repoRoot`), so running from a scratch directory keeps it untouched. The video is at the video at `out/video.mp4` and captions as `out/captions.srt` and `out/captions.vtt`.
 
 ## How it works
 
@@ -84,7 +85,7 @@ Narration providers:
 - Only the narration text is sent to the TTS provider you approve. Code, briefs, images and everything else stay on your machine. With `silent` or `piper`, nothing leaves at all.
 - The approval gate states this and names the provider before anything is sent.
 - Briefs are scanned for secrets, key-shaped strings, `.env` values and emails/phone numbers before the storyboard is written; `.env*`, `*.pem` and `id_rsa*` files are never quoted in code scenes.
-- Generated artifacts live in `.windower/` in your repo. Add it to `.gitignore`. Windower never commits anything.
+- Generated artifacts live in `.windower/` under the directory you run from (your repo, or a scratch directory if you chose one). In a repo, add it to `.gitignore`. Windower never commits anything.
 - MCP sources you connect are read by Claude as part of the normal Claude Code session, under that tool's own data terms.
 
 ## Configuration
