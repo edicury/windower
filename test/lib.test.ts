@@ -62,7 +62,7 @@ describe('propsProblem', () => {
 });
 
 describe('shared headless shell cache', () => {
-  it('finds the executable in a nested Remotion cache directory', async () => {
+  it('finds the executable in a nested browser cache directory', async () => {
     const {mkdirSync} = await import('node:fs');
     const {findShellExecutable} = await import('../scripts/lib.js');
     const dir = mkdtempSync(path.join(os.tmpdir(), 've-shell-'));
