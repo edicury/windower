@@ -1,4 +1,4 @@
-import {AbsoluteFill, interpolate, useCurrentFrame} from 'remotion';
+import {AbsoluteFill, interpolate, useCurrentFrame} from '@windower/framekit-core/compat';
 import {SAFE, theme} from '../theme';
 import {Logo} from '../Logo';
 import type {OutroScene} from '../types';

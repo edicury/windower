@@ -1,4 +1,4 @@
-import {Composition} from 'remotion';
+import {Composition} from '@windower/framekit-core/compat';
 import {Explainer} from './Explainer';
 import {Hello} from './Hello';
 import {FPS, TRANSITION_FRAMES} from './theme';
