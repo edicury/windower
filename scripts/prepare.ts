@@ -108,7 +108,7 @@ export async function prepare(
     repoRoot?: string;
     log?: (m: string) => void;
     allowUnapproved?: boolean;
-    /** Remotion public dir that staticFile() resolves against (default template/public). */
+    /** Public dir that staticFile() resolves against (default template/public). */
     publicDir?: string;
   } = {},
 ): Promise<{timing: Timing; props: ExplainerProps; dir: string}> {
