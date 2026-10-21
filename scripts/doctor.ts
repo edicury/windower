@@ -5,18 +5,17 @@ import {
   CheckResult,
   ESBUILD_NOTE,
   EXIT,
-  LICENSE_NOTE,
   TEMPLATE,
   codeSceneProblems,
   findDsStore,
   findFreePort,
   freeDiskGb,
   hasBinary,
-  headlessShellCached,
   isPortFree,
   nodeMajor,
   propsProblem,
 } from './lib.js';
+import {resolveEngine} from './engine/index.js';
 import {loadConfig} from './tts/config.js';
 import {providerChecks} from './tts/doctorChecks.js';
 
@@ -30,8 +29,18 @@ const {values} = parseArgs({
     port: {type: 'string', default: '3000'},
     json: {type: 'boolean', default: false},
     quiet: {type: 'boolean', default: false},
+    engine: {type: 'string'},
   },
 });
+
+const engine = (() => {
+  try {
+    return resolveEngine(values.engine);
+  } catch (e) {
+    console.error((e as Error).message);
+    return process.exit(EXIT.validation);
+  }
+})();
 
 async function runChecks(): Promise<CheckResult[]> {
   const results: CheckResult[] = [];
@@ -89,16 +98,8 @@ async function runChecks(): Promise<CheckResult[]> {
     );
   }
 
-  // 5 Headless Shell
-  if (headlessShellCached()) add(5, 'headless-shell', 'pass', 'Remotion Headless Shell cached');
-  else
-    add(
-      5,
-      'headless-shell',
-      'warn',
-      'Headless Shell not cached',
-      'The first render downloads ~171 MB (one time; later installs reuse ~/.cache/windower) and needs network.',
-    );
+  // 5 engine checks (framekit browser path and version)
+  for (const c of engine.doctorChecks()) add(c.id, c.name, c.level, c.message, c.fix);
 
   // 6, 7 run dir
   const runDir = values['run-dir'];
@@ -180,13 +181,13 @@ const results = await runChecks();
 const failed = results.filter((r) => r.level === 'fail');
 
 if (values.json) {
-  console.log(JSON.stringify({results, notes: [LICENSE_NOTE, ESBUILD_NOTE]}, null, 2));
+  console.log(JSON.stringify({results, notes: [engine.licenseNote, ESBUILD_NOTE]}, null, 2));
 } else if (!values.quiet) {
   const icon = {pass: 'ok  ', warn: 'warn', fail: 'FAIL'};
   for (const r of results) {
     console.error(`[${icon[r.level]}] ${r.name}: ${r.message}`);
     if (r.level !== 'pass' && r.fix) console.error(`       -> ${r.fix}`);
   }
-  console.error(`\nNote: ${LICENSE_NOTE}\nNote: ${ESBUILD_NOTE}`);
+  console.error(`\nNote: ${engine.licenseNote}\nNote: ${ESBUILD_NOTE}`);
 }
 process.exit(failed.length ? EXIT.environment : EXIT.ok);

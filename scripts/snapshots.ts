@@ -5,6 +5,8 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
 import {PNG} from 'pngjs';
+import {resolveEngine} from './engine/index.js';
+import type {Engine} from './engine/index.js';
 import {EXIT, ROOT, TEMPLATE, findFreePort} from './lib.js';
 import {prepare} from './prepare.js';
 
@@ -44,15 +46,14 @@ export function pixelDiff(a: Buffer, b: Buffer): number {
 export async function renderSnapshots(
   runDir: string,
   outDir: string,
+  engine: Engine = resolveEngine(),
 ): Promise<{scene: SnapScene; file: string}[]> {
-  const {bundle} = await import('@remotion/bundler');
-  const {renderStill, selectComposition} = await import('@remotion/renderer');
   const props = JSON.parse(readFileSync(path.join(runDir, 'props.json'), 'utf8')) as {
     scenes: SnapScene[];
   };
-  const serveUrl = await bundle({entryPoint: path.join(TEMPLATE, 'src', 'index.ts')});
+  const serveUrl = await engine.bundle(path.join(TEMPLATE, 'src', 'index.ts'));
   const port = await findFreePort();
-  const composition = await selectComposition({
+  const composition = await engine.selectComposition({
     serveUrl,
     port,
     id: 'Explainer',
@@ -62,7 +63,7 @@ export async function renderSnapshots(
   const out: {scene: SnapScene; file: string}[] = [];
   for (const scene of props.scenes) {
     const file = path.join(outDir, snapshotName(scene));
-    await renderStill({
+    await engine.renderStill({
       composition,
       serveUrl,
       port,
@@ -84,7 +85,7 @@ export interface SnapshotResult {
 /** Prepares all-scenes in `workDir`, renders stills, and compares (or with `update`, rewrites baselines). */
 export async function runSnapshots(
   workDir: string,
-  opts: {update?: boolean} = {},
+  opts: {update?: boolean; engine?: Engine} = {},
 ): Promise<SnapshotResult[]> {
   mkdirSync(workDir, {recursive: true});
   const sb = path.join(workDir, 'storyboard.json');
@@ -93,7 +94,7 @@ export async function runSnapshots(
     repoRoot: path.join(ROOT, 'fixtures', 'repos', 'sample'),
     allowUnapproved: true, // fixture storyboards are never approved
   });
-  const shots = await renderSnapshots(workDir, path.join(workDir, 'out'));
+  const shots = await renderSnapshots(workDir, path.join(workDir, 'out'), opts.engine);
   mkdirSync(SNAPSHOT_DIR, {recursive: true});
   return shots.map(({scene, file}) => {
     const name = snapshotName(scene);
@@ -112,12 +113,16 @@ export const BRANDED_REPO = path.join(ROOT, 'fixtures', 'repos', 'branded');
 export const BRANDING_DIR = path.join(SNAPSHOT_DIR, 'branding');
 
 /** Prepares the branding storyboard against `repo` and renders its stills into `<workDir>/out`. */
-async function renderBranding(workDir: string, repo: string): Promise<Map<string, string>> {
+async function renderBranding(
+  workDir: string,
+  repo: string,
+  engine?: Engine,
+): Promise<Map<string, string>> {
   mkdirSync(workDir, {recursive: true});
   const sb = path.join(workDir, 'storyboard.json');
   writeFileSync(sb, readFileSync(BRANDING));
   await prepare(sb, {repoRoot: repo, allowUnapproved: true});
-  const shots = await renderSnapshots(workDir, path.join(workDir, 'out'));
+  const shots = await renderSnapshots(workDir, path.join(workDir, 'out'), engine);
   return new Map(shots.map(({scene, file}) => [`${scene.type}`, file]));
 }
 
@@ -128,13 +133,14 @@ async function renderBranding(workDir: string, repo: string): Promise<Map<string
  */
 export async function runBrandingSnapshots(
   workDir: string,
-  opts: {update?: boolean} = {},
+  opts: {update?: boolean; engine?: Engine} = {},
 ): Promise<{results: SnapshotResult[]; brandedVsDefault: number}> {
   const plain = await renderBranding(
     path.join(workDir, 'default'),
     path.join(ROOT, 'fixtures', 'repos', 'sample'),
+    opts.engine,
   );
-  const branded = await renderBranding(path.join(workDir, 'branded'), BRANDED_REPO);
+  const branded = await renderBranding(path.join(workDir, 'branded'), BRANDED_REPO, opts.engine);
   const pairs: [string, string | undefined][] = [
     ['default-title.png', plain.get('title')],
     ['branded-title.png', branded.get('title')],
@@ -158,11 +164,21 @@ export async function runBrandingSnapshots(
 
 async function main(): Promise<void> {
   const {values} = parseArgs({
-    options: {update: {type: 'boolean'}, work: {type: 'string'}},
+    options: {update: {type: 'boolean'}, work: {type: 'string'}, engine: {type: 'string'}},
   });
+  let engine: Engine;
+  try {
+    engine = resolveEngine(values.engine);
+  } catch (e) {
+    console.error((e as Error).message);
+    process.exit(EXIT.validation);
+  }
   const work = path.resolve(values.work ?? path.join(ROOT, '.windower', 'snapshots'));
-  const results = await runSnapshots(work, {update: values.update});
-  const branding = await runBrandingSnapshots(path.join(work, 'branding'), {update: values.update});
+  const results = await runSnapshots(work, {update: values.update, engine});
+  const branding = await runBrandingSnapshots(path.join(work, 'branding'), {
+    update: values.update,
+    engine,
+  });
   results.push(...branding.results);
   for (const r of results)
     console.error(

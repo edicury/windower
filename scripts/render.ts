@@ -1,25 +1,17 @@
 // render: `render <run-dir>` renders the Explainer composition to out/video.mp4 plus captions.srt/.vtt
 // (FR-RND-01, FR-RND-03, FR-RND-07, FR-RND-08). `render Hello` keeps the phase 0 smoke render.
-import {spawnSync} from 'node:child_process';
 import {existsSync, mkdirSync, readFileSync, statSync, writeFileSync} from 'node:fs';
 import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
 import {UNAPPROVED_WARNING, approvalProblem} from './approval.js';
 import {buildCues, toSrt, toVtt} from './captions.js';
-import {
-  EXIT,
-  TEMPLATE,
-  findFreePort,
-  isPortFree,
-  nodeMajor,
-  propsProblem,
-  saveShellToSharedCache,
-  sharedBrowserExecutable,
-} from './lib.js';
+import {resolveEngine} from './engine/index.js';
+import type {Engine} from './engine/index.js';
+import {EXIT, TEMPLATE, findFreePort, isPortFree, nodeMajor, propsProblem} from './lib.js';
 
 export const RENDER_USAGE =
-  'Usage: render <run-dir> [--still <sceneId>] [--out <dir>] [--port N] [--crf N] [--concurrency N] [--allow-unapproved]\n' +
+  'Usage: render <run-dir> [--still <sceneId>] [--out <dir>] [--port N] [--crf N] [--concurrency N] [--allow-unapproved] [--engine framekit]\n' +
   '       render Hello [--out <file>]';
 
 interface PropsScene {
@@ -50,6 +42,14 @@ function fail(code: number, message: string): never {
   process.exit(code);
 }
 
+function pickEngine(flag: string | undefined): Engine {
+  try {
+    return resolveEngine(flag);
+  } catch (e) {
+    return fail(EXIT.validation, (e as Error).message);
+  }
+}
+
 async function pickPort(requested?: string): Promise<number> {
   if (requested) {
     const n = Number(requested);
@@ -61,35 +61,9 @@ async function pickPort(requested?: string): Promise<number> {
   return findFreePort();
 }
 
-/** Runs remotion, keeping the stderr tail for the failure message; retries once (transient fast-start failure). */
-function runRemotion(args: string[]): {ok: boolean; tail: string} {
-  let tail = '';
-  const shared = sharedBrowserExecutable(); // reuse a Headless Shell downloaded by an earlier install
-  const browser = shared ? [`--browser-executable=${shared}`] : [];
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    const r = spawnSync('pnpm', ['exec', 'remotion', ...args, ...browser], {
-      cwd: TEMPLATE,
-      stdio: ['ignore', 'inherit', 'pipe'],
-      encoding: 'utf8',
-    });
-    if (r.stderr) process.stderr.write(r.stderr);
-    if (r.status === 0) {
-      try {
-        saveShellToSharedCache();
-      } catch {
-        // the shared cache is an optimisation; never fail a render over it
-      }
-      return {ok: true, tail: ''};
-    }
-    tail = (r.stderr ?? '').trim().split('\n').slice(-12).join('\n');
-    if (attempt === 1) console.error('Render failed; retrying once.');
-  }
-  return {ok: false, tail};
-}
-
-async function renderHello(out: string | undefined, port: number): Promise<void> {
+async function renderHello(engine: Engine, out: string | undefined, port: number): Promise<void> {
   const file = path.resolve(out ?? path.join(TEMPLATE, 'out', 'hello.mp4'));
-  const r = runRemotion(['render', 'src/index.ts', 'Hello', file, `--port=${port}`]);
+  const r = engine.renderMedia({id: 'Hello', output: file, port});
   if (!r.ok) fail(EXIT.render, 'Render failed. Run `pnpm ve:doctor` to diagnose the environment.');
   console.error(`Wrote ${file}`);
 }
@@ -103,6 +77,7 @@ async function main(): Promise<void> {
       crf: {type: 'string'},
       concurrency: {type: 'string'},
       'allow-unapproved': {type: 'boolean'},
+      engine: {type: 'string'},
     },
     allowPositionals: true,
   });
@@ -111,14 +86,12 @@ async function main(): Promise<void> {
 
   if (nodeMajor() < 18)
     fail(EXIT.environment, `Node ${process.versions.node} is too old; need >= 18.`);
-  if (!existsSync(path.join(TEMPLATE, 'node_modules', 'remotion')))
-    fail(
-      EXIT.environment,
-      'Template dependencies are missing. Run `pnpm install`, then `pnpm ve:doctor`.',
-    );
+  const engine = pickEngine(values.engine);
+  const missing = engine.precheck();
+  if (missing) fail(EXIT.environment, missing);
 
   const port = await pickPort(values.port);
-  if (target === 'Hello') return renderHello(values.out, port);
+  if (target === 'Hello') return renderHello(engine, values.out, port);
 
   let runDir = path.resolve(target);
   if (existsSync(runDir) && statSync(runDir).isFile()) runDir = path.dirname(runDir);
@@ -160,7 +133,7 @@ async function main(): Promise<void> {
       );
     const frame = scene.startFrame + Math.floor(scene.durationFrames / 2);
     const file = path.join(outDir, `still-${scene.id}.png`);
-    const r = runRemotion([
+    const r = engine.run([
       'still',
       'src/index.ts',
       'Explainer',
@@ -179,15 +152,13 @@ async function main(): Promise<void> {
   }
 
   const video = path.join(outDir, 'video.mp4');
-  const r = runRemotion([
-    'render',
-    'src/index.ts',
-    'Explainer',
-    video,
-    `--props=${propsFile}`,
-    `--port=${port}`,
-    ...extra,
-  ]);
+  const r = engine.renderMedia({
+    id: 'Explainer',
+    output: video,
+    propsFile,
+    port,
+    extraArgs: extra,
+  });
   if (!r.ok)
     fail(
       EXIT.render,

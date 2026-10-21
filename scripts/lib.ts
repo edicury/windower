@@ -1,13 +1,5 @@
 import {spawnSync} from 'node:child_process';
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-  statfsSync,
-} from 'node:fs';
+import {existsSync, readFileSync, readdirSync, statSync, statfsSync} from 'node:fs';
 import os from 'node:os';
 import net from 'node:net';
 import path from 'node:path';
@@ -34,10 +26,10 @@ export interface CheckResult {
 }
 
 export const LICENSE_NOTE =
-  'Remotion is free for individuals and companies of up to 3 people; larger companies need a Remotion company license (https://remotion.dev/license).';
+  'framekit is MIT licensed; windower renders with framekit only and installs no third-party renderer code.';
 
 export const ESBUILD_NOTE =
-  'The "Ignored build scripts: esbuild" install warning is harmless: bundling and rendering work regardless.';
+  'framekit bundling uses esbuild, whose install script pnpm-workspace.yaml allows (allowBuilds); if pnpm reports "Ignored build scripts: esbuild", run `pnpm rebuild esbuild`.';
 
 function canListen(port: number, host: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -77,17 +69,13 @@ export function hasBinary(name: string): boolean {
 
 const SHELL_BIN = 'chrome-headless-shell';
 
-/** Shared cache so a new plugin install (new node_modules) reuses the downloaded Headless Shell. */
+/** Shared cache (WINDOWER_BROWSER_CACHE, default ~/.cache/windower); its shell is passed to framekit as --browser-executable. */
 export function sharedShellDir(): string {
   const base = process.env.WINDOWER_BROWSER_CACHE ?? path.join(os.homedir(), '.cache', 'windower');
   return path.join(base, SHELL_BIN);
 }
 
-function localShellDirs(): string[] {
-  return [TEMPLATE, ROOT].map((b) => path.join(b, 'node_modules', '.remotion', SHELL_BIN));
-}
-
-/** Finds the headless shell executable inside a Remotion cache directory, if present. */
+/** Finds the headless shell executable inside a browser cache directory, if present. */
 export function findShellExecutable(dir: string): string | undefined {
   if (!existsSync(dir)) return undefined;
   const walk = (d: string, depth: number): string | undefined => {
@@ -102,24 +90,6 @@ export function findShellExecutable(dir: string): string | undefined {
     return undefined;
   };
   return walk(dir, 0);
-}
-
-export function headlessShellCached(): boolean {
-  return [...localShellDirs(), sharedShellDir()].some((d) => findShellExecutable(d) !== undefined);
-}
-
-/** Executable to pass as --browser-executable when only the shared cache has the shell; otherwise Remotion's own cache is used. */
-export function sharedBrowserExecutable(): string | undefined {
-  if (localShellDirs().some((d) => findShellExecutable(d))) return undefined;
-  return findShellExecutable(sharedShellDir());
-}
-
-/** After a render, keeps a copy of a freshly downloaded shell in the shared cache. */
-export function saveShellToSharedCache(): void {
-  const local = localShellDirs().find((d) => findShellExecutable(d));
-  if (!local || findShellExecutable(sharedShellDir())) return;
-  mkdirSync(path.dirname(sharedShellDir()), {recursive: true});
-  cpSync(local, sharedShellDir(), {recursive: true});
 }
 
 export function freeDiskGb(dir: string): number {
