@@ -1,6 +1,6 @@
 # windower
 
-A Claude Code plugin that turns a slice of a software system (a module, feature, PR, ticket or doc) into a short, captioned explainer video of 60-120 seconds. Claude reads the code, git history and any connected MCP source (Notion, Linear, Slack, ...), writes a cited brief and a validated storyboard, waits for your explicit approval, then renders an mp4 with captions using [Remotion](https://www.remotion.dev/).
+A Claude Code plugin that turns a slice of a software system (a module, feature, PR, ticket or doc) into a short, captioned explainer video of 60-120 seconds. Claude reads the code, git history and any connected MCP source (Notion, Linear, Slack, ...), writes a cited brief and a validated storyboard, waits for your explicit approval, then renders an mp4 with captions using framekit, a programmatic React video renderer (headless Chromium capture, ffmpeg encode).
 
 [![Watch Windower explain itself (about 2 minutes, with narration)](https://media.windower.io/explainer-poster.jpg)](https://media.windower.io/explainer.mp4)
 
@@ -29,7 +29,7 @@ For a git checkout, point Claude Code at it with `claude --plugin-dir /path/to/w
 
 - Node.js 18 or newer and [pnpm](https://pnpm.io/).
 - `ffmpeg` and `ffprobe` on your `PATH`.
-- Disk space: the first render downloads Remotion's Chrome Headless Shell (about 171 MB, cached and reused afterwards), plus room for the rendered video.
+- Disk space: the first render needs a Chrome Headless Shell (found automatically, or installed once with `framekit browsers install`; `WINDOWER_BROWSER_CACHE` points windower at a shared cache), plus room for the rendered video.
 - Network access on the first render for that download.
 
 `pnpm ve:doctor` checks all of this and prints a fix for anything missing.
@@ -127,7 +127,7 @@ pnpm ve:doctor      # preflight the render environment
 pnpm ve:render Hello  # first render of the sample composition, writes template/out/hello.mp4
 ```
 
-The first `ve:render` downloads the Headless Shell. Scripts live in `scripts/`, the Remotion project in `template/`, the skill in `skills/windower/`.
+`ve:render` uses the Headless Shell found by `ve:doctor`. Scripts live in `scripts/`, the framekit project in `template/`, the skill in `skills/windower/`.
 
 ## Limits
 
@@ -138,4 +138,4 @@ The first `ve:render` downloads the Headless Shell. Scripts live in `scripts/`, 
 
 ## License
 
-Remotion is free for individuals and companies of up to 3 people; larger companies need a Remotion company license. Unverified: this reflects current knowledge, so confirm the terms at https://remotion.dev/license before relying on them.
+framekit is MIT licensed; windower renders with framekit only and installs no third-party renderer code.

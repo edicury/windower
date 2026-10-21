@@ -4,6 +4,10 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [0.1.0] - Unreleased
 
+### Changed
+
+- framekit replaces Remotion as the only render engine. `template/` imports `@windower/framekit-*` compat entries and links the sibling framekit checkout; `--engine` and `WINDOWER_ENGINE` accept only `framekit` (any other value exits 2); the Remotion engine, `studio` script, parity harness and `ve:make-template-framekit` are removed; `ve:doctor` check 5 reports the framekit browser; license note is the framekit MIT sentence.
+
 ### Added
 
 - Remotion template, `ve:render` and `ve:doctor` preflight (Node, ffmpeg, Headless Shell, port, disk), with reuse of a downloaded Headless Shell across installs.
