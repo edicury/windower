@@ -43,6 +43,16 @@ describe('.windower.json brand + defaultLengthSec', () => {
   ])('rejects %j with the field path', (cfg, re) => {
     expect(() => loadConfig(repo(cfg))).toThrow(re);
   });
+  it('defaults logoPosition to unset and accepts every corner', () => {
+    expect(loadConfig(repo({brand})).brand?.logoPosition).toBeUndefined();
+    for (const p of ['top-left', 'top-right', 'bottom-left', 'bottom-right'])
+      expect(loadConfig(repo({brand: {...brand, logoPosition: p}})).brand?.logoPosition).toBe(p);
+  });
+  it('rejects an invalid logoPosition', () => {
+    expect(() => loadConfig(repo({brand: {...brand, logoPosition: 'middle'}}))).toThrow(
+      /brand\.logoPosition/,
+    );
+  });
   it('rejects an oversized logo', () => {
     const d = repo({brand: {...brand, logo: 'big.png'}}, {'big.png': Buffer.alloc(300 * 1024)});
     expect(() => loadConfig(d)).toThrow(/brand\.logo.*limit/);

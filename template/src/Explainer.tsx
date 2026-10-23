@@ -3,6 +3,7 @@ import {TransitionSeries, linearTiming} from '@windower/framekit/transitions/com
 import {fade} from '@windower/framekit/transitions/compat/fade';
 import {slide} from '@windower/framekit/transitions/compat/slide';
 import {Captions} from './Captions';
+import {Logo} from './Logo';
 import {Title} from './scenes/Title';
 import {Bullets} from './scenes/Bullets';
 import {Code} from './scenes/Code';
@@ -14,15 +15,15 @@ import {brandVars} from './brand';
 import {TRANSITION_FRAMES, theme} from './theme';
 import type {ExplainerProps, Scene} from './types';
 
-const renderScene = (s: Scene, logo?: string) => {
+const renderScene = (s: Scene) => {
   switch (s.type) {
-    case 'title': return <Title scene={s} logo={logo} />;
+    case 'title': return <Title scene={s} />;
     case 'bullets': return <Bullets scene={s} />;
     case 'code': return <Code scene={s} />;
     case 'architecture': return <Architecture scene={s} />;
     case 'sequence': return <SeqScene scene={s} />;
     case 'timeline': return <Timeline scene={s} />;
-    case 'outro': return <Outro scene={s} logo={logo} />;
+    case 'outro': return <Outro scene={s} />;
   }
 };
 
@@ -33,7 +34,7 @@ export const Explainer = ({scenes, transitionFrames = TRANSITION_FRAMES, burnIn 
         const seq = (
           <TransitionSeries.Sequence key={s.id} durationInFrames={s.durationFrames}>
             <AbsoluteFill>
-              {renderScene(s, brand?.logo)}
+              {renderScene(s)}
               {burnIn && <Captions captions={s.captions} />}
               {s.audio && <Audio src={staticFile(s.audio)} />}
             </AbsoluteFill>
@@ -51,5 +52,6 @@ export const Explainer = ({scenes, transitionFrames = TRANSITION_FRAMES, burnIn 
             ];
       })}
     </TransitionSeries>
+    <Logo src={brand?.logo} position={brand?.logoPosition} />
   </AbsoluteFill>
 );

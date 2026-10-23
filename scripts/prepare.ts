@@ -85,6 +85,7 @@ export function resolveBrand(repoRoot: string, log: (m: string) => void): Brand 
   if (b.accent) brand.accent = b.accent;
   if (b.text) brand.text = b.text;
   if (b.font) brand.font = b.font;
+  if (b.logoPosition) brand.logoPosition = b.logoPosition;
   if (b.logoFile) {
     const mime = b.logoFile.toLowerCase().endsWith('.svg') ? 'image/svg+xml' : 'image/png';
     brand.logo = `data:${mime};base64,${readFileSync(b.logoFile).toString('base64')}`;

@@ -1,7 +1,7 @@
 // Optional <repo>/.windower.json. Secrets never come from this file (contract §2).
 import fs from 'node:fs';
 import path from 'node:path';
-import {HEX, SAFE_FONT} from '../../template/src/brand.js';
+import {HEX, LOGO_POSITIONS, SAFE_FONT, type LogoPosition} from '../../template/src/brand.js';
 
 export interface WindowerConfig {
   provider?: string;
@@ -18,6 +18,7 @@ export interface WindowerConfig {
     font?: string;
     logo?: string;
     logoFile?: string;
+    logoPosition?: LogoPosition;
   };
   /** Default video length in seconds (60-120), surfaced to the skill. */
   defaultLengthSec?: number;
@@ -26,7 +27,7 @@ export interface WindowerConfig {
 export const LENGTH_RANGE = {min: 60, max: 120} as const;
 export const MAX_LOGO_BYTES = 256 * 1024;
 const KNOWN = ['provider', 'providers', 'voice', 'model', 'brand', 'defaultLengthSec'];
-const KNOWN_BRAND = ['primary', 'background', 'accent', 'text', 'font', 'logo'];
+const KNOWN_BRAND = ['primary', 'background', 'accent', 'text', 'font', 'logo', 'logoPosition'];
 const bad = (field: string, why: string): never => {
   throw new Error(`.windower.json "${field}" ${why}`);
 };
@@ -80,6 +81,11 @@ function parseBrand(
       );
     brand.logo = o.logo;
     brand.logoFile = file;
+  }
+  if (o.logoPosition !== undefined) {
+    if (!LOGO_POSITIONS.includes(o.logoPosition as LogoPosition))
+      return bad('brand.logoPosition', `must be one of ${LOGO_POSITIONS.join(', ')}`);
+    brand.logoPosition = o.logoPosition as LogoPosition;
   }
   return brand;
 }

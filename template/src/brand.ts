@@ -1,5 +1,8 @@
 // Brand theming (FR-CFG, US-07). Brand colors become CSS custom properties on the root; theme.ts
 // reads them with the built-in palette as fallback, so a run without brand renders unchanged.
+export const LOGO_POSITIONS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const;
+export type LogoPosition = (typeof LOGO_POSITIONS)[number];
+
 export type Brand = {
   primary: string;
   background: string;
@@ -9,6 +12,8 @@ export type Brand = {
   font?: string;
   /** data: URI (svg or png) embedded by prepare. */
   logo?: string;
+  /** Corner for the logo on every scene; defaults to top-right. */
+  logoPosition?: LogoPosition;
 };
 
 export const HEX = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;

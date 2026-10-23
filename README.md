@@ -2,7 +2,7 @@
 
 A Claude Code plugin that turns a slice of a software system (a module, feature, PR, ticket or doc) into a short, captioned explainer video of 60-120 seconds. Claude reads the code, git history and any connected MCP source (Notion, Linear, Slack, ...), writes a cited brief and a validated storyboard, waits for your explicit approval, then renders an mp4 with captions using framekit, a programmatic React video renderer (headless Chromium capture, ffmpeg encode).
 
-[![Watch Windower explain itself (about 2 minutes, with narration)](https://media.windower.io/explainer-poster.jpg)](https://media.windower.io/explainer.mp4)
+[![Watch windower explain itself (about 2 minutes, with narration)](https://media.windower.io/explainer-poster.jpg)](https://media.windower.io/explainer.mp4)
 
 _The video above was made with windower itself, narrated with a text-to-speech voice._
 
@@ -72,7 +72,7 @@ Narration providers:
 | `elevenlabs` | `ELEVENLABS_API_KEY`                                |
 | `openai`     | `OPENAI_API_KEY`                                    |
 | `piper`      | local binary: `PIPER_BIN` (optional), `PIPER_MODEL` |
-| `silent`     | none (captions only)                                |
+| `null`       | none (silent, captions only; same as `--no-voice`)  |
 
 - Keys come from your shell environment only. They are never read from `.windower.json` and never written to disk.
 - The provider is resolved from `.windower.json`, then available keys, then falls back to silent.
@@ -82,10 +82,10 @@ Narration providers:
 
 ## Privacy
 
-- Only the narration text is sent to the TTS provider you approve. Code, briefs, images and everything else stay on your machine. With `silent` or `piper`, nothing leaves at all.
+- Only the narration text is sent to the TTS provider you approve. Code, briefs, images and everything else stay on your machine. With `null` (silent) or `piper`, nothing leaves at all.
 - The approval gate states this and names the provider before anything is sent.
 - Briefs are scanned for secrets, key-shaped strings, `.env` values and emails/phone numbers before the storyboard is written; `.env*`, `*.pem` and `id_rsa*` files are never quoted in code scenes.
-- Generated artifacts live in `.windower/` under the directory you run from (your repo, or a scratch directory if you chose one). In a repo, add it to `.gitignore`. Windower never commits anything.
+- Generated artifacts live in `.windower/` under the directory you run from (your repo, or a scratch directory if you chose one). In a repo, add it to `.gitignore`. windower never commits anything.
 - MCP sources you connect are read by Claude as part of the normal Claude Code session, under that tool's own data terms.
 
 ## Configuration
@@ -109,11 +109,61 @@ Optional `.windower.json` at the repository root:
 }
 ```
 
-- `provider`, `voice`, `model`: narration defaults (flags override the file, the file overrides provider defaults).
-- `brand`: visual branding. `primary` and `background` (hex) are required; `accent`, `text` (hex), `font` (a family name, no network fetch, system fallback) and `logo` (svg or png up to 256 KB, path relative to the config file, shown on the title and outro scenes) are optional. A low text/background contrast prints a warning when preparing.
-- `defaultLengthSec`: target length when the request does not specify one (60-120).
+Every key is optional. The full option reference is in [Customizing the video](#customizing-the-video) below.
 
 Never put API keys here; a field that looks like a secret is rejected. Unknown keys give a warning; invalid values stop with the field path.
+
+### Customizing the video
+
+Everything you can change lives in `.windower.json` at the repository root (the directory you run from), plus a few flags per run. Nothing else in the output is configurable. Here is a complete example with every key, annotated (JSON has no comments, so remove the `//` notes before saving):
+
+```jsonc
+{
+  "provider": "elevenlabs", // elevenlabs | openai | piper | null (silent)
+  "providers": ["./my-provider.js"], // validated as string[], but not loaded yet
+  "voice": "EXAVITQu4vr4xnSDxMaL", // provider-specific voice id
+  "model": "eleven_multilingual_v2", // provider-specific model id
+  "defaultLengthSec": 90, // 60-120, used when the request names no length
+  "brand": {
+    "primary": "#0A84FF", // required, hex
+    "background": "#0B0D12", // required, hex
+    "accent": "#FFB020", // optional, hex
+    "text": "#F5F7FA", // optional, hex
+    "font": "Inter", // optional, family name
+    "logo": "./assets/logo.svg", // optional, .svg or .png, max 256 KB
+    "logoPosition": "top-right", // optional corner
+  },
+}
+```
+
+| Key                  | Type     | Default                                                  | Notes                                                                                                        |
+| -------------------- | -------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `provider`           | string   | first available key, else `null` (silent)                | `elevenlabs`, `openai`, `piper` or `null` (silent). Flag `--provider` overrides; `--no-voice` forces `null`. |
+| `providers`          | string[] | none                                                     | Must be an array of strings; accepted but not loaded by any script yet.                                      |
+| `voice`              | string   | `EXAVITQu4vr4xnSDxMaL` / `alloy` / `en_US-lessac-medium` | Per-provider default shown for elevenlabs / openai / piper. Flag `--voice` overrides.                        |
+| `model`              | string   | `eleven_multilingual_v2` / `gpt-4o-mini-tts` / `piper`   | Same order as above. Flag `--model` overrides.                                                               |
+| `defaultLengthSec`   | number   | 90                                                       | 60 to 120, otherwise the config is rejected.                                                                 |
+| `brand.primary`      | hex      | built-in palette (no brand)                              | Required if `brand` is present. Accent color of the scenes.                                                  |
+| `brand.background`   | hex      | `#0b1020`                                                | Required if `brand` is present.                                                                              |
+| `brand.accent`       | hex      | none                                                     | Secondary accent.                                                                                            |
+| `brand.text`         | hex      | `#e8ecff`                                                | Text color. Panels, borders, muted text and the captions bar are derived by mixing it with the background.   |
+| `brand.font`         | string   | Inter, then system fonts                                 | Family name only: letters, digits, spaces and hyphens, up to 64 characters.                                  |
+| `brand.logo`         | path     | none                                                     | `.svg` or `.png`, at most 256 KB, path relative to the repo root, file must exist.                           |
+| `brand.logoPosition` | string   | `top-right`                                              | `top-left`, `top-right`, `bottom-left` or `bottom-right`.                                                    |
+
+Colors are hex only: `#rgb` or `#rrggbb`.
+
+**Colors.** Set `primary` and `background` (both required); add `text` and `accent` as needed. When preparing, windower prints a warning if text on background is below 4.5:1 contrast, or if `primary` on `background` is below 3:1. It is a warning, not an error, but low contrast makes the captions and scenes hard to read.
+
+**Font.** `font` is a family name such as `"Inter"` or `"IBM Plex Sans"`. windower never downloads fonts and bundles none: the video is rendered in headless Chromium, which uses the font only if it is installed on the machine that renders. If it is not installed, text falls back to the system stack (`-apple-system`, Segoe UI, Helvetica, Arial, sans-serif). Install the font locally before rendering. Font file paths and URLs are rejected.
+
+**Logo.** Point `brand.logo` at an svg or png (at most 256 KB, path relative to the repo root). It is embedded in the video and drawn on every scene in one corner, scaled to fit a box of at most 360 px wide by 96 px high (1080p frame), aspect ratio kept. To replace it, change the file or the path; to move it, set `logoPosition`; to remove it, delete the `logo` key. Bottom corners sit above the captions bar.
+
+**Voice.** Pick the provider with `provider` (or `--provider`, or `--no-voice` for captions only). To choose a voice, run `pnpm ve:voices` (add `--search <text>`; it lists your ElevenLabs account; openai voices are alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse, marin, cedar), then either pass `--voice <id>` to both `ve:gate` and `ve:synth`, or save it as `voice` in `.windower.json`. `--model <id>` works the same way. Precedence: flag, then `.windower.json`, then the provider default. Changing voice or model bills again. API keys come from the environment only, never from this file.
+
+**Per run, in the request.** The audience (`onboarding`, `pr-review`, `stakeholder`, `docs`) and the length (60 to 120 s) are inferred from your request, so say them in plain words ("a stakeholder video, about 60 seconds"). The storyboard is built from seven scene types (see `skills/windower/references/scene-catalog.md`) and you review it at the approval gate; ask for edits there before rendering.
+
+**Not customizable.** Scene layout and design, caption style, transition duration (12 frames; only the per-scene `fade`, `slide` or `none` choice is set in the storyboard), fonts from files or URLs, background music (the only audio is narration), size (1920x1080, 16:9), frame rate (30 fps), and lengths outside 60 to 120 seconds.
 
 ## Troubleshooting
 

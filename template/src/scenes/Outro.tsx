@@ -1,10 +1,9 @@
 import {AbsoluteFill, interpolate, useCurrentFrame} from '@windower/framekit/core/compat';
 import {SAFE, theme} from '../theme';
-import {Logo} from '../Logo';
 import type {OutroScene} from '../types';
 
 /** Closing card (FR-SCN-07): headline, optional subtitle and up to 3 takeaway chips. */
-export const Outro = ({scene, logo}: {scene: OutroScene; logo?: string}) => {
+export const Outro = ({scene}: {scene: OutroScene}) => {
   const f = useCurrentFrame();
   const clamp = {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'} as const;
   const o = interpolate(f, [0, 18], [0, 1], clamp);
@@ -12,7 +11,6 @@ export const Outro = ({scene, logo}: {scene: OutroScene; logo?: string}) => {
   const items = scene.items ?? [];
   return (
     <AbsoluteFill style={{justifyContent: 'center', alignItems: 'center', textAlign: 'center', padding: SAFE.x, paddingBottom: 220}}>
-      <Logo src={logo} />
       <div style={{width: 120, height: 8, borderRadius: 4, background: theme.accent2, marginBottom: 48, opacity: o}} />
       <div style={{fontSize: 96, fontWeight: 800, lineHeight: 1.1, textWrap: 'balance', opacity: o, transform: `translateY(${y}px)`}}>{scene.headline}</div>
       {scene.subtitle && (
