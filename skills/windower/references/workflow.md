@@ -20,7 +20,7 @@ pnpm --silent --dir "$WINDOWER" ve:doctor --run-dir "$RUN" [--provider <id>] [--
 
 With `--provider`, `--no-voice` or `--voice`, doctor also reports the selected TTS provider and why, whether its env key is set (never the value), the piper binary/model (`PIPER_BIN`, `PIPER_MODEL`), ffprobe for estimated-timing providers, and the egress statement. A missing key is a warning pointing to `--no-voice`, a failure only when that provider was requested with `--provider`.
 
-Exit 3 means a hard failure (Node < 18, no ffmpeg/ffprobe, missing `node_modules`); each failed check prints a fix. Warnings (port 3000 busy, first render downloads about 171 MB, low disk) do not block; the render wrapper picks a free port itself.
+Exit 3 means a hard failure (Node < 18, no ffmpeg/ffprobe, missing `node_modules`); each failed check prints a fix. If doctor fails only on a sandboxed port or network probe, that is non-fatal when run with `--no-voice`. Warnings (port 3000 busy, first render downloads about 171 MB, low disk) do not block; the render wrapper picks a free port itself.
 
 ## 1. Scope
 
@@ -51,7 +51,7 @@ Rules: continue at `next`; a stage is `stale` when an earlier stage changed afte
 
 ## 3. Gather
 
-Spawn Explore subagents with narrow, answerable questions, for example: "In `src/checkout/`, how does an order move from cart to payment? Return `path:line-range` for each step and quote the 5-16 lines that best show the core logic verbatim." One subagent per independent area, run in parallel. If no subagent tool is available in your session, read the files yourself with the same discipline (narrow questions, about 15 files, no secret files). Instruct each to skip `node_modules`, build output, generated files, lockfiles, binaries and any `.env*`, `*.pem`, `id_rsa*` file, and to return citations the main agent will re-check.
+Delegate to subagents (Claude Code: Explore subagents) with narrow, answerable questions, for example: "In `src/checkout/`, how does an order move from cart to payment? Return `path:line-range` for each step and quote the 5-16 lines that best show the core logic verbatim." One subagent per independent area, run in parallel. If the harness has no subagent tool, read the files directly with the same discipline (narrow questions, about 15 files, no secret files). Instruct each to skip `node_modules`, build output, generated files, lockfiles, binaries and any `.env*`, `*.pem`, `id_rsa*` file, and to return citations the main agent will re-check.
 
 Then verify what you rely on: open each cited range yourself before you put it in the brief. A subagent's line numbers are claims, not facts.
 

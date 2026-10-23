@@ -8,7 +8,16 @@ import {UNAPPROVED_WARNING, approvalProblem} from './approval.js';
 import {buildCues, toSrt, toVtt} from './captions.js';
 import {resolveEngine} from './engine/index.js';
 import type {Engine} from './engine/index.js';
-import {EXIT, TEMPLATE, findFreePort, isPortFree, nodeMajor, propsProblem} from './lib.js';
+import {
+  EXIT,
+  TEMPLATE,
+  findFreePort,
+  isPortFree,
+  nodeMajor,
+  propsProblem,
+  renderEnvHint,
+  stringifyError,
+} from './lib.js';
 
 export const RENDER_USAGE =
   'Usage: render <run-dir> [--still <sceneId>] [--out <dir>] [--port N] [--crf N] [--concurrency N] [--allow-unapproved] [--engine framekit]\n' +
@@ -37,6 +46,12 @@ export function propsShapeProblem(runDir: string): string | undefined {
   return undefined;
 }
 
+/** Failure text plus the sandbox hint when the tail looks like a browser launch or listen failure. */
+function withHint(message: string, tail: string): string {
+  const hint = renderEnvHint(tail);
+  return hint ? `${message}\n${hint}` : message;
+}
+
 function fail(code: number, message: string): never {
   console.error(message);
   process.exit(code);
@@ -46,7 +61,7 @@ function pickEngine(flag: string | undefined): Engine {
   try {
     return resolveEngine(flag);
   } catch (e) {
-    return fail(EXIT.validation, (e as Error).message);
+    return fail(EXIT.validation, stringifyError(e));
   }
 }
 
@@ -64,7 +79,11 @@ async function pickPort(requested?: string): Promise<number> {
 async function renderHello(engine: Engine, out: string | undefined, port: number): Promise<void> {
   const file = path.resolve(out ?? path.join(TEMPLATE, 'out', 'hello.mp4'));
   const r = engine.renderMedia({id: 'Hello', output: file, port});
-  if (!r.ok) fail(EXIT.render, 'Render failed. Run `pnpm ve:doctor` to diagnose the environment.');
+  if (!r.ok)
+    fail(
+      EXIT.render,
+      withHint('Render failed. Run `pnpm ve:doctor` to diagnose the environment.', r.tail),
+    );
   console.error(`Wrote ${file}`);
 }
 
@@ -145,7 +164,10 @@ async function main(): Promise<void> {
     if (!r.ok)
       fail(
         EXIT.render,
-        `Still render failed:\n${r.tail}\nRun \`pnpm ve:doctor\` to diagnose the environment.`,
+        withHint(
+          `Still render failed:\n${r.tail}\nRun \`pnpm ve:doctor\` to diagnose the environment.`,
+          r.tail,
+        ),
       );
     console.error(`Wrote ${file} (frame ${frame})`);
     return;
@@ -162,7 +184,10 @@ async function main(): Promise<void> {
   if (!r.ok)
     fail(
       EXIT.render,
-      `Render failed:\n${r.tail}\nRun \`pnpm ve:doctor\` to diagnose the environment.`,
+      withHint(
+        `Render failed:\n${r.tail}\nRun \`pnpm ve:doctor\` to diagnose the environment.`,
+        r.tail,
+      ),
     );
 
   const cues = buildCues(props.scenes, props.fps);
@@ -171,4 +196,8 @@ async function main(): Promise<void> {
   console.error(`Wrote ${video}, captions.srt and captions.vtt in ${outDir}`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+  await main().catch((e: unknown) => {
+    const text = stringifyError(e);
+    fail(EXIT.render, withHint(`Render failed: ${text}`, text));
+  });

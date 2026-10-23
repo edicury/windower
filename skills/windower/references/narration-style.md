@@ -10,6 +10,7 @@ Narration is spoken text. It is also the caption source and the only text that c
 
 ## Spoken style
 
+- Always write the product name lowercase, `windower`, in narration (and titles, headlines, captions). The validator warns on `Windower`.
 - Write for the ear: short sentences, one idea per sentence, active voice, present tense ("greet builds the line").
 - Say identifiers the way a person would read them: "greet all" is fine for `greetAll`; spell out symbols ("an exclamation mark", "a plain full stop"). Avoid reading long paths, line numbers, hashes or URLs aloud; they belong in `sources`.
 - Narration and the on-screen text should agree but not duplicate: the screen shows the list, the voice explains why. Do not read bullets verbatim.

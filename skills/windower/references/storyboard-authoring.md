@@ -9,7 +9,8 @@ Write `$RUN/storyboard.json` from the redacted brief. The shipped Zod schema is 
 3. **Show, then say.** Pick the scene type that shows the idea (code for exact logic, sequence for order, architecture for structure, bullets for takeaways). Narration explains; it does not recite the screen.
 4. **Arc.** Title (what and why you care), 4-9 content scenes in the order a newcomer needs them (overview, core flow, one or two code close-ups, edge cases or gotchas), then a recap `bullets` or `outro`.
 5. **Verbatim code.** Code scene text is copied from the file, not retyped from memory: re-read the lines just before writing. Do not "tidy" it.
-6. **Do not invent.** Every claim traces to a brief fact. If you are unsure, leave it out or say so in "Open questions".
+6. **Name.** Write the product name lowercase, `windower`, in `title`, headlines, narration and captions (`ve:validate` warns on `Windower`).
+7. **Do not invent.** Every claim traces to a brief fact. If you are unsure, leave it out or say so in "Open questions".
 
 ## Length budget
 

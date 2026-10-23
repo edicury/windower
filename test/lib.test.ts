@@ -9,6 +9,8 @@ import {
   isPortFree,
   nodeMajor,
   propsProblem,
+  renderEnvHint,
+  stringifyError,
 } from '../scripts/lib.js';
 
 describe('ports', () => {
@@ -71,5 +73,24 @@ describe('shared headless shell cache', () => {
     expect(findShellExecutable(dir)).toBeUndefined();
     writeFileSync(path.join(nested, 'chrome-headless-shell'), '');
     expect(findShellExecutable(dir)).toBe(path.join(nested, 'chrome-headless-shell'));
+  });
+});
+
+describe('stringifyError', () => {
+  it('reads Error, string, message/code objects and falls back to JSON', () => {
+    expect(stringifyError(new Error('boom'))).toBe('boom');
+    expect(stringifyError('plain')).toBe('plain');
+    expect(stringifyError({code: 'EPERM', message: 'listen denied'})).toBe('EPERM: listen denied');
+    expect(stringifyError({a: 1})).toBe('{"a":1}');
+    expect(stringifyError(undefined)).toBe('undefined');
+    expect(stringifyError({a: 1})).not.toContain('[object Object]');
+  });
+});
+
+describe('renderEnvHint', () => {
+  it('hints on launch or listen failures only', () => {
+    expect(renderEnvHint('listen EPERM: operation not permitted 127.0.0.1')).toContain('sandbox');
+    expect(renderEnvHint('bootstrap_check_in: Permission denied (1100)')).toContain('Chrome');
+    expect(renderEnvHint('props.json is missing')).toBeUndefined();
   });
 });

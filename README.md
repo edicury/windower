@@ -45,6 +45,8 @@ For a git checkout, point Claude Code at it with `claude --plugin-dir /path/to/w
 
 The slice can be paths, a symbol, a feature description, a PR number or URL, or a link to a ticket or doc. The audience is one of `onboarding`, `pr-review`, `stakeholder`, `docs`. Runs are written under the current working directory as `.windower/<slug>/`, so starting Claude Code inside the repo being explained writes there. The repo being explained is only read (it is referenced by an absolute `repoRoot`), so running from a scratch directory keeps it untouched. The video is at the video at `out/video.mp4` and captions as `out/captions.srt` and `out/captions.vtt`.
 
+`/explain-video` is a Claude Code slash command. Other harnesses use a plain request, for example "use the windower skill to explain the checkout retry logic".
+
 ## How it works
 
 1. Scope the slice, audience and length (default 90 s).
@@ -80,6 +82,27 @@ Narration providers:
 - Cost is driven by the number of characters in the narration. The gate shows the character count; windower makes no price claim, so check your provider's current pricing.
 - Changing voice or model bills again.
 
+## Other harnesses (Codex, opencode)
+
+Claude Code is the primary supported harness. The engine (`scripts/`, `ve:*`) and the `skills/windower/SKILL.md` format are portable, but only the following has been tried:
+
+- Claude Code: supported.
+- Codex CLI 0.154.0: run end to end under `workspace-write` with network access enabled. It reached the approval gate, relayed the gate summary, and after approval ran gate --approve, timing and ElevenLabs synth successfully. `prepare` needed a writable copy of the plugin directory (the sandbox makes the windower repo read-only). `render` cannot run inside the macOS Codex sandbox (Chromium cannot start, no local port), but rendering the same prepared run outside the sandbox worked (1920x1080 with audio).
+- opencode: untested.
+
+Codex install:
+
+1. `git clone https://github.com/edicury/windower.git && pnpm install --dir windower`.
+2. Copy or symlink `skills/windower` into Codex's skills directory, and/or add an `AGENTS.md` to your project that points at the `SKILL.md` absolute path (start from [skills/windower/AGENTS.example.md](skills/windower/AGENTS.example.md)).
+3. `export WINDOWER_HOME=/absolute/path/to/windower` so the skill finds the scripts when `${CLAUDE_PLUGIN_ROOT}` is not set.
+4. Ask in plain words: "use the windower skill to explain ...".
+
+If `pnpm ve:*` fails with `EPERM` or an IPC pipe error inside a sandbox, use `sh "$WINDOWER_HOME/scripts/ve.sh" <name> <args>` (for example `ve.sh gate "$RUN" --no-voice`). It points `TMPDIR` at `${WINDOWER_TMPDIR:-$WINDOWER_HOME/.tmp}`. A `ve:doctor` failure only on a sandboxed port or network probe is non-fatal with `--no-voice`.
+
+`ve:render` (and `ve:snapshots`) need Chrome and a local port. Under a sandboxed harness such as Codex `workspace-write` on macOS (seatbelt: Chromium bootstrap permission denied, listen on 127.0.0.1 EPERM), run render outside the sandbox or via the harness's escalation request. `ve:synth` needs network access.
+
+`ve:prepare` writes narration audio into `$WINDOWER_HOME/template/public/audio`. When the windower directory is read-only (sandbox), use a writable copy of the plugin and point `WINDOWER_HOME` at it.
+
 ## Privacy
 
 - Only the narration text is sent to the TTS provider you approve. Code, briefs, images and everything else stay on your machine. With `null` (silent) or `piper`, nothing leaves at all.
@@ -90,7 +113,7 @@ Narration providers:
 
 ## Configuration
 
-Optional `.windower.json` at the repository root:
+Optional `.windower.json` at the root of the repository you are explaining (the storyboard `repoRoot`), not in the windower directory. The logo and brand colors are read from that file, so a run against a repo without one renders unbranded. Put it next to that repo's `package.json`:
 
 ```json
 {

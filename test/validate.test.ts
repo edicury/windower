@@ -132,3 +132,25 @@ describe('stress-over-limit fixture (testing.md 2.1, phase 1 rows)', () => {
     for (const e of r.errors) expect(e.path).not.toBe('');
   });
 });
+
+describe('product name casing', () => {
+  const base = JSON.parse(readFileSync(fx('minimal.json'), 'utf8'));
+  const withNarration = (text: string) => {
+    const sb = structuredClone(base);
+    sb.scenes[1].narration = text;
+    return validateStoryboard(sb, {});
+  };
+
+  it('warns (not errors) on a capitalised Windower in narration', () => {
+    const r = withNarration('Windower turns a slice of code into a short video for new teammates.');
+    expect(r.warnings.some((w) => w.rule === 'name-case' && w.sceneId === base.scenes[1].id)).toBe(
+      true,
+    );
+    expect(r.errors.some((e) => e.rule === 'name-case')).toBe(false);
+  });
+
+  it('accepts lowercase windower', () => {
+    const r = withNarration('windower turns a slice of code into a short video for new teammates.');
+    expect(r.warnings.some((w) => w.rule === 'name-case')).toBe(false);
+  });
+});

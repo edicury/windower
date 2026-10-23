@@ -168,3 +168,31 @@ export function propsProblem(runDir: string): string | undefined {
   }
   return undefined;
 }
+
+/** Readable text for any thrown or rejected value: Error message, string, `message`/`code` fields, then JSON, never "[object Object]". */
+export function stringifyError(value: unknown): string {
+  if (value instanceof Error) return value.message || value.name;
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object') {
+    const {message, code} = value as {message?: unknown; code?: unknown};
+    const parts = [code, message].filter((p) => typeof p === 'string' && p !== '') as string[];
+    if (parts.length > 0) return parts.join(': ');
+    try {
+      const json = JSON.stringify(value);
+      if (json && json !== '{}') return json;
+    } catch {
+      // circular or unserializable: fall through
+    }
+    return Object.prototype.toString.call(value);
+  }
+  return String(value);
+}
+
+const LAUNCH_FAILURE =
+  /bootstrap_check_in|permission denied|EPERM|EACCES|listen .*(EPERM|EACCES)|failed to launch|could not find (chrome|chromium)|no usable sandbox|\[object Object\]/i;
+
+/** Actionable hint when a render failure looks like Chrome failing to launch or listen (typically a sandbox); undefined otherwise. */
+export function renderEnvHint(text: string): string | undefined {
+  if (!LAUNCH_FAILURE.test(text)) return undefined;
+  return 'Hint: render needs Chrome and a local port; if running in a sandbox, run outside it (or use the harness escalation request).';
+}

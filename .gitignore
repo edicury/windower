@@ -6,3 +6,4 @@ out
 template/public/audio
 specs/
 template/.framekit/
+.tmp

@@ -275,7 +275,28 @@ export function validateStoryboard(raw: unknown, opts: ValidateOptions = {}): Va
     }
   }
 
+  warnProductNameCase(raw, addWarn);
   return {errors, warnings, estimatedSec};
+}
+
+const NAME_FIELDS = ['title', 'headline', 'narration'];
+
+/** Style lint: the product name is always lowercase `windower` in titles, headlines and narration. */
+function warnProductNameCase(
+  raw: Record<string, unknown>,
+  addWarn: (sceneId: string | null, p: string, rule: string, message: string) => number,
+): void {
+  const check = (sceneId: string | null, field: string, v: unknown) => {
+    if (typeof v === 'string' && /\bWindower\b/.test(v))
+      addWarn(sceneId, field, 'name-case', 'write the product name lowercase: "windower"');
+  };
+  check(null, 'title', raw.title);
+  if (!Array.isArray(raw.scenes)) return;
+  for (const sc of raw.scenes) {
+    if (!isObj(sc)) continue;
+    const id = typeof sc.id === 'string' ? sc.id : null;
+    for (const f of NAME_FIELDS) check(id, f, sc[f]);
+  }
 }
 
 /** Joins an object path for messages, e.g. `items[1]`. */
