@@ -3,6 +3,7 @@
   "slug": "outro",
   "title": "outro",
   "audience": "onboarding",
+  "mode": "quick",
   "repoRoot": "../repos/sample",
   "scenes": [
     {
@@ -10,7 +11,7 @@
       "type": "title",
       "headline": "Windower scene fixture",
       "subtitle": "Layout checked at the declared limits",
-      "narration": "This scene walks through the idea step by step so that a new reader can follow the flow, see which parts matter most, and remember the main takeaway after the video ends today. We keep the pace steady, name every part clearly, and pause briefly between scenes.",
+      "narration": "This scene walks through the idea step by step so that a new reader can follow the flow, see which parts matter most, and remember the.",
       "sources": []
     },
     {
@@ -18,14 +19,14 @@
       "type": "bullets",
       "heading": "What to remember",
       "items": ["Limits are enforced", "Stills are checked", "Captions stay clear"],
-      "narration": "This scene walks through the idea step by step so that a new reader can follow the flow, see which parts matter most, and remember the main takeaway after the video ends today. We keep the pace steady, name every part clearly, and pause briefly between scenes.",
+      "narration": "This scene walks through the idea step by step so that a new reader can follow the flow, see which parts matter most, and remember the.",
       "sources": [
         {
           "kind": "file",
           "ref": "src/greeter.ts:1-24"
         }
       ],
-      "minDurationSec": 14
+      "minDurationSec": 9
     },
     {
       "id": "s03",
@@ -37,7 +38,7 @@
         "Run the validator before every render",
         "Review the stills at full resolution"
       ],
-      "narration": "This scene walks through the idea step by step so that a new reader can follow the flow, see which parts matter most, and remember the main takeaway after the video ends today. We keep the pace steady, name every part clearly, and pause briefly between scenes.",
+      "narration": "This scene walks through the idea step by step so that a new reader can follow the flow, see which parts matter most, and remember the.",
       "sources": []
     }
   ]

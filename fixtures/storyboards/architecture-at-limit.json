@@ -3,6 +3,7 @@
   "slug": "architecture-at-limit",
   "title": "Architecture scene at its limits",
   "audience": "onboarding",
+  "mode": "quick",
   "repoRoot": "../repos/sample",
   "scenes": [
     {
@@ -11,9 +12,9 @@
       "headline": "Architecture scene at its limits",
       "subtitle": "Nine nodes, twelve edges",
       "badge": "Fixture",
-      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the auth service and the queue on its way, and how results flow back to the user.",
+      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the.",
       "sources": [],
-      "minDurationSec": 16
+      "minDurationSec": 9
     },
     {
       "id": "s02",
@@ -156,28 +157,28 @@
           "at": 0.6
         }
       ],
-      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the auth service and the queue on its way, and how results flow back to the user. The orders service then stores the record and queues a receipt email.",
+      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the auth service and the queue on.",
       "sources": [
         {
           "kind": "file",
           "ref": "src/greeter.ts:6-18"
         }
       ],
-      "minDurationSec": 16
+      "minDurationSec": 9
     },
     {
       "id": "s03",
       "type": "bullets",
       "heading": "What to remember",
       "items": ["Nine nodes fill the three by three grid", "Edges link neighbouring boxes only"],
-      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the auth service and the queue on its way, and how results flow back to the user.",
+      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the.",
       "sources": [
         {
           "kind": "file",
           "ref": "src/greeter.ts:6-18"
         }
       ],
-      "minDurationSec": 16
+      "minDurationSec": 9
     }
   ]
 }

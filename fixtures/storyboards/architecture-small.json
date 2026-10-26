@@ -3,6 +3,7 @@
   "slug": "architecture-small",
   "title": "Architecture scene small",
   "audience": "onboarding",
+  "mode": "quick",
   "repoRoot": "../repos/sample",
   "scenes": [
     {
@@ -11,9 +12,9 @@
       "headline": "Architecture scene at its limits",
       "subtitle": "Nine nodes, twelve edges",
       "badge": "Fixture",
-      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the auth service and the queue on its way, and how results flow back to the user.",
+      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the auth service and the queue on.",
       "sources": [],
-      "minDurationSec": 16
+      "minDurationSec": 9
     },
     {
       "id": "s02",
@@ -69,14 +70,14 @@
           "label": "grant"
         }
       ],
-      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the auth service and the queue on its way, and how results flow back to the user.",
+      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the auth service and the queue on.",
       "sources": [
         {
           "kind": "file",
           "ref": "src/greeter.ts:6-18"
         }
       ],
-      "minDurationSec": 16,
+      "minDurationSec": 9,
       "flow": [
         {
           "path": ["client", "gateway", "orders"]
@@ -88,14 +89,14 @@
       "type": "bullets",
       "heading": "What to remember",
       "items": ["Nine nodes fill the three by three grid", "Edges link neighbouring boxes only"],
-      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the auth service and the queue on its way, and how results flow back to the user.",
+      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the auth service and the queue on.",
       "sources": [
         {
           "kind": "file",
           "ref": "src/greeter.ts:6-18"
         }
       ],
-      "minDurationSec": 16
+      "minDurationSec": 9
     }
   ]
 }

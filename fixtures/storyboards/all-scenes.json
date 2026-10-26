@@ -12,7 +12,7 @@
       "headline": "A tour of the greeter module",
       "subtitle": "One small file, three exported functions",
       "badge": "Onboarding",
-      "narration": "This short video walks through the greeter module in the sample repository, what it exports, and how the command line entry point uses it.",
+      "narration": "This short video walks through the greeter module in the sample repository, what.",
       "sources": []
     },
     {
@@ -26,7 +26,7 @@
         "Short bullet one",
         "Short bullet two"
       ],
-      "narration": "Five short points cover the essentials here. Each one stays within the line budget, so the list reads cleanly from top to bottom without crowding the captions at the bottom.",
+      "narration": "Five short points cover the essentials here. Each one stays within the line budget, so the list.",
       "sources": [
         {
           "kind": "file",
@@ -38,7 +38,7 @@
     },
     {
       "id": "s03",
-      "narration": "This function turns records into display rows. Each label is padded, upper-cased and clipped to one hundred columns, then a summary row reports the widest label, so no row ever exceeds the limit.",
+      "narration": "This function turns records into display rows. Each label is padded, upper-cased and clipped to one hundred columns.",
       "type": "code",
       "file": "src/wide.ts",
       "language": "typescript",
@@ -70,7 +70,7 @@
     },
     {
       "id": "s04",
-      "narration": "This function turns records into display rows. Each label is padded, upper-cased and clipped to one hundred columns, then a summary row reports the widest label, so no row ever exceeds the limit.",
+      "narration": "This function turns records into display rows. Each label is padded, upper-cased and clipped to one hundred columns.",
       "type": "code",
       "file": "src/wide.ts",
       "language": "typescript",
@@ -233,7 +233,7 @@
           "at": 0.6
         }
       ],
-      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the auth service and the queue on its way, and how results flow back to the user. The orders service then stores the record and queues a receipt email.",
+      "narration": "This diagram shows how a request travels through the platform from the browser to the database, passing the gateway, the auth service and the queue on its.",
       "sources": [
         {
           "kind": "file",
@@ -299,7 +299,7 @@
           "text": "Reply 200 with profile and plan summary"
         }
       ],
-      "narration": "The sequence shows five participants exchanging eight messages in order. Each arrow appears as the narration reaches it, and the notes explain what happens at the key steps along the way.",
+      "narration": "The sequence shows five participants exchanging eight messages in order. Each arrow appears as the narration reaches.",
       "sources": [
         {
           "kind": "file",
@@ -350,7 +350,7 @@
           "when": "Aug 2026"
         }
       ],
-      "narration": "The timeline walks through seven milestones from left to right. Every item reveals in turn, with a short label, a detail line, and a date, so the order of events is easy to follow.",
+      "narration": "The timeline walks through seven milestones from left to right. Every item reveals in turn, with a short label.",
       "sources": [
         {
           "kind": "file",
@@ -369,7 +369,7 @@
         "Run the validator before every render",
         "Review the stills at full resolution"
       ],
-      "narration": "That covers every scene type in the library. Read the brief and the storyboard first, validate before each render, and review the stills at full resolution before sharing the result.",
+      "narration": "That covers every scene type in the library. Read the brief and the storyboard first, validate before.",
       "sources": [],
       "transition": "fade"
     }

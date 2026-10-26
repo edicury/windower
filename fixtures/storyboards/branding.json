@@ -3,6 +3,7 @@
   "slug": "branding",
   "title": "All scene types",
   "audience": "onboarding",
+  "mode": "quick",
   "targetSec": 100,
   "scenes": [
     {
@@ -11,9 +12,9 @@
       "headline": "A tour of the greeter module",
       "subtitle": "One small file, three exported functions",
       "badge": "Onboarding",
-      "narration": "This short video walks through the greeter module in the sample repository, what it exports, and how the command line entry point uses it.",
+      "narration": "This short video walks through the greeter module in the sample repository, what it exports, and how the command line entry.",
       "sources": [],
-      "minDurationSec": 16
+      "minDurationSec": 9
     },
     {
       "id": "s02",
@@ -26,14 +27,14 @@
         "Short bullet one",
         "Short bullet two"
       ],
-      "narration": "Five short points cover the essentials here. Each one stays within the line budget, so the list reads cleanly from top to bottom without crowding the captions at the bottom.",
+      "narration": "Five short points cover the essentials here. Each one stays within the line budget, so the list reads cleanly from top to bottom without crowding the.",
       "sources": [
         {
           "kind": "file",
           "ref": "src/greeter.ts:1-24"
         }
       ],
-      "minDurationSec": 16,
+      "minDurationSec": 9,
       "transition": "fade"
     },
     {
@@ -46,10 +47,10 @@
         "Run the validator before every render",
         "Review the stills at full resolution"
       ],
-      "narration": "That covers every scene type in the library. Read the brief and the storyboard first, validate before each render, and review the stills at full resolution before sharing the result.",
+      "narration": "That covers every scene type in the library. Read the brief and the storyboard first, validate before each render, and review the stills at full resolution.",
       "sources": [],
       "transition": "fade",
-      "minDurationSec": 16
+      "minDurationSec": 9
     }
   ]
 }
