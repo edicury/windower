@@ -25,6 +25,19 @@ describe('prepare', () => {
     expect(props.scenes[1]?.captions.length).toBeGreaterThan(10);
   });
 
+  it('applies the storyboard mode to the length check (quick rejects a normal-length run)', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 've-prep-'));
+    const sb = JSON.parse(readFileSync('fixtures/storyboards/minimal.json', 'utf8'));
+    sb.mode = 'quick';
+    writeFileSync(path.join(dir, 'storyboard.json'), JSON.stringify(sb));
+    const err = await prepare(path.join(dir, 'storyboard.json'), {
+      repoRoot: path.resolve('fixtures/repos/sample'),
+      allowUnapproved: true,
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(PrepareError);
+    expect((err as PrepareError).message).toContain('quick mode needs 3-5 scenes');
+  });
+
   it('rejects an invalid storyboard with exit code 2 semantics', async () => {
     const err = await prepare('fixtures/storyboards/stress-over-limit.json').catch((e) => e);
     expect(err).toBeInstanceOf(PrepareError);

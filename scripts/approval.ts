@@ -21,3 +21,12 @@ export function approvalProblem(storyboardFile: string): string | undefined {
 
 export const UNAPPROVED_WARNING =
   'warning: --allow-unapproved set; skipping the approval gate (fixture/dev use only).';
+
+/** Deep-mode voiced runs spend provider credits; approval needs an explicit `--confirm-credits`. */
+export function creditsConfirmationProblem(
+  requiresConfirmation: boolean,
+  confirmed: boolean | undefined,
+): string | undefined {
+  if (!requiresConfirmation || confirmed) return undefined;
+  return 'deep mode with voiced narration spends provider credits; re-run with --confirm-credits to approve after reviewing the credits warning.';
+}

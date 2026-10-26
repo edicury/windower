@@ -18,7 +18,9 @@ import {
 } from '../template/src/scenes/architectureLayout.js';
 import {EXIT} from './lib.js';
 import {isSecretFile, scanText} from './redaction.js';
-import {checkTotal, computeTiming, SCENE_SOFT_CAP_S} from './timing.js';
+import {checkTotal, computeTiming} from './timing.js';
+import {CHAPTER_HINT_S, splitChapters} from './chapters.js';
+import {profileOf} from '../template/src/modes.js';
 
 export interface Issue {
   severity: 'error' | 'warning';
@@ -245,7 +247,8 @@ export function validateStoryboard(raw: unknown, opts: ValidateOptions = {}): Va
   // R2: first scene is a title; last is a title or bullets.
   const first = scenes[0];
   const last = scenes[scenes.length - 1];
-  if (isObj(first) && first.type !== 'title')
+  const quick = raw.mode === 'quick'; // quick mode may open straight on content (no title scene)
+  if (isObj(first) && first.type !== 'title' && !quick)
     addErr(idOf(first, 0), 'type', 'R2', 'the first scene must be a title');
   if (isObj(last) && last.type !== 'title' && last.type !== 'bullets' && last.type !== 'outro')
     addErr(
@@ -260,17 +263,49 @@ export function validateStoryboard(raw: unknown, opts: ValidateOptions = {}): Va
   if (parsed.success) {
     const timing = computeTiming(parsed.data.scenes);
     estimatedSec = timing.totalFrames / timing.fps;
-    const verdict = checkTotal(timing);
+    const profile = profileOf(parsed.data.mode);
+    const n = parsed.data.scenes.length;
+    if (n < profile.scenes.min || n > profile.scenes.max)
+      addErr(
+        null,
+        'scenes',
+        'R5',
+        `${profile.id} mode needs ${profile.scenes.min}-${profile.scenes.max} scenes, found ${n}`,
+      );
+    const verdict = checkTotal(timing, parsed.data.mode);
     if (verdict.level === 'error') addErr(null, 'scenes', 'R5', verdict.message ?? '');
     else if (verdict.level === 'warn') addWarn(null, 'scenes', 'R5', verdict.message ?? '');
+    const labels = parsed.data.scenes.map((sc) => sc.chapter);
+    for (const l of splitChapters(labels))
+      addErr(
+        null,
+        'scenes',
+        'chapter',
+        `chapter "${l}" reappears after another chapter; scenes of one chapter must be contiguous`,
+      );
+    const hasChapters = labels.some(Boolean);
+    if (hasChapters && profile.id !== 'deep')
+      addWarn(
+        null,
+        'scenes',
+        'chapter',
+        `chapters are meant for deep videos; this is ${profile.id} mode (allowed, but unusual)`,
+      );
+    if (!hasChapters && profile.id === 'deep' && estimatedSec > CHAPTER_HINT_S)
+      addWarn(
+        null,
+        'scenes',
+        'chapter',
+        `deep video of ~${estimatedSec.toFixed(0)} s has no chapters; consider grouping scenes with a "chapter" label`,
+      );
     for (const ts of timing.scenes) {
       const sec = ts.durationFrames / timing.fps;
-      if (sec > SCENE_SOFT_CAP_S)
+      if (sec > profile.sceneCapS)
         addWarn(
           ts.id,
           'narration',
           'R5',
-          `scene runs ${sec.toFixed(1)} s, above the ${SCENE_SOFT_CAP_S} s per-scene cap; shorten the narration`,
+          `scene runs ${sec.toFixed(1)} s, above the ${profile.sceneCapS} s per-scene cap; shorten the narration`,
         );
     }
   }

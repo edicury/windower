@@ -92,18 +92,16 @@ function main(): void {
       process.exit(EXIT.error);
     }
     const r = initRun(second, values.root);
-    // defaultLengthSec from <root>/.windower.json, for the skill to use as the target length.
-    let defaultLengthSec: number | undefined;
+    // defaultMode from <root>/.windower.json, for the skill to pick the video mode.
+    let defaultMode: string | undefined;
     try {
-      defaultLengthSec = loadConfig(path.resolve(values.root ?? process.cwd())).defaultLengthSec;
+      defaultMode = loadConfig(path.resolve(values.root ?? process.cwd())).defaultMode;
     } catch (e) {
       console.error((e as Error).message);
       process.exit(EXIT.validation);
     }
     console.log(
-      values.json
-        ? JSON.stringify(defaultLengthSec === undefined ? r : {...r, defaultLengthSec})
-        : r.dir,
+      values.json ? JSON.stringify(defaultMode === undefined ? r : {...r, defaultMode}) : r.dir,
     );
     process.exit(EXIT.ok);
   }

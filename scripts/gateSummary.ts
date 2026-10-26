@@ -1,7 +1,10 @@
 // Pure helpers for the approval gate (FR-SB-04, FR-SEC-03): summary, disclosures, approval edit.
 import {countWords} from '../template/src/schema.js';
 import {PROVIDER_META} from './tts/providers.js';
-import {TARGET_RANGE_S, checkTotal, computeTiming} from './timing.js';
+import {creditsConfirmationProblem} from './approval.js';
+import {CHAPTER_HINT_S, groupChapters} from './chapters.js';
+import {isMode, profileOf, type Mode} from '../template/src/modes.js';
+import {WORDS_PER_SECOND, checkTotal, computeTiming} from './timing.js';
 import type {ValidationResult} from './validate-storyboard.js';
 
 export interface ProviderInfo {
@@ -41,7 +44,20 @@ export interface SceneRow {
 
 import type {ResolvedVoice} from './tts/voice.js';
 
+export interface ChapterRow {
+  label: string;
+  scenes: number;
+  durationSec: number;
+  narrationChars: number;
+  /** Share of all narration characters (0-1); the credit share when voiced. */
+  creditShare: number;
+}
+
 export interface GateSummary {
+  /** Per-chapter totals; empty when the storyboard sets no chapters. */
+  chapters: ChapterRow[];
+  /** Rough render-size note for videos over 150 s (frame count only). */
+  renderEstimate?: string;
   title: string;
   slug: string;
   approved: boolean;
@@ -49,6 +65,7 @@ export interface GateSummary {
   errors: string[];
   warnings: string[];
   scenes: SceneRow[];
+  mode: Mode;
   totalSec: number;
   target: {minSec: number; maxSec: number};
   lengthVerdict: string;
@@ -63,6 +80,9 @@ export interface GateSummary {
   voice: ResolvedVoice | null;
   egress: string;
   /** Set when a voiced run would likely exceed the 120 s ceiling. */
+  /** Deep mode + egress provider: prominent credits disclosure; approval needs --confirm-credits. */
+  creditsDisclosure?: string;
+  requiresCreditsConfirmation: boolean;
   voicedLengthWarning?: string;
   costNote: string;
   /** Always states that nothing is sent before approval. */
@@ -171,6 +191,9 @@ export function buildSummary(
   const narrationChars = narrations.reduce((n, t) => n + t.length, 0);
   const narrationWords = narrations.reduce((n, t) => n + countWords(t), 0);
 
+  const mode: Mode = isMode(sb.mode) ? sb.mode : 'normal';
+  const profile = profileOf(mode);
+  const TARGET_RANGE_S = profile.target;
   let rows: SceneRow[] = [];
   let totalSec = 0;
   let lengthVerdict = 'unknown';
@@ -190,11 +213,28 @@ export function buildSummary(
       durationSec: t.durationFrames / timing.fps,
     }));
     totalSec = timing.totalFrames / timing.fps;
-    const v = checkTotal(timing);
+    const v = checkTotal(timing, mode);
     lengthVerdict = v.level === 'ok' ? 'within target' : (v.message ?? v.level);
   } catch {
     // Malformed scenes: the validation errors already explain it.
   }
+
+  const chapters: ChapterRow[] = groupChapters(
+    scenesRaw.map((s) => (typeof s.chapter === 'string' ? s.chapter : undefined)),
+  ).map((g) => {
+    const chars = g.indexes.reduce((n, i) => n + (narrations[i]?.length ?? 0), 0);
+    return {
+      label: g.label,
+      scenes: g.indexes.length,
+      durationSec: g.indexes.reduce((n, i) => n + (rows[i]?.durationSec ?? 0), 0),
+      narrationChars: chars,
+      creditShare: narrationChars ? chars / narrationChars : 0,
+    };
+  });
+  const renderEstimate =
+    totalSec > CHAPTER_HINT_S
+      ? `Render estimate: about ${Math.round(totalSec * 30)} frames at 30 fps (${totalSec.toFixed(0)} s); long videos take proportionally longer to render. This is a rough estimate, not a timing.`
+      : undefined;
 
   const refs = scenesRaw.flatMap((s) => (Array.isArray(s.sources) ? s.sources.filter(isObj) : []));
   const uniqueSources = new Set(refs.map((r) => `${String(r.kind)}:${String(r.ref)}`)).size;
@@ -236,6 +276,15 @@ export function buildSummary(
       ? `voiced narration runs about 15% longer than the silent estimate: ${totalSec.toFixed(1)} s -> ~${(totalSec * VOICED_GROWTH).toFixed(1)} s, over the ${TARGET_RANGE_S[1]} s ceiling; consider trimming narration`
       : undefined;
 
+  const creditsDisclosure =
+    profile.voiceWarn && info?.voiced
+      ? `CREDITS WARNING (deep mode, voiced by ${providerId}): ${narrationChars} characters / ${narrationWords} words of narration will be sent for synthesis, about ${(narrationWords / WORDS_PER_SECOND).toFixed(0)} s of speech (~${totalSec.toFixed(1)} s video estimate). ${CREDIT_MODEL[providerId] ?? 'rate depends on your plan and model'} (no price hardcoded). Approval requires --confirm-credits.${
+          chapters.length
+            ? ` Credit share by chapter: ${chapters.map((c) => `${c.label} ${(c.creditShare * 100).toFixed(0)}% (${c.narrationChars} chars)`).join('; ')}.`
+            : ''
+        }`
+      : undefined;
+
   return {
     title: typeof sb.title === 'string' ? sb.title : '',
     slug: typeof sb.slug === 'string' ? sb.slug : '',
@@ -244,6 +293,9 @@ export function buildSummary(
     errors: validation.errors.map((i) => format(i)),
     warnings: validation.warnings.map((i) => format(i)),
     scenes: rows,
+    chapters,
+    ...(renderEstimate ? {renderEstimate} : {}),
+    mode,
     totalSec,
     target: {minSec: TARGET_RANGE_S[0], maxSec: TARGET_RANGE_S[1]},
     lengthVerdict,
@@ -256,6 +308,8 @@ export function buildSummary(
     voice: providerId === 'null' ? null : (opts.voice ?? null),
     egress,
     ...(voicedLengthWarning ? {voicedLengthWarning} : {}),
+    ...(creditsDisclosure ? {creditsDisclosure} : {}),
+    requiresCreditsConfirmation: Boolean(creditsDisclosure),
     costNote,
     approvalNote: 'Nothing is sent to any service until you approve.',
     disclosures,
@@ -281,9 +335,18 @@ export function renderSummary(s: GateSummary): string {
     L.push(
       `  ${r.id.padEnd(6)} ${r.type.padEnd(12)} ${r.durationSec.toFixed(1).padStart(5)} s  ${r.title}`,
     );
+  if (s.chapters.length) {
+    L.push('', 'Chapters:');
+    for (const c of s.chapters)
+      L.push(
+        `  ${c.label.padEnd(40)} ${String(c.scenes).padStart(2)} scenes ${c.durationSec.toFixed(1).padStart(6)} s ${String(c.narrationChars).padStart(6)} chars`,
+      );
+  }
   L.push(
     '',
+    `Mode: ${s.mode}`,
     `Length: ${s.totalSec.toFixed(1)} s estimated (target ${s.target.minSec}-${s.target.maxSec} s): ${s.lengthVerdict}`,
+    ...(s.renderEstimate ? [s.renderEstimate] : []),
     `Sources: ${s.sourceRefs} citations across scenes (${s.uniqueSources} unique)`,
     `Narration: ${s.narrationWords} words, ${s.narrationChars} characters`,
     `Voice: ${s.provider} (chosen by ${s.providerSource}); ${s.costNote}`,
@@ -293,6 +356,7 @@ export function renderSummary(s: GateSummary): string {
         ]
       : []),
     `Egress: ${s.egress}`,
+    ...(s.creditsDisclosure ? ['', s.creditsDisclosure, ''] : []),
     ...(s.voicedLengthWarning ? [`Length warning: ${s.voicedLengthWarning}`] : []),
     s.approvalNote,
     '',
@@ -337,4 +401,8 @@ export function applyApproval(text: string, nowIso: string): string {
   return (
     JSON.stringify(out, null, compact ? undefined : indent) + (text.endsWith('\n') ? '\n' : '')
   );
+}
+
+export function creditsProblem(s: GateSummary, confirmed: boolean | undefined): string | undefined {
+  return creditsConfirmationProblem(s.requiresCreditsConfirmation, confirmed);
 }

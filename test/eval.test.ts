@@ -79,6 +79,14 @@ describe('eval', () => {
     expect(failed(evalRun(dir, {repo: sample}))).toContain('duration');
   });
 
+  it('checks the duration against the storyboard mode, not a fixed 60-120 s', () => {
+    const dir = makeRun((sb) => {
+      sb.mode = 'quick';
+      return {sb};
+    });
+    expect(failed(evalRun(dir, {repo: sample}))).toContain('duration');
+  });
+
   it('picks claims deterministically by slug, skipping title and outro', () => {
     const scenes = Array.from({length: 9}, (_, i) => ({
       id: `s0${i}`,

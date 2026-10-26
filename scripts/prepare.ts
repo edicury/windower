@@ -148,7 +148,7 @@ export async function prepare(
     }
   }
   const timing = computeTiming(sb.scenes, synthTiming ? {synth: synthTiming} : {});
-  const verdict = checkTotal(timing);
+  const verdict = checkTotal(timing, sb.mode);
   if (verdict.level === 'error')
     throw new PrepareError(verdict.message ?? 'bad length', EXIT.validation);
   if (verdict.level === 'warn') log(`warning: ${verdict.message}`);

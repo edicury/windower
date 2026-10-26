@@ -71,12 +71,30 @@ describe('reading-speed timing', () => {
     totalFrames: sec * 30,
   });
 
-  it('errors outside 45-130 s and warns outside 60-120 s', () => {
-    expect(checkTotal(timingOf(44)).level).toBe('error');
-    expect(checkTotal(timingOf(131)).level).toBe('error');
-    expect(checkTotal(timingOf(50)).level).toBe('warn');
-    expect(checkTotal(timingOf(125)).level).toBe('warn');
-    expect(checkTotal(timingOf(90)).level).toBe('ok');
-    expect(checkTotal(timingOf(131)).message).toContain('s01');
+  it('normal (default): errors outside 55-110 s, warns outside 70-90 s', () => {
+    for (const mode of [undefined, 'normal' as const]) {
+      expect(checkTotal(timingOf(54), mode).level).toBe('error');
+      expect(checkTotal(timingOf(111), mode).level).toBe('error');
+      expect(checkTotal(timingOf(60), mode).level).toBe('warn');
+      expect(checkTotal(timingOf(100), mode).level).toBe('warn');
+      expect(checkTotal(timingOf(80), mode).level).toBe('ok');
+    }
+    expect(checkTotal(timingOf(111)).message).toContain('s01');
+  });
+
+  it('quick: errors outside 20-45 s, warns outside 25-35 s', () => {
+    expect(checkTotal(timingOf(19), 'quick').level).toBe('error');
+    expect(checkTotal(timingOf(46), 'quick').level).toBe('error');
+    expect(checkTotal(timingOf(22), 'quick').level).toBe('warn');
+    expect(checkTotal(timingOf(40), 'quick').level).toBe('warn');
+    expect(checkTotal(timingOf(30), 'quick').level).toBe('ok');
+  });
+
+  it('deep: errors outside 90-600 s, warns outside 120-360 s', () => {
+    expect(checkTotal(timingOf(89), 'deep').level).toBe('error');
+    expect(checkTotal(timingOf(601), 'deep').level).toBe('error');
+    expect(checkTotal(timingOf(100), 'deep').level).toBe('warn');
+    expect(checkTotal(timingOf(400), 'deep').level).toBe('warn');
+    expect(checkTotal(timingOf(240), 'deep').level).toBe('ok');
   });
 });

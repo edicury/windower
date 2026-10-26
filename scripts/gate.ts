@@ -8,17 +8,24 @@ import {EXIT} from './lib.js';
 import {resolveVoice, voiceFlagProblem} from './tts/voice.js';
 import {loadConfig} from './tts/config.js';
 import {selectProvider} from './tts/providers.js';
-import {PROVIDERS, applyApproval, buildSummary, renderSummary} from './gateSummary.js';
+import {
+  PROVIDERS,
+  applyApproval,
+  buildSummary,
+  creditsProblem,
+  renderSummary,
+} from './gateSummary.js';
 import {validateFile} from './validate-storyboard.js';
 
 export const GATE_USAGE =
-  'Usage: gate <run-dir> [--json] [--approve] [--provider <id>] [--no-voice] [--voice <id>] [--model <id>] [--repo <root>]';
+  'Usage: gate <run-dir> [--json] [--approve] [--provider <id>] [--no-voice] [--confirm-credits] [--voice <id>] [--model <id>] [--repo <root>]';
 
 function main(): void {
   const {values, positionals} = parseArgs({
     options: {
       json: {type: 'boolean'},
       approve: {type: 'boolean'},
+      'confirm-credits': {type: 'boolean'},
       provider: {type: 'string'},
       voice: {type: 'string'},
       model: {type: 'string'},
@@ -103,6 +110,12 @@ function main(): void {
     if (!summary.valid) {
       console.error(renderSummary(summary));
       console.error('\nNot approved: fix the validation errors above first.');
+      process.exit(EXIT.validation);
+    }
+    const credits = creditsProblem(summary, values['confirm-credits']);
+    if (credits) {
+      console.error(renderSummary(summary));
+      console.error(`\nNot approved: ${credits}`);
       process.exit(EXIT.validation);
     }
     writeFileSync(file, applyApproval(readFileSync(file, 'utf8'), new Date().toISOString()));

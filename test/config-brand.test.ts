@@ -14,7 +14,7 @@ const repo = (cfg: unknown, files: Record<string, string | Buffer> = {}) => {
 };
 const brand = {primary: '#0A84FF', background: '#0B0D12'};
 
-describe('.windower.json brand + defaultLengthSec', () => {
+describe('.windower.json brand + defaultMode', () => {
   it('accepts a full brand and normalizes colors', () => {
     const d = repo(
       {
@@ -37,11 +37,21 @@ describe('.windower.json brand + defaultLengthSec', () => {
     [{brand: {...brand, logo: 'missing.svg'}}, /brand\.logo" file not found/],
     [{brand: {...brand, logo: 'l.gif'}}, /brand\.logo" must be an \.svg or \.png/],
     [{brand: 'red'}, /"brand" must be an object/],
+    [{defaultMode: 'turbo'}, /defaultMode/],
+    [{defaultMode: 5}, /defaultMode/],
     [{defaultLengthSec: 30}, /defaultLengthSec/],
     [{defaultLengthSec: 300}, /defaultLengthSec/],
     [{defaultLengthSec: '90'}, /defaultLengthSec/],
   ])('rejects %j with the field path', (cfg, re) => {
     expect(() => loadConfig(repo(cfg))).toThrow(re);
+  });
+  it('accepts every defaultMode and keeps deprecated defaultLengthSec with a warning', () => {
+    for (const m of ['quick', 'normal', 'deep'])
+      expect(loadConfig(repo({defaultMode: m})).defaultMode).toBe(m);
+    expect(loadConfig(repo({})).defaultMode).toBeUndefined();
+    const r = loadConfigWithWarnings(repo({defaultLengthSec: 90}));
+    expect(r.config.defaultLengthSec).toBe(90);
+    expect(r.warnings.join()).toContain('deprecated');
   });
   it('defaults logoPosition to unset and accepts every corner', () => {
     expect(loadConfig(repo({brand})).brand?.logoPosition).toBeUndefined();

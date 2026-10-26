@@ -9,7 +9,8 @@ import {parseArgs} from 'node:util';
 import {lintBrief} from './brief.js';
 import {EXIT} from './lib.js';
 import {redactText, scanText} from './redaction.js';
-import {checkTotal, computeTiming, TARGET_RANGE_S, type Timing} from './timing.js';
+import {isMode, profileOf} from '../template/src/modes.js';
+import {checkTotal, computeTiming, type Timing} from './timing.js';
 import {formatIssue, validateStoryboard} from './validate-storyboard.js';
 
 export const EVAL_USAGE = 'Usage: eval <run-dir> [--repo <root>] [--json] [--factcheck <file>]';
@@ -282,12 +283,14 @@ export function evalRun(runDirIn: string, opts: EvalOptions = {}): EvalReport {
       dur.push(`cannot compute timing: ${(e as Error).message}`);
     }
   }
+  const mode = isMode(sb.mode) ? sb.mode : undefined;
+  const TARGET_RANGE_S = profileOf(mode).target;
   if (timing) {
     totalSec = timing.totalFrames / timing.fps;
     if (totalSec < TARGET_RANGE_S[0] || totalSec > TARGET_RANGE_S[1])
       dur.push(
         `total ${totalSec.toFixed(1)} s is outside ${TARGET_RANGE_S[0]}-${TARGET_RANGE_S[1]} s` +
-          (checkTotal(timing).message ? ` (${checkTotal(timing).message})` : ''),
+          (checkTotal(timing, mode).message ? ` (${checkTotal(timing, mode).message})` : ''),
       );
   }
   add('duration', `total duration within ${TARGET_RANGE_S[0]}-${TARGET_RANGE_S[1]} s`, dur);

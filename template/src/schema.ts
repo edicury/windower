@@ -2,6 +2,7 @@
 // (scripts/validate-storyboard.ts) adds cross-scene, referential and duration rules on top.
 import {z} from 'zod';
 import {codeTextProblems} from './codeLines';
+import {MODE_IDS} from './modes';
 
 export const PLUGIN_VERSION = '0.1.0';
 
@@ -20,7 +21,7 @@ export const LIMITS = {
   archSub: 30,
   archEdgeLabel: 24,
   narrationWords: {min: 8, max: 60},
-  scenes: {min: 3, max: 14},
+  scenes: {min: 3, max: 40},
   seqParticipants: {min: 2, max: 5},
   seqParticipantChars: 18,
   seqMessages: {min: 2, max: 8},
@@ -64,6 +65,8 @@ const Narration = z
 const base = {
   id: z.string().regex(/^s[0-9]{2}$/, {error: 'id must look like s01, s02, ...'}),
   narration: Narration,
+  /** Optional chapter label; consecutive scenes sharing a label form a chapter (must be contiguous). */
+  chapter: z.string().trim().min(1).max(40, {error: 'chapter label > 40 chars'}).optional(),
   sources: z.array(Source),
   minDurationSec: z.number().min(2).max(20).optional(),
   transition: z.enum(['fade', 'slide', 'none']).default('fade'),
@@ -226,6 +229,8 @@ export const Storyboard = z.strictObject({
   slug: z.string().regex(/^[a-z0-9-]{1,48}$/, {error: 'slug must match ^[a-z0-9-]{1,48}$'}),
   title: z.string().min(1).max(80, {error: 'title > 80 chars'}),
   audience: z.enum(['onboarding', 'pr-review', 'stakeholder', 'docs']),
+  /** Video mode (length profile); absent means `normal`. */
+  mode: z.enum(MODE_IDS).optional(),
   fps: z.literal(30).default(30),
   size: z
     .strictObject({width: z.literal(1920), height: z.literal(1080)})

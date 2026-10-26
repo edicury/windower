@@ -1,6 +1,7 @@
 // Optional <repo>/.windower.json. Secrets never come from this file (contract §2).
 import fs from 'node:fs';
 import path from 'node:path';
+import {MODE_IDS, isMode, type Mode} from '../../template/src/modes.js';
 import {HEX, LOGO_POSITIONS, SAFE_FONT, type LogoPosition} from '../../template/src/brand.js';
 
 export interface WindowerConfig {
@@ -20,13 +21,23 @@ export interface WindowerConfig {
     logoFile?: string;
     logoPosition?: LogoPosition;
   };
-  /** Default video length in seconds (60-120), surfaced to the skill. */
+  /** Default video mode, surfaced to the skill. */
+  defaultMode?: Mode;
+  /** @deprecated No longer used for length ranges; use defaultMode. Still accepted. */
   defaultLengthSec?: number;
 }
 
 export const LENGTH_RANGE = {min: 60, max: 120} as const;
 export const MAX_LOGO_BYTES = 256 * 1024;
-const KNOWN = ['provider', 'providers', 'voice', 'model', 'brand', 'defaultLengthSec'];
+const KNOWN = [
+  'provider',
+  'providers',
+  'voice',
+  'model',
+  'brand',
+  'defaultMode',
+  'defaultLengthSec',
+];
 const KNOWN_BRAND = ['primary', 'background', 'accent', 'text', 'font', 'logo', 'logoPosition'];
 const bad = (field: string, why: string): never => {
   throw new Error(`.windower.json "${field}" ${why}`);
@@ -149,7 +160,14 @@ export function loadConfigWithWarnings(repoRoot: string): {
     cfg.providers = o.providers as string[];
   }
   if (o.brand !== undefined) cfg.brand = parseBrand(o.brand, repoRoot, warnings);
+  if (o.defaultMode !== undefined) {
+    if (!isMode(o.defaultMode)) return bad('defaultMode', `must be one of ${MODE_IDS.join(', ')}`);
+    cfg.defaultMode = o.defaultMode;
+  }
   if (o.defaultLengthSec !== undefined) {
+    warnings.push(
+      '.windower.json: "defaultLengthSec" is deprecated and ignored for length ranges; use "defaultMode"',
+    );
     const n = o.defaultLengthSec;
     if (
       typeof n !== 'number' ||

@@ -4,6 +4,7 @@ import path from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
 import {FPS, TRANSITION_FRAMES} from '../template/src/theme.js';
+import {isMode, profileOf, type Mode} from '../template/src/modes.js';
 import type {Caption} from '../template/src/types.js';
 import {EXIT} from './lib.js';
 import {readSynthFile, synthProblem, synthTimingOf, type SynthFile} from './tts/synthfile.js';
@@ -12,10 +13,10 @@ export const WORDS_PER_SECOND = 2.9;
 export const PAD_S = 0.9;
 export const MIN_SCENE_S = 4;
 export const LEAD_MS = 200;
-/** Total length bounds: outside 45-130 s is an error, outside 60-120 s a warning. */
-export const HARD_RANGE_S = [45, 130] as const;
-export const TARGET_RANGE_S = [60, 120] as const;
-export const SCENE_SOFT_CAP_S = 20;
+/** Default-mode (normal) bounds, kept for callers that have no mode. Per-mode bounds live in template/src/modes.ts. */
+export const HARD_RANGE_S = profileOf('normal').hard;
+export const TARGET_RANGE_S = profileOf('normal').target;
+export const SCENE_SOFT_CAP_S = profileOf('normal').sceneCapS;
 
 export interface TimingScene {
   id: string;
@@ -137,8 +138,10 @@ export interface RangeVerdict {
   message?: string;
 }
 
-/** Checks the total against 45-130 s (error) and 60-120 s (warning); names the scenes to trim. */
-export function checkTotal(timing: Timing): RangeVerdict {
+/** Checks the total against the mode's hard range (error) and target range (warning); names the scenes to trim. */
+export function checkTotal(timing: Timing, mode?: Mode): RangeVerdict {
+  const HARD_RANGE_S = profileOf(mode).hard;
+  const TARGET_RANGE_S = profileOf(mode).target;
   const sec = timing.totalFrames / timing.fps;
   const longest = [...timing.scenes]
     .sort((a, b) => b.durationFrames - a.durationFrames)
@@ -181,7 +184,7 @@ function main(): void {
     console.error(`storyboard not found: ${file}`);
     process.exit(EXIT.validation);
   }
-  let sb: {scenes?: TimedInput[]};
+  let sb: {scenes?: TimedInput[]; mode?: Mode};
   try {
     sb = JSON.parse(readFileSync(file, 'utf8'));
   } catch (e) {
@@ -210,7 +213,7 @@ function main(): void {
     }
   }
   const timing = computeTiming(sb.scenes, synth ? {synth: synthTimingOf(synth)} : {});
-  const verdict = checkTotal(timing);
+  const verdict = checkTotal(timing, isMode(sb.mode) ? sb.mode : undefined);
   if (verdict.level === 'error') {
     console.error(verdict.message);
     process.exit(EXIT.validation);

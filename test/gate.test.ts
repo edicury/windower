@@ -7,6 +7,7 @@ import {approvalProblem} from '../scripts/approval.js';
 import {
   applyApproval,
   buildSummary,
+  creditsProblem,
   mcpServersFromBrief,
   renderSummary,
 } from '../scripts/gateSummary.js';
@@ -40,7 +41,7 @@ describe('buildSummary', () => {
     expect(s.narrationChars).toBeGreaterThan(100);
     expect(s.costNote).toBe('silent, 0 characters billed (provider: null)');
     expect(s.disclosures[0]?.service).toContain('none');
-    expect(renderSummary(s)).toContain('target 60-120 s');
+    expect(renderSummary(s)).toContain('target 70-90 s');
   });
 
   it('voiced provider discloses narration text only, with characters and no price', () => {
@@ -62,20 +63,29 @@ describe('buildSummary', () => {
     expect(p.egress).toContain('nothing leaves');
   });
 
-  it('warns when voiced estimate x1.15 exceeds 120 s, never for silent', () => {
+  it('reports the mode and its target in the summary', () => {
+    expect(buildSummary(raw, validation).mode).toBe('normal');
+    const quick = {...(raw as object), mode: 'quick'};
+    const s = buildSummary(quick, validation);
+    expect(s.mode).toBe('quick');
+    expect(s.target).toEqual({minSec: 25, maxSec: 35});
+    expect(renderSummary(s)).toContain('Mode: quick');
+  });
+
+  it('warns when voiced estimate x1.15 exceeds the mode target ceiling (90 s), never for silent', () => {
     const base = raw as {scenes: {narration?: string}[]};
     const mk = (n: number) => ({
       ...base,
       scenes: base.scenes.map((x) => ({...x, narration: Array(n).fill('word').join(' ')})),
     });
-    const long = mk(40);
+    const long = mk(31);
     const short = mk(10);
     expect(
       buildSummary(short, validation, {provider: 'elevenlabs'}).voicedLengthWarning,
     ).toBeUndefined();
     const s = buildSummary(long, validation, {provider: 'elevenlabs'});
-    expect(s.totalSec).toBeGreaterThan(104.5);
-    expect(s.totalSec).toBeLessThanOrEqual(120);
+    expect(s.totalSec).toBeGreaterThan(90 / 1.15);
+    expect(s.totalSec).toBeLessThanOrEqual(90);
     expect(s.voicedLengthWarning).toContain('15% longer');
     expect(buildSummary(long, validation).voicedLengthWarning).toBeUndefined();
   });
@@ -210,5 +220,76 @@ describe('unapproved storyboards are refused (P3)', () => {
     const r = tsx(['scripts/render.ts', dir]);
     expect(r.status).toBe(2);
     expect(r.stderr).toContain('ve:gate');
+  });
+});
+
+describe('deep mode credits confirmation', () => {
+  const deepSb = (sb: Record<string, unknown>) => {
+    const scenes = sb.scenes as Record<string, unknown>[];
+    const mid = scenes[1] as {id: string};
+    const extra = Array.from({length: 4}, (_, i) => ({...mid, id: `x${i}`}));
+    const all = [...scenes.slice(0, -1), ...extra, scenes[scenes.length - 1]] as {id: string}[];
+    all.forEach((x, i) => (x.id = `s${String(i + 1).padStart(2, '0')}`));
+    sb.scenes = all;
+    sb.mode = 'deep';
+  };
+  const raw = (() => {
+    const sb = JSON.parse(fixture('minimal')) as Record<string, unknown>;
+    deepSb(sb);
+    return sb;
+  })();
+  const validation = validateStoryboard(raw, {repoRoot: REPO});
+
+  it('the deep fixture itself is valid', () => {
+    expect(validation.errors).toEqual([]);
+  });
+
+  it('voiced deep summary carries a prominent credits disclosure and requires confirmation', () => {
+    const s = buildSummary(raw, validation, {provider: 'elevenlabs'});
+    expect(s.mode).toBe('deep');
+    expect(s.requiresCreditsConfirmation).toBe(true);
+    expect(s.creditsDisclosure).toContain('CREDITS WARNING');
+    expect(s.creditsDisclosure).toContain(`${s.narrationChars} characters`);
+    expect(s.creditsDisclosure).toContain(`${s.narrationWords} words`);
+    expect(s.creditsDisclosure).toContain('ElevenLabs bills credits per character');
+    expect(renderSummary(s)).toContain('--confirm-credits');
+    expect(creditsProblem(s, undefined)).toContain('--confirm-credits');
+    expect(creditsProblem(s, true)).toBeUndefined();
+  });
+
+  it('silent, local and non-deep voiced runs need no confirmation', () => {
+    expect(buildSummary(raw, validation).requiresCreditsConfirmation).toBe(false);
+    expect(buildSummary(raw, validation, {provider: 'piper'}).requiresCreditsConfirmation).toBe(
+      false,
+    );
+    const normal = JSON.parse(fixture('minimal')) as unknown;
+    const s = buildSummary(normal, validateStoryboard(normal, {repoRoot: REPO}), {
+      provider: 'elevenlabs',
+    });
+    expect(s.requiresCreditsConfirmation).toBe(false);
+    expect(s.creditsDisclosure).toBeUndefined();
+  });
+
+  it('CLI: voiced deep --approve fails without --confirm-credits, passes with it; silent needs none', () => {
+    const dir = runDir('minimal', deepSb);
+    const no = tsx(['scripts/gate.ts', dir, '--approve', '--provider', 'elevenlabs']);
+    expect(no.status).toBe(2);
+    expect(no.stderr).toContain('--confirm-credits');
+    expect(JSON.parse(readFileSync(path.join(dir, 'storyboard.json'), 'utf8')).approved).not.toBe(
+      true,
+    );
+    const yes = tsx([
+      'scripts/gate.ts',
+      dir,
+      '--approve',
+      '--provider',
+      'elevenlabs',
+      '--confirm-credits',
+    ]);
+    expect(yes.status, yes.stderr).toBe(0);
+    expect(JSON.parse(readFileSync(path.join(dir, 'storyboard.json'), 'utf8')).approved).toBe(true);
+    const silent = runDir('minimal', deepSb);
+    const s = tsx(['scripts/gate.ts', silent, '--approve', '--no-voice']);
+    expect(s.status, s.stderr).toBe(0);
   });
 });
