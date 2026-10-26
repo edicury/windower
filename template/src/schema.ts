@@ -4,7 +4,7 @@ import {z} from 'zod';
 import {codeTextProblems} from './codeLines';
 import {MODE_IDS} from './modes';
 
-export const PLUGIN_VERSION = '0.1.0';
+export const PLUGIN_VERSION = '0.2.0';
 
 export const LIMITS = {
   titleHeadline: 90,

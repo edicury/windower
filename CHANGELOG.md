@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses [Semantic Versioning](https://semver.org/).
 
-## [0.1.0] - Unreleased
+## [0.2.0] - 2026-10-26
 
 ### Added
 
@@ -17,6 +17,10 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Changed
 
 - The 60-120 s length range is replaced by per-mode limits.
+
+## [0.1.0] - Unreleased
+
+### Changed
 
 - Docs: runs write `.windower/<slug>/` under the current working directory; recommend a scratch directory with the explained repo passed as absolute read-only `repoRoot`. README Quickstart covers the `$WINDOWER` install step, framekit from npm and the first-run Headless Shell download.
 - Sequence validation: the self-message error now says it is unsupported and suggests a separate participant or a note step; documented in the scene catalog and authoring reference.

@@ -5,7 +5,7 @@
     {
       "name": "windower",
       "source": "./",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "description": "Turn a slice of a software system into a short captioned explainer video (framekit, optional ElevenLabs narration)."
     }
   ]
