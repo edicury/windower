@@ -7,23 +7,33 @@ Write `$RUN/storyboard.json` from the redacted brief. The shipped Zod schema is 
 1. **One idea per scene.** If a scene needs "and" to describe it, split it. A viewer should be able to state each scene's point in a sentence.
 2. **Every scene is cited.** `sources` has at least one entry on every scene except the first `title` and an `outro`. Cite the narrowest range that supports the scene; the same range must appear in brief.md verbatim. A scene with no fact in the brief should not exist.
 3. **Show, then say.** Pick the scene type that shows the idea (code for exact logic, sequence for order, architecture for structure, bullets for takeaways). Narration explains; it does not recite the screen.
-4. **Arc.** Title (what and why you care), 4-9 content scenes in the order a newcomer needs them (overview, core flow, one or two code close-ups, edge cases or gotchas), then a recap `bullets` or `outro`.
+4. **Arc.** Title (what and why you care), content scenes (count set by the mode) in the order a newcomer needs them (overview, core flow, one or two code close-ups, edge cases or gotchas), then a recap `bullets` or `outro`.
 5. **Verbatim code.** Code scene text is copied from the file, not retyped from memory: re-read the lines just before writing. Do not "tidy" it.
 6. **Name.** Write the product name lowercase, `windower`, in `title`, headlines, narration and captions (`ve:validate` warns on `Windower`).
 7. **Do not invent.** Every claim traces to a brief fact. If you are unsure, leave it out or say so in "Open questions".
 
 ## Length budget
 
-- Silent duration per scene: `max(words / 2.9 + 0.9 s, minDurationSec or 4 s)`, a scene above 20 s only draws a warning. Total = sum of scenes minus 0.4 s per fade/slide transition (none = hard cut, no overlap), and must be 45-130 s (error outside) and should be 60-120 s (warning outside); default target 90 s.
-- Plan: scenes x 25-45 words. Examples: 7 scenes at 35 words is about 90 s; 5 scenes at 40 words is about 70 s.
-- Calibration from a real run: 8 scenes at 31-42 words each came to 112.6 s, because every scene costs 12-16 s. For a 90 s target plan 6-7 scenes, and keep narration of title/outro scenes near 25 words.
+- Silent duration per scene: `max(words / 2.9 + 0.9 s, minDurationSec or 4 s)`, a scene above 20 s only draws a warning. Total = sum of scenes minus 0.4 s per fade/slide transition (none = hard cut, no overlap), and must be inside the mode's hard limits (error outside) and should be inside its target range (warning outside); see the table below.
+- Mode budgets (authoritative values in `template/src/modes.ts`). Words per second is 2.9, so budget words = target seconds x 2.9, less a little for per-scene padding:
+
+| Mode     | Target    | Hard limits | Scenes | Narration words | Per-scene soft cap |
+| -------- | --------- | ----------- | ------ | --------------- | ------------------ |
+| `quick`  | 25-35 s   | 20-45 s     | 3-5    | 60-90           | 10 s               |
+| `normal` | 70-90 s   | 55-110 s    | 6-10   | 180-240         | 20 s               |
+| `deep`   | 120-360 s | 90-600 s    | 10-40  | 330-1000        | 25 s               |
+
+- Set `mode` explicitly, then compute the word budget before writing a scene. Research is the same in every mode; for `quick`, choose the few highest-signal facts from the full brief and drop the rest rather than cramming.
+- Plan (normal): scenes x 25-45 words. Examples: 7 scenes at 35 words is about 90 s; 5 scenes at 40 words is about 70 s.
+- Calibration from a real run: 8 scenes at 31-42 words each came to 112.6 s, because every scene costs 12-16 s. For a normal-mode 80 s target plan 6-7 scenes, and keep narration of title/outro scenes near 25 words.
 - A scene `sources` ref must appear verbatim in brief.md, but need not be one brief fact's whole range: a code scene covering lines 71-85 may cite the three sub-ranges 71-75, 75-78 and 79-85 listed in the brief. Cite sub-ranges the brief already lists rather than adding a new one at the last minute.
 - Too long: cut a scene or shorten narration. Too short: add a scene with a new cited idea, not filler. Use `minDurationSec` only to give a dense visual (large code or diagram) time to be read, up to 20.
-- Scene count: 3-14; keep to about 5-10.
+- Scene count: set by the mode (quick 3-5, normal 6-10, deep 10-40).
+- Chapters (optional, for deep videos over about 150 s): give scenes a `chapter` label (<= 40 chars). Consecutive scenes with the same label form one chapter; a label must not reappear after another chapter (error). Using chapters outside deep mode only warns. The gate lists per-chapter seconds, narration characters and credit share. Audio is cached per scene, so editing one scene re-synthesizes only it and its two neighbors (their narration is context); keep edits inside one chapter to avoid spending credits elsewhere.
 
 ## Top-level fields
 
-`version: 1`, `slug` (use the run dir's basename, which `ve:status init` prints; the validator does not enforce it, but keep them equal, `^[a-z0-9-]{1,48}$`), `title` (<= 80), `audience` (`onboarding|pr-review|stakeholder|docs`), `repoRoot` (the repo being explained, relative to the run dir; for `.windower/<slug>/` in the repo root that is `"../.."`. When the repo you are explaining is somewhere else, for example a clone you were pointed at, use its absolute path; the validator accepts it), optional `targetSec`, `approved: false` (the gate sets it true; never set it yourself). Omit `fps` and `size`; defaults apply.
+`version: 1`, `slug` (use the run dir's basename, which `ve:status init` prints; the validator does not enforce it, but keep them equal, `^[a-z0-9-]{1,48}$`), `title` (<= 80), `audience` (`onboarding|pr-review|stakeholder|docs`), `repoRoot` (the repo being explained, relative to the run dir; for `.windower/<slug>/` in the repo root that is `"../.."`. When the repo you are explaining is somewhere else, for example a clone you were pointed at, use its absolute path; the validator accepts it), optional `mode` (`quick|normal|deep`; absent means normal), optional `targetSec`, `approved: false` (the gate sets it true; never set it yourself). Omit `fps` and `size`; defaults apply.
 
 ## Limits at a glance
 

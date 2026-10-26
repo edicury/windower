@@ -20,7 +20,7 @@ Narration is spoken text. It is also the caption source and the only text that c
 
 ## Timing
 
-Silent timing is `max(words / 2.9 + 0.9 s, 4 s)` per scene (a scene above 20 s only draws a validator warning; nothing caps it), so 8 words is about 4 s and 45 words about 16 s. The video length is the sum minus 12 frames (0.4 s) for every fade or slide into a scene, so it runs a few seconds shorter than the plain sum (7 scenes: about 2.4 s); keep it within 60-120 s.
+Silent timing is `max(words / 2.9 + 0.9 s, 4 s)` per scene (a scene above 20 s only draws a validator warning; nothing caps it), so 8 words is about 4 s and 45 words about 16 s. The video length is the sum minus 12 frames (0.4 s) for every fade or slide into a scene, so it runs a few seconds shorter than the plain sum (7 scenes: about 2.4 s); keep it within the mode's target range (quick ~30 s, normal 70-90 s, deep 120-360 s). Word budget is target seconds x 2.9: quick 60-90 words, normal 180-240, deep 330-1000. In `quick` aim for the short end of the 8-60 per-scene range (about 15-25 words); a deep run's voiced narration consumes many API credits, so keep every sentence earning its place.
 
 ## Before and after
 

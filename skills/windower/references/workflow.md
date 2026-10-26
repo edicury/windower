@@ -31,7 +31,7 @@ Exit 3 means a hard failure (Node < 18, no ffmpeg/ffprobe, missing `node_modules
 | ticket or doc URL/id (MCP)         | `stakeholder`    | the item, then the code it links to                                |
 | "document X"                       | `docs`           | public surface of X                                                |
 
-Length: default 90 s, range 60-120. Roughly 7-9 scenes of 30-45 spoken words land near 90 s. If a user's slice is a whole subsystem, propose two or three videos and start with the first; record the split in the brief under "Open questions".
+Mode: `quick` (~30 s, 3-5 scenes, 60-90 words), `normal` (70-90 s, 6-10 scenes, 180-240 words, the default) or `deep` (120-360 s target, hard max 600, 10-40 scenes, 330-1000 words). Pick it from `--mode` or plain words ("quick", "deep dive"); when the request names no mode and no `defaultMode` is configured, ask the one-line three-mode question from SKILL.md Scope (default `normal` if unanswered); otherwise ask nothing. The mode shapes only the output: the exploration and the cited brief are the same in every mode, and `quick` compresses at storyboard time by choosing the highest-signal facts. Set `mode` in the storyboard and write to its word budget (about 2.9 words per second). If a user's slice is too big for the mode, propose splitting it into several videos or a deeper mode and start with the first; record the split in the brief under "Open questions".
 
 ## 2. Init and resume
 
@@ -138,11 +138,13 @@ pnpm --silent --dir "$WINDOWER" ve:gate "$RUN" --provider elevenlabs --voice <id
 
 Offer 3-5 by name with descriptions, then pass the chosen id as `--voice` to both `ve:gate` and `ve:synth`, or suggest persisting it as `voice` in `.windower.json` (an id, never a key). Changing voice or model changes the cache key and bills again.
 
-Show the user the scene list, the estimated length against the 60-120 s target (voiced narration runs about 15% longer; the gate warns when that passes 120 s), citation count, narration word count, characters billed with the provider's credit model (no price is hardcoded; piper and silent cost nothing), the per-provider egress statement (only narration text goes to a TTS provider; piper sends nothing), and the data disclosure (MCP servers whose content entered the brief are named, plus URL hosts and skipped servers; relay this external-sources list). The gate states that nothing is sent until approval. Then stop and wait. After an explicit approval:
+Show the user the scene list, the mode and estimated length against that mode's target (voiced narration runs about 15% longer; the gate warns when that passes the mode's range), citation count, narration word count, characters billed with the provider's credit model (no price is hardcoded; piper and silent cost nothing), the per-provider egress statement (only narration text goes to a TTS provider; piper sends nothing), and the data disclosure (MCP servers whose content entered the brief are named, plus URL hosts and skipped servers; relay this external-sources list). The gate states that nothing is sent until approval. In `deep` mode with a voiced provider the gate also carries a credit warning: relay it prominently (voiced narration of this length consumes many API credits) and get explicit confirmation in words. Then stop and wait. After an explicit approval:
 
 ```sh
 pnpm --silent --dir "$WINDOWER" ve:gate "$RUN" --approve
 ```
+
+For `deep` mode with elevenlabs or openai, add `--confirm-credits` (only after the user confirmed credit use); without it the approval is refused.
 
 `--approve` writes `"approved": true` and `approvedAt` into storyboard.json, and refuses (exit 2) when validation fails.
 

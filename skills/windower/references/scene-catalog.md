@@ -13,7 +13,7 @@ Payload fields are flat on the scene object (the shipped Zod schema in `template
 | `minDurationSec` | optional, 2-20; floor for the scene length                                                                                                                                                                                                         |
 | `transition`     | optional `fade` (default), `slide`, `none`                                                                                                                                                                                                         |
 
-Storyboard: 3-14 scenes, first is `title`, last is `title`, `bullets` (recap) or `outro`, estimated total 45-130 s (target 60-120).
+Storyboard: scene count and length follow the `mode` field (quick 3-5 scenes, ~30 s; normal 6-10, 70-90 s, the default when `mode` is absent; deep 10-40, 120-360 s, hard max 600 s). First scene is `title`, last is `title`, `bullets` (recap) or `outro`.
 
 ## title
 

@@ -4,7 +4,19 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [0.1.0] - Unreleased
 
+### Added
+
+- Video modes: `quick` (~30 s, 3-5 scenes), `normal` (70-90 s, 6-10 scenes, the default) and `deep` (120-360 s target, hard max 600 s, 10-40 scenes). Optional storyboard `mode` field (absent = normal), `--mode` / plain-word selection in the request, config `defaultMode`. Modes control output only; research and the cited brief are identical in every mode. Deep mode with a voiced provider warns about API credit use and needs explicit confirmation at the approval gate (`--confirm-credits`).
+
+- Optional scene `chapter` label for long (deep) videos: contiguity validated, hint for deep videos over 150 s, per-chapter totals and credit share at the approval gate, frame-count render note over 150 s. Per-scene synth caching is documented and tested across chapters.
+
+### Deprecated
+
+- `defaultLengthSec` in `.windower.json`; use `defaultMode`.
+
 ### Changed
+
+- The 60-120 s length range is replaced by per-mode limits.
 
 - Docs: runs write `.windower/<slug>/` under the current working directory; recommend a scratch directory with the explained repo passed as absolute read-only `repoRoot`. README Quickstart covers the `$WINDOWER` install step, framekit from npm and the first-run Headless Shell download.
 - Sequence validation: the self-message error now says it is unsupported and suggests a separate participant or a note step; documented in the scene catalog and authoring reference.

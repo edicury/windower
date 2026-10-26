@@ -1,6 +1,6 @@
 # windower
 
-A Claude Code plugin that turns a slice of a software system (a module, feature, PR, ticket or doc) into a short, captioned explainer video of 60-120 seconds. Claude reads the code, git history and any connected MCP source (Notion, Linear, Slack, ...), writes a cited brief and a validated storyboard, waits for your explicit approval, then renders an mp4 with captions using framekit, a programmatic React video renderer (headless Chromium capture, ffmpeg encode).
+A Claude Code plugin that turns a slice of a software system (a module, feature, PR, ticket or doc) into a captioned explainer video: about 30 seconds in `quick` mode, 70-90 seconds by default (`normal`), or a 2-6 minute `deep` dive. Claude reads the code, git history and any connected MCP source (Notion, Linear, Slack, ...), writes a cited brief and a validated storyboard, waits for your explicit approval, then renders an mp4 with captions using framekit, a programmatic React video renderer (headless Chromium capture, ffmpeg encode).
 
 [![Watch windower explain itself (about 2 minutes, with narration)](https://media.windower.io/explainer-poster.jpg)](https://media.windower.io/explainer.mp4)
 
@@ -120,7 +120,7 @@ Optional `.windower.json` at the root of the repository you are explaining (the 
   "provider": "openai",
   "voice": "alloy",
   "model": "tts-1",
-  "defaultLengthSec": 90,
+  "defaultMode": "normal",
   "brand": {
     "primary": "#0A84FF",
     "background": "#0B0D12",
@@ -146,7 +146,7 @@ Everything you can change lives in `.windower.json` at the repository root (the 
   "providers": ["./my-provider.js"], // validated as string[], but not loaded yet
   "voice": "EXAVITQu4vr4xnSDxMaL", // provider-specific voice id
   "model": "eleven_multilingual_v2", // provider-specific model id
-  "defaultLengthSec": 90, // 60-120, used when the request names no length
+  "defaultMode": "normal", // quick | normal | deep, used when the request names no mode
   "brand": {
     "primary": "#0A84FF", // required, hex
     "background": "#0B0D12", // required, hex
@@ -159,20 +159,20 @@ Everything you can change lives in `.windower.json` at the repository root (the 
 }
 ```
 
-| Key                  | Type     | Default                                                  | Notes                                                                                                        |
-| -------------------- | -------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `provider`           | string   | first available key, else `null` (silent)                | `elevenlabs`, `openai`, `piper` or `null` (silent). Flag `--provider` overrides; `--no-voice` forces `null`. |
-| `providers`          | string[] | none                                                     | Must be an array of strings; accepted but not loaded by any script yet.                                      |
-| `voice`              | string   | `EXAVITQu4vr4xnSDxMaL` / `alloy` / `en_US-lessac-medium` | Per-provider default shown for elevenlabs / openai / piper. Flag `--voice` overrides.                        |
-| `model`              | string   | `eleven_multilingual_v2` / `gpt-4o-mini-tts` / `piper`   | Same order as above. Flag `--model` overrides.                                                               |
-| `defaultLengthSec`   | number   | 90                                                       | 60 to 120, otherwise the config is rejected.                                                                 |
-| `brand.primary`      | hex      | built-in palette (no brand)                              | Required if `brand` is present. Accent color of the scenes.                                                  |
-| `brand.background`   | hex      | `#0b1020`                                                | Required if `brand` is present.                                                                              |
-| `brand.accent`       | hex      | none                                                     | Secondary accent.                                                                                            |
-| `brand.text`         | hex      | `#e8ecff`                                                | Text color. Panels, borders, muted text and the captions bar are derived by mixing it with the background.   |
-| `brand.font`         | string   | Inter, then system fonts                                 | Family name only: letters, digits, spaces and hyphens, up to 64 characters.                                  |
-| `brand.logo`         | path     | none                                                     | `.svg` or `.png`, at most 256 KB, path relative to the repo root, file must exist.                           |
-| `brand.logoPosition` | string   | `top-right`                                              | `top-left`, `top-right`, `bottom-left` or `bottom-right`.                                                    |
+| Key                  | Type     | Default                                                  | Notes                                                                                                                             |
+| -------------------- | -------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `provider`           | string   | first available key, else `null` (silent)                | `elevenlabs`, `openai`, `piper` or `null` (silent). Flag `--provider` overrides; `--no-voice` forces `null`.                      |
+| `providers`          | string[] | none                                                     | Must be an array of strings; accepted but not loaded by any script yet.                                                           |
+| `voice`              | string   | `EXAVITQu4vr4xnSDxMaL` / `alloy` / `en_US-lessac-medium` | Per-provider default shown for elevenlabs / openai / piper. Flag `--voice` overrides.                                             |
+| `model`              | string   | `eleven_multilingual_v2` / `gpt-4o-mini-tts` / `piper`   | Same order as above. Flag `--model` overrides.                                                                                    |
+| `defaultMode`        | string   | `normal`                                                 | `quick`, `normal` or `deep`; used when the request names no mode. `defaultLengthSec` is deprecated and ignored in favour of this. |
+| `brand.primary`      | hex      | built-in palette (no brand)                              | Required if `brand` is present. Accent color of the scenes.                                                                       |
+| `brand.background`   | hex      | `#0b1020`                                                | Required if `brand` is present.                                                                                                   |
+| `brand.accent`       | hex      | none                                                     | Secondary accent.                                                                                                                 |
+| `brand.text`         | hex      | `#e8ecff`                                                | Text color. Panels, borders, muted text and the captions bar are derived by mixing it with the background.                        |
+| `brand.font`         | string   | Inter, then system fonts                                 | Family name only: letters, digits, spaces and hyphens, up to 64 characters.                                                       |
+| `brand.logo`         | path     | none                                                     | `.svg` or `.png`, at most 256 KB, path relative to the repo root, file must exist.                                                |
+| `brand.logoPosition` | string   | `top-right`                                              | `top-left`, `top-right`, `bottom-left` or `bottom-right`.                                                                         |
 
 Colors are hex only: `#rgb` or `#rrggbb`.
 
@@ -184,9 +184,21 @@ Colors are hex only: `#rgb` or `#rrggbb`.
 
 **Voice.** Pick the provider with `provider` (or `--provider`, or `--no-voice` for captions only). To choose a voice, run `pnpm ve:voices` (add `--search <text>`; it lists your ElevenLabs account; openai voices are alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse, marin, cedar), then either pass `--voice <id>` to both `ve:gate` and `ve:synth`, or save it as `voice` in `.windower.json`. `--model <id>` works the same way. Precedence: flag, then `.windower.json`, then the provider default. Changing voice or model bills again. API keys come from the environment only, never from this file.
 
-**Per run, in the request.** The audience (`onboarding`, `pr-review`, `stakeholder`, `docs`) and the length (60 to 120 s) are inferred from your request, so say them in plain words ("a stakeholder video, about 60 seconds"). The storyboard is built from seven scene types (see `skills/windower/references/scene-catalog.md`) and you review it at the approval gate; ask for edits there before rendering.
+**Modes.** A mode controls only the output: length, scene count and detail. Research is identical in every mode, with no caps: `quick` still explores the slice fully and writes the full cited brief, then picks the highest-signal points at storyboard time.
 
-**Not customizable.** Scene layout and design, caption style, transition duration (12 frames; only the per-scene `fade`, `slide` or `none` choice is set in the storyboard), fonts from files or URLs, background music (the only audio is narration), size (1920x1080, 16:9), frame rate (30 fps), and lengths outside 60 to 120 seconds.
+| Mode     | Target length | Hard limits | Scenes | Narration words |
+| -------- | ------------- | ----------- | ------ | --------------- |
+| `quick`  | ~30 s         | 20-45 s     | 3-5    | 60-90           |
+| `normal` | 70-90 s       | 55-110 s    | 6-10   | 180-240         |
+| `deep`   | 120-360 s     | 90-600 s    | 10-40  | 330-1000        |
+
+Pick one with `--mode quick|normal|deep` or words such as "quick" or "deep dive"; the default is `normal` (or `defaultMode` from `.windower.json`). The storyboard records it in an optional `mode` field (absent means `normal`). **Deep mode and credits:** with a voiced provider (elevenlabs or openai) a deep video consumes many API credits, so the approval gate warns and requires explicit confirmation (`ve:gate --approve --confirm-credits`). Silent and piper runs are unaffected.
+
+**Chapters (deep videos).** Scenes take an optional `chapter` label (max 40 chars); consecutive scenes sharing a label form a chapter, and a label may not reappear later (validator error). The validator suggests chapters for deep videos over 150 s, and warns if they are used outside deep mode. The approval gate shows per-chapter scenes, seconds and narration characters, plus each chapter's credit share when voiced, and a frame-count note for videos over 150 s. Synthesis is cached per scene (provider, voice, model, text and neighboring narration), so editing one scene re-synthesizes only it and its two neighbors; other chapters reuse their audio and use no credits.
+
+**Per run, in the request.** The audience (`onboarding`, `pr-review`, `stakeholder`, `docs`) and the mode are inferred from your request, so say them in plain words ("a quick stakeholder video", "a deep dive for onboarding") or pass `--mode quick|normal|deep` to `/explain-video`. With no signal the mode is `normal`. The storyboard is built from seven scene types (see `skills/windower/references/scene-catalog.md`) and you review it at the approval gate; ask for edits there before rendering.
+
+**Not customizable.** Scene layout and design, caption style, transition duration (12 frames; only the per-scene `fade`, `slide` or `none` choice is set in the storyboard), fonts from files or URLs, background music (the only audio is narration), size (1920x1080, 16:9), frame rate (30 fps), and lengths outside the mode limits below.
 
 ## Troubleshooting
 
@@ -206,7 +218,7 @@ pnpm ve:render Hello  # first render of the sample composition, writes template/
 ## Limits
 
 - 16:9 output only (9:16 is on the [backlog](BACKLOG.md)).
-- 60-120 seconds per video.
+- Video length depends on the mode: about 30 s (`quick`), 70-90 s (`normal`), 120-360 s target and 600 s maximum (`deep`).
 - No background music in v1.
 - Narration timing uses reading-speed estimates, not word-level alignment.
 

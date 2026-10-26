@@ -8,7 +8,7 @@ Run `/explain-video` on three different repositories, score each run with `ve:ev
 2. A small TypeScript service (an HTTP API or worker, a few thousand lines).
 3. A small Python service (FastAPI, Flask or a CLI package).
 
-For each, from inside the target repo, ask for a 60-120 s onboarding video of one feature, approve the storyboard at the gate, and let it render. The run lands in `.windower/<slug>/`.
+For each, from inside the target repo, ask for a normal-mode (70-90 s) onboarding video of one feature, approve the storyboard at the gate, and let it render. The run lands in `.windower/<slug>/`.
 
 ## Score each run
 
@@ -22,7 +22,7 @@ It exits 0 on pass and 2 on fail, with one line per check:
 - storyboard validates with the brief
 - every `file` source resolves to an existing file and line range, and every code-scene snippet matches the file verbatim
 - no unredacted secrets in brief or storyboard
-- total duration within 60-120 s
+- total duration within the normal-mode hard limits (55-110 s)
 - approved flag and `approvedAt` set (the gate was shown before render)
 - video duration within 1 s of timing (when `out/video.mp4` exists)
 
