@@ -38,7 +38,16 @@ describe('scene still snapshots (T3, G2-2)', () => {
 
   it('all-scenes covers every scene type and has a committed baseline per scene', () => {
     const types = new Set(scenes.map((s) => s.type));
-    for (const t of ['title', 'bullets', 'code', 'architecture', 'sequence', 'timeline', 'outro'])
+    for (const t of [
+      'title',
+      'bullets',
+      'code',
+      'architecture',
+      'sequence',
+      'timeline',
+      'outro',
+      'html',
+    ])
       expect(types.has(t), `scene type ${t}`).toBe(true);
     for (const s of scenes) expect(existsSync(path.join(SNAPSHOT_DIR, snapshotName(s)))).toBe(true);
     expect(readdirSync(SNAPSHOT_DIR).filter((f) => f.endsWith('.png'))).toHaveLength(scenes.length);

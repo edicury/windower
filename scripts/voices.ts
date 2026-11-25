@@ -1,12 +1,13 @@
-// voices: `voices [--provider elevenlabs] [--json] [--search text]` lists selectable voices.
+// voices: `voices [--provider elevenlabs] [--json] [--search text] [--cloned]` lists selectable voices.
 import {pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
 import {EXIT} from './lib.js';
-import {filterVoices, listVoices, type VoiceInfo} from './tts/elevenlabs-voices.js';
+import {filterVoices, isCloned, listVoices, type VoiceInfo} from './tts/elevenlabs-voices.js';
 import type {Env} from './tts/providers.js';
 import {TtsError} from './tts/types.js';
 
-export const VOICES_USAGE = 'Usage: voices [--provider elevenlabs] [--json] [--search text]';
+export const VOICES_USAGE =
+  'Usage: voices [--provider elevenlabs] [--json] [--search text] [--cloned]';
 
 const OPENAI_VOICES = [
   'alloy',
@@ -52,7 +53,7 @@ export async function run(
     err: (s) => void process.stderr.write(s),
   },
 ): Promise<number> {
-  let values: {provider?: string; json?: boolean; search?: string};
+  let values: {provider?: string; json?: boolean; search?: string; cloned?: boolean};
   try {
     values = parseArgs({
       args: argv,
@@ -60,6 +61,7 @@ export async function run(
         provider: {type: 'string', default: 'elevenlabs'},
         json: {type: 'boolean', default: false},
         search: {type: 'string'},
+        cloned: {type: 'boolean', default: false},
       },
     }).values;
   } catch (e) {
@@ -82,7 +84,8 @@ export async function run(
     return EXIT.validation;
   }
   try {
-    const voices = filterVoices(await listVoices(env, fetchImpl), values.search);
+    let voices = filterVoices(await listVoices(env, fetchImpl), values.search);
+    if (values.cloned) voices = voices.filter(isCloned);
     io.err(`${formatTable(voices)}\n${voices.length} voice(s)\n`);
     if (values.json) io.out(`${JSON.stringify(voices, null, 2)}\n`);
     return EXIT.ok;

@@ -11,6 +11,7 @@ import {Architecture} from './scenes/Architecture';
 import {Sequence as SeqScene} from './scenes/Sequence';
 import {Timeline} from './scenes/Timeline';
 import {Outro} from './scenes/Outro';
+import {Html} from './scenes/Html';
 import {brandVars} from './brand';
 import {TRANSITION_FRAMES, theme} from './theme';
 import type {ExplainerProps, Scene} from './types';
@@ -24,6 +25,7 @@ const renderScene = (s: Scene) => {
     case 'sequence': return <SeqScene scene={s} />;
     case 'timeline': return <Timeline scene={s} />;
     case 'outro': return <Outro scene={s} />;
+    case 'html': return <Html scene={s} />;
   }
 };
 

@@ -36,6 +36,7 @@ describe('readability floor (FR-SCN-09, 2.D.3)', () => {
       'timeline',
       'outro',
       'bullets-at-limit',
+      'html',
     ]) {
       const r = validateFile(path.join('fixtures', 'storyboards', `${f}.json`));
       expect(r.errors, f).toEqual([]);

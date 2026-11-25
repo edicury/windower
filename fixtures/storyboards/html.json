@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "slug": "html",
+  "title": "html scene",
+  "audience": "onboarding",
+  "mode": "quick",
+  "repoRoot": "../repos/sample",
+  "scenes": [
+    {
+      "id": "s01",
+      "type": "title",
+      "headline": "HTML scenes",
+      "narration": "Here is a designed page. Three cards appear in order while a progress bar grows underneath, driven by the same clock as the narration, so every frame stays deterministic.",
+      "sources": []
+    },
+    {
+      "id": "s02",
+      "type": "html",
+      "title": "Greeter request path",
+      "html": "<main class=\"w-stage\">\n  <div class=\"w-eyebrow w-fade\">Request path</div>\n  <h1 class=\"w-h2 w-reveal\" style=\"--d:.2\">One greeting, three small steps</h1>\n  <div class=\"w-grid w-grid-3 w-stagger\" style=\"--d:.6;--gap:.5\">\n    <div class=\"w-card\"><div class=\"w-kpi\">1</div><p class=\"w-body\">Read the names from the command line</p></div>\n    <div class=\"w-card\"><div class=\"w-kpi\">2</div><p class=\"w-body\">Map each name to a greeting line</p></div>\n    <div class=\"w-card\"><div class=\"w-kpi\">3</div><p class=\"w-body\">Print the lines to standard output</p></div>\n  </div>\n  <div class=\"w-bar w-grow\" style=\"--d:2;--dur:1.5;width:100%\"></div>\n</main>",
+      "narration": "Here is a designed page. Three cards appear in order while a progress bar grows underneath, driven by the same clock as the narration, so every frame stays deterministic.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:1-24"
+        }
+      ],
+      "transition": "fade"
+    },
+    {
+      "id": "s03",
+      "type": "html",
+      "title": "Greeter request path",
+      "file": "html-card.html",
+      "narration": "Here is a designed page. Three cards appear in order while a progress bar grows underneath, driven by the same clock as the narration, so every frame stays deterministic.",
+      "sources": [
+        {
+          "kind": "file",
+          "ref": "src/greeter.ts:1-24"
+        }
+      ],
+      "transition": "fade"
+    },
+    {
+      "id": "s04",
+      "type": "outro",
+      "headline": "Designed pages, narrated",
+      "narration": "Here is a designed page. Three cards appear in order while a progress bar grows underneath, driven by the same clock as the narration, so every frame stays deterministic.",
+      "sources": []
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+  <head>
+    <style>
+      .big {
+        font-size: 140px;
+        font-weight: 800;
+        margin: 0;
+        color: var(--w-accent);
+      }
+      .meter {
+        height: 24px;
+        border-radius: 12px;
+        background: var(--w-border);
+        overflow: hidden;
+      }
+      .meter i {
+        display: block;
+        height: 100%;
+        width: calc(var(--p) * 100%);
+        background: var(--w-accent2);
+      }
+    </style>
+  </head>
+  <body>
+    <main class="w-stage">
+      <div class="w-eyebrow w-fade">From a file</div>
+      <p class="big w-pop" style="--d: 0.3">3 functions</p>
+      <p class="w-lead w-reveal" style="--d: 0.9">
+        Progress below is driven by the scene clock through the --p variable.
+      </p>
+      <div class="meter"><i></i></div>
+    </main>
+  </body>
+</html>

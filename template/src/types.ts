@@ -47,7 +47,9 @@ export type TimelineScene = Base & {
   items: {label: string; detail?: string; when?: string}[];
 };
 export type OutroScene = Base & {type: 'outro'; headline: string; subtitle?: string; items?: string[]};
-export type Scene = TitleScene | BulletsScene | CodeScene | ArchScene | SequenceScene | TimelineScene | OutroScene;
+/** `html` is always inline by the time props reach the renderer (prepare inlines `file`). */
+export type HtmlScene = Base & {type: 'html'; html: string; title?: string};
+export type Scene = HtmlScene | TitleScene | BulletsScene | CodeScene | ArchScene | SequenceScene | TimelineScene | OutroScene;
 export type ExplainerProps = {
   title: string;
   fps: number;

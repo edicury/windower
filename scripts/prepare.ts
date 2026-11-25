@@ -171,6 +171,20 @@ export async function prepare(
         focus: s.focus ?? [],
         lines,
       } as unknown as Scene);
+    } else if (s.type === 'html') {
+      const {file: htmlFile, ...rest} = common as typeof common & {file?: string};
+      let html = s.html;
+      if (html === undefined && htmlFile) {
+        try {
+          html = readFileSync(path.resolve(dir, htmlFile), 'utf8');
+        } catch (e) {
+          throw new PrepareError(
+            `scene ${s.id}: cannot read ${htmlFile}: ${(e as Error).message}`,
+            EXIT.validation,
+          );
+        }
+      }
+      scenes.push({...rest, html: html ?? ''} as unknown as Scene);
     } else {
       scenes.push(common as unknown as Scene);
     }

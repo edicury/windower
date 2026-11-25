@@ -1,5 +1,5 @@
 import {describe, expect, it, vi} from 'vitest';
-import {listVoices} from '../scripts/tts/elevenlabs-voices.js';
+import {isCloned, listVoices} from '../scripts/tts/elevenlabs-voices.js';
 import {run} from '../scripts/voices.js';
 import {TtsError} from '../scripts/tts/types.js';
 
@@ -60,6 +60,45 @@ describe('voices', () => {
     const j = JSON.parse(t.o.join('')) as {voiceId: string}[];
     expect(j.map((x) => x.voiceId)).toEqual(['v1']);
     expect(t.e.join('')).toMatch(/Rachel/);
+  });
+
+  it('isCloned matches cloned and professional only', () => {
+    const v = (category?: string) => ({voiceId: 'x', name: 'x', ...(category ? {category} : {})});
+    expect(isCloned(v('cloned'))).toBe(true);
+    expect(isCloned(v('professional'))).toBe(true);
+    expect(isCloned(v('premade'))).toBe(false);
+    expect(isCloned(v())).toBe(false);
+  });
+
+  it('--cloned --json keeps only cloned voices; none gives []', async () => {
+    const mixed = {
+      voices: [
+        {voice_id: 'a', name: 'Mine', category: 'cloned'},
+        {voice_id: 'b', name: 'Pro', category: 'professional'},
+        {voice_id: 'c', name: 'Rachel', category: 'premade'},
+      ],
+    };
+    const t = io();
+    expect(
+      await run(
+        ['--json', '--cloned'],
+        {ELEVENLABS_API_KEY: KEY},
+        fx(new Response(JSON.stringify(mixed))),
+        t.io,
+      ),
+    ).toBe(0);
+    expect((JSON.parse(t.o.join('')) as {voiceId: string}[]).map((x) => x.voiceId)).toEqual([
+      'a',
+      'b',
+    ]);
+    const t2 = io();
+    await run(
+      ['--json', '--cloned'],
+      {ELEVENLABS_API_KEY: KEY},
+      fx(new Response(JSON.stringify(body))),
+      t2.io,
+    );
+    expect(JSON.parse(t2.o.join(''))).toEqual([]);
   });
 
   it('401 -> exit 4 with redacted message', async () => {

@@ -45,7 +45,7 @@ Write `$RUN/storyboard.json` from the redacted brief. The shipped Zod schema is 
 | code          | <= 16 lines x <= 100 chars; one diff hunk; verbatim; focus inside snippet; caption <= 100                                                                                                          |
 | architecture  | 2-9 nodes, 1-12 edges, label <= 20, sub <= 30, edge label <= 24, adjacent grid cells only                                                                                                          |
 | sequence      | 2-5 participants x <= 18; 2-8 messages, text <= 40, note <= 36; indexes valid and `from` != `to` (no self-messages: use a separate participant or a note); no note ending at rightmost participant |
-| timeline      | 3-7 items; label <= 24, detail <= 80, when <= 20                                                                                                                                                   |
+| html          | `html` <= 60000 chars or `file` (one of the two); title <= 60; no remote URLs, scripts or wall-clock animation                                                                                     |
 
 ## Fixing validator findings
 

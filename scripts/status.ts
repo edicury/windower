@@ -94,14 +94,23 @@ function main(): void {
     const r = initRun(second, values.root);
     // defaultMode from <root>/.windower.json, for the skill to pick the video mode.
     let defaultMode: string | undefined;
+    let cloned: string | undefined;
     try {
-      defaultMode = loadConfig(path.resolve(values.root ?? process.cwd())).defaultMode;
+      const cfg = loadConfig(path.resolve(values.root ?? process.cwd()));
+      defaultMode = cfg.defaultMode;
+      cloned = cfg.cloned;
     } catch (e) {
       console.error((e as Error).message);
       process.exit(EXIT.validation);
     }
     console.log(
-      values.json ? JSON.stringify(defaultMode === undefined ? r : {...r, defaultMode}) : r.dir,
+      values.json
+        ? JSON.stringify({
+            ...r,
+            ...(defaultMode === undefined ? {} : {defaultMode}),
+            ...(cloned === undefined ? {} : {cloned}),
+          })
+        : r.dir,
     );
     process.exit(EXIT.ok);
   }

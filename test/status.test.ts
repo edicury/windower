@@ -171,6 +171,20 @@ describe('slug and init', () => {
     expect(out.defaultLengthSec).toBeUndefined();
   });
 
+  it('status init --json emits cloned from .windower.json', () => {
+    const root = mk();
+    writeFileSync(path.join(root, '.windower.json'), JSON.stringify({cloned: 'always'}));
+    const r = spawnSync(
+      'pnpm',
+      ['exec', 'tsx', 'scripts/status.ts', 'init', 'Cloned Tour', '--root', root, '--json'],
+      {encoding: 'utf8', cwd: process.cwd()},
+    );
+    expect(r.status, r.stderr).toBe(0);
+    const out = JSON.parse(r.stdout) as {cloned?: string; defaultMode?: string};
+    expect(out.cloned).toBe('always');
+    expect(out.defaultMode).toBeUndefined();
+  });
+
   it('initRun creates the run dir and avoids collisions', () => {
     const root = mk();
     const a = initRun('Billing Tour', root);

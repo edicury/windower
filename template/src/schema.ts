@@ -35,6 +35,8 @@ export const LIMITS = {
   outroSubtitle: 80,
   outroItems: 3,
   outroItemChars: 60,
+  htmlChars: 60000,
+  htmlTitle: 60,
   /** Bullets: wrapped-line budget (46 px text, ~68 chars per line in the 1560 px column). */
   bulletsWrappedLines: 8,
   bulletsCharsPerLine: 68,
@@ -212,6 +214,21 @@ export const OutroScene = z.strictObject({
     .optional(),
 });
 
+// HTML scene: a designed page in a fixed 1920x1080 canvas, inline (`html`) or from a file next to
+// the storyboard (`file`, inlined by prepare). Rules live in htmlLint.ts (shared with the validator).
+export const HtmlScene = z
+  .strictObject({
+    ...base,
+    type: z.literal('html'),
+    title: z.string().min(1).max(LIMITS.htmlTitle, {error: `title > ${LIMITS.htmlTitle} chars`}).optional(),
+    html: z.string().min(1).max(LIMITS.htmlChars, {error: `html > ${LIMITS.htmlChars} chars`}).optional(),
+    file: z.string().min(1).optional(),
+  })
+  .superRefine((s, ctx) => {
+    if ((s.html === undefined) === (s.file === undefined))
+      ctx.addIssue({code: 'custom', path: ['html'], message: 'provide exactly one of "html" (inline) or "file" (path next to the storyboard)'});
+  });
+
 export const Scene = z.discriminatedUnion('type', [
   TitleScene,
   BulletsScene,
@@ -220,6 +237,7 @@ export const Scene = z.discriminatedUnion('type', [
   SequenceScene,
   TimelineScene,
   OutroScene,
+  HtmlScene,
 ]);
 
 export const Storyboard = z.strictObject({

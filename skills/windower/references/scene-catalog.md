@@ -7,7 +7,7 @@ Payload fields are flat on the scene object (the shipped Zod schema in `template
 | Field            | Rule                                                                                                                                                                                                                                               |
 | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `id`             | `s01`, `s02`, ... unique, in order                                                                                                                                                                                                                 |
-| `type`           | one of the seven below                                                                                                                                                                                                                             |
+| `type`           | one of the eight below                                                                                                                                                                                                                             |
 | `narration`      | 8-60 words, plain text (see narration-style.md)                                                                                                                                                                                                    |
 | `sources`        | `[{"kind": "file"\|"url"\|"git", "ref": "..."}]`; at least 1 on every scene except the first `title` and an `outro` (may be `[]`). `file` refs are `path:line` or `path:start-end`, repo-relative, in bounds, and must appear verbatim in brief.md |
 | `minDurationSec` | optional, 2-20; floor for the scene length                                                                                                                                                                                                         |
@@ -49,7 +49,11 @@ Layout is automatic, row-major on a grid: 2 nodes use 2 columns, 3 use 3 columns
 
 `headline` (<= 90), `subtitle?` (<= 80), `items?` (<= 3, each <= 60). Closing card with takeaway chips; `sources` may be empty.
 
+## html
+
+`html` (inline page, <= 60000 chars) or `file` (path to a `.html` next to the storyboard; exactly one), `title?` (<= 60). A designed 1920x1080 page in a sandboxed iframe: offline, `data:` assets only, motion via seekable CSS animations and the `--t`/`--p` variables, kit classes `w-*` and brand variables `--w-*`. Contract, kit and design guidance: [html-scenes.md](html-scenes.md).
+
 ## Choosing a type
 
-- Concept list or recap: `bullets`. Exact behaviour in 16 lines or less: `code`. Who talks to whom: `architecture` (static structure) or `sequence` (order over time). History, rollout, or ordered steps: `timeline`.
+- Concept list or recap: `bullets`. Exact behaviour in 16 lines or less: `code`. Who talks to whom: `architecture` (static structure) or `sequence` (order over time). History, rollout, or ordered steps: `timeline`. A composed page none of those can express (metric card, before/after, comparison): `html`, sparingly.
 - Do not use a code scene for config or secrets; summarise those in `bullets`.

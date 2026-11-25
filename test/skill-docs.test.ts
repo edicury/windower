@@ -63,7 +63,16 @@ describe('skill docs', () => {
 
   it('scene catalog covers every scene type in the schema', () => {
     const catalog = read('skills/windower/references/scene-catalog.md');
-    for (const t of ['title', 'bullets', 'code', 'architecture', 'sequence', 'timeline', 'outro'])
+    for (const t of [
+      'title',
+      'bullets',
+      'code',
+      'architecture',
+      'sequence',
+      'timeline',
+      'outro',
+      'html',
+    ])
       expect(catalog).toContain(`## ${t}`);
   });
 });

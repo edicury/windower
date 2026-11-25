@@ -67,6 +67,10 @@ export async function listVoices(
     }));
 }
 
+/** Cloned voices: instant (`cloned`) or professional clones. */
+export const isCloned = (v: VoiceInfo): boolean =>
+  v.category === 'cloned' || v.category === 'professional';
+
 export function filterVoices(voices: VoiceInfo[], search?: string): VoiceInfo[] {
   const q = search?.trim().toLowerCase();
   if (!q) return voices;

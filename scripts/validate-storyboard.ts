@@ -7,6 +7,7 @@ import {parseArgs} from 'node:util';
 import type {ZodIssue} from 'zod';
 import {LIMITS, Storyboard} from '../template/src/schema.js';
 import {splitCode} from '../template/src/codeLines.js';
+import {htmlProblems} from '../template/src/htmlLint.js';
 import {isKnownLanguage} from './code-highlight.js';
 import {
   H_LABEL_CHARS,
@@ -77,7 +78,7 @@ function mapZodIssue(issue: ZodIssue, scenes: unknown): Omit<Issue, 'severity'> 
       sceneId && Array.isArray(scenes) && typeof p[1] === 'number'
         ? (scenes[p[1]] as Loose)?.type
         : undefined;
-    message = `unknown scene type ${JSON.stringify(t)}; expected title, bullets, code, architecture, sequence, timeline or outro`;
+    message = `unknown scene type ${JSON.stringify(t)}; expected title, bullets, code, architecture, sequence, timeline, outro or html`;
     rule = 'scene-type';
   } else if (issue.code === 'unrecognized_keys') {
     const keys = (issue as {keys?: string[]}).keys ?? [];
@@ -225,6 +226,9 @@ export function validateStoryboard(raw: unknown, opts: ValidateOptions = {}): Va
       case 'sequence':
         checkSequence(s, id, addErr);
         break;
+      case 'html':
+        checkHtml(s, id, opts, addErr, addWarn);
+        break;
       case 'bullets':
         if (Array.isArray(s.items)) {
           // ~68 chars fit per line at 46 px inside the 1560 px text column; budget is 8 wrapped lines.
@@ -367,7 +371,54 @@ function checkRedaction(s: Loose, id: string, allowPii: boolean | undefined, add
     );
 }
 
+/** R6 for text that is not a storyboard field (an html file next to the storyboard). */
+function checkRedactionText(
+  text: string,
+  id: string,
+  p: string,
+  allowPii: boolean | undefined,
+  addErr: Add,
+): void {
+  const seen = new Set<string>();
+  for (const f of scanText(text, {allowPii})) {
+    if (seen.has(f.rule)) continue;
+    seen.add(f.rule);
+    addErr(id, p, 'R6', `looks like a ${f.label} (${f.preview}); remove or replace it (FR-SEC-01)`);
+  }
+}
+
 type Add = (sceneId: string | null, p: string, rule: string, message: string) => void;
+
+/** Html scene: resolves `file` next to the storyboard, then lints the page (size, offline, deterministic). */
+function checkHtml(s: Loose, id: string, opts: ValidateOptions, addErr: Add, addWarn: Add): void {
+  let page: string | undefined;
+  let field = 'html';
+  if (typeof s.html === 'string') page = s.html;
+  else if (typeof s.file === 'string') {
+    field = 'file';
+    const full = under(path.resolve(opts.baseDir ?? process.cwd()), s.file);
+    if (!full) addErr(id, 'file', 'html-file', 'file must stay inside the storyboard directory');
+    else if (!/\.html?$/i.test(s.file))
+      addErr(id, 'file', 'html-file', 'file must be a .html file');
+    else if (!existsSync(full) || !statSync(full).isFile())
+      addErr(id, 'file', 'html-file', `html file not found next to the storyboard: ${s.file}`);
+    else {
+      page = readFileSync(full, 'utf8');
+      if (page.length > LIMITS.htmlChars)
+        addErr(
+          id,
+          'file',
+          'limit',
+          `html file > ${LIMITS.htmlChars} chars (${page.length}); simplify or split the scene`,
+        );
+      if (!page.trim()) addErr(id, 'file', 'html-file', 'html file is empty');
+      checkRedactionText(page, id, 'file', opts.allowPii, addErr);
+    }
+  }
+  if (page === undefined) return;
+  for (const p of htmlProblems(page))
+    (p.severity === 'error' ? addErr : addWarn)(id, field, 'html', p.message);
+}
 
 function checkCode(s: Loose, id: string, root: string | undefined, addErr: Add): void {
   const file = str(s.file);

@@ -39,6 +39,8 @@ describe('.windower.json brand + defaultMode', () => {
     [{brand: 'red'}, /"brand" must be an object/],
     [{defaultMode: 'turbo'}, /defaultMode/],
     [{defaultMode: 5}, /defaultMode/],
+    [{cloned: 'sometimes'}, /cloned/],
+    [{cloned: true}, /cloned/],
     [{defaultLengthSec: 30}, /defaultLengthSec/],
     [{defaultLengthSec: 300}, /defaultLengthSec/],
     [{defaultLengthSec: '90'}, /defaultLengthSec/],
@@ -52,6 +54,11 @@ describe('.windower.json brand + defaultMode', () => {
     const r = loadConfigWithWarnings(repo({defaultLengthSec: 90}));
     expect(r.config.defaultLengthSec).toBe(90);
     expect(r.warnings.join()).toContain('deprecated');
+  });
+  it('accepts every cloned value and leaves it unset by default', () => {
+    for (const c of ['ask', 'always', 'never'])
+      expect(loadConfig(repo({cloned: c})).cloned).toBe(c);
+    expect(loadConfig(repo({})).cloned).toBeUndefined();
   });
   it('defaults logoPosition to unset and accepts every corner', () => {
     expect(loadConfig(repo({brand})).brand?.logoPosition).toBeUndefined();

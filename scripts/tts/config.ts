@@ -23,6 +23,8 @@ export interface WindowerConfig {
   };
   /** Default video mode, surfaced to the skill. */
   defaultMode?: Mode;
+  /** Whether to offer the user's ElevenLabs cloned voice: ask (default), always use it, or never. */
+  cloned?: 'ask' | 'always' | 'never';
   /** @deprecated No longer used for length ranges; use defaultMode. Still accepted. */
   defaultLengthSec?: number;
 }
@@ -36,6 +38,7 @@ const KNOWN = [
   'model',
   'brand',
   'defaultMode',
+  'cloned',
   'defaultLengthSec',
 ];
 const KNOWN_BRAND = ['primary', 'background', 'accent', 'text', 'font', 'logo', 'logoPosition'];
@@ -163,6 +166,11 @@ export function loadConfigWithWarnings(repoRoot: string): {
   if (o.defaultMode !== undefined) {
     if (!isMode(o.defaultMode)) return bad('defaultMode', `must be one of ${MODE_IDS.join(', ')}`);
     cfg.defaultMode = o.defaultMode;
+  }
+  if (o.cloned !== undefined) {
+    if (o.cloned !== 'ask' && o.cloned !== 'always' && o.cloned !== 'never')
+      return bad('cloned', 'must be one of ask, always, never');
+    cfg.cloned = o.cloned;
   }
   if (o.defaultLengthSec !== undefined) {
     warnings.push(

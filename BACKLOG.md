@@ -8,3 +8,4 @@ Not in v1.
 - Live verification of the Piper and OpenAI providers against real services/binaries (unit-tested with fakes only).
 - A human-driven end-to-end `/explain-video` run on an unfamiliar repository, with and without a voice key.
 - Re-baseline `fixtures` snapshot PNGs from framekit renders (the committed baselines predate the engine switch; tolerance covers the difference until then).
+- `html` scenes: fill the `Design skill guidance` section of `skills/windower/references/html-scenes.md` with a specific design skill's principles; allow audited local assets (images next to the storyboard) beyond `data:` URIs.
