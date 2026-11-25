@@ -49,14 +49,24 @@ Time the reveals to the narration: about 2.9 words per second, so a point spoken
 - Data: show the number big (`.w-kpi`) with a short label; compare with two bars of true relative length rather than a chart library.
 - Ground it: every figure on the page must come from the brief and be cited in `sources`.
 
-### Design skill guidance
+### Design guidance (Astryx)
 
-<!-- PLACEHOLDER: a later step fills this section with the principles of a specific design skill.
-     Until then, when writing an html scene in a harness that has the `frontend-design` skill
-     installed, consult it for aesthetic direction, typography and avoiding templated defaults,
-     and apply it within the rendering contract above (offline, seekable, 1920x1080). -->
+Source: these values come from the public repo of Astryx, Meta's open-source design system (MIT; https://github.com/meta/astryx, docs https://astryx.atmeta.com), default theme in `packages/core/src/theme/tokens.stylex.ts`. Scenes are inspired by Astryx, not a copy of its components. The official Claude plugin (`claude plugin marketplace add meta/astryx`) is React/CLI oriented, so it is not used here. Always apply the contract above (offline, seekable, 1920x1080) first.
 
-Until this section is filled in, use the installed `frontend-design` skill for general visual direction, and keep to the contract above.
+Brand first: when the repo has a brand, the `--w-*` variables already carry it; use them and do not hardcode colors. With no brand, fall back to these Astryx defaults.
+
+- Color (dark video default / light): `--w-bg` #111112 / #F1F4F7; `--w-panel` #1F1F22 / #FFFFFF; `--w-text` #DFE2E5 / #0A1317; `--w-muted` #B0B5BB / #445564; `--w-accent` #0171E3 / #0064E0 (accent text on dark #3E9EFB).
+- Status: success rgba(38,167,86), warning rgba(226,164,0), error rgba(227,25,59). Never rely on color alone: pair with an icon, a word ("Passed", "Failed") or a shape.
+- Pick foreground and background together: text on `--w-panel` or `--w-bg` only, never on an arbitrary tint. Keep contrast high at video compression.
+- Type: system stack (-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif); mono "SF Mono", Monaco, Consolas; weights 400-700.
+- Scale: Astryx is a 1.2 ratio (10/12/14/17/20/24/29/35/42 at a 14px base). On the canvas scale by about 2.5x and snap to the kit: `.w-h1` 92, `.w-h2` 56, `.w-lead` 40, `.w-body` 34. Nothing under the 28px lint minimum.
+- Distinct type roles: eyebrow, heading, lead, body, mono for code. Do not invent a fifth size; vary weight or `--w-muted` instead.
+- Constrain line length: about 60 characters (`max-width` near 1400px for lead, narrower for body). Short lines, one idea per line.
+- One primary emphasis per group: a single `.w-kpi`, accent word or accent card per cluster. Everything else stays quiet (`--w-text` or `--w-muted`).
+- Spacing: 4px grid, scaled for video (multiples of 8/16/24/32/40). Equal gaps inside a group, larger gaps between groups.
+- Radii: 4/8/12/28/full scale; on the canvas prefer the kit's 24px cards and full-round pills. One radius family per scene.
+- Elevation: use an edge OR a shadow as the boundary, not both. `.w-card` already has a border, so add no shadow. If you use a shadow, keep it quiet and drop the border.
+- Motion: fast 175ms, medium 410ms, slow 975ms. Entrances ease `cubic-bezier(0.24,1,0.4,1)`, exits `cubic-bezier(0.3,0,0.6,0.6)`. No bounce or overshoot. Motion carries meaning (order of reading, cause and effect), never decoration. Stagger with `.w-stagger`, and keep every animation a seekable CSS animation driven by `--t`.
 
 ## Examples
 

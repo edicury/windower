@@ -8,6 +8,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 - `html` scene type: a designed 1920x1080 HTML page (inline `html` or a `file` next to the storyboard) narrated like any scene. Rendered in a sandboxed, script-less iframe; time is injected as `--t`/`--p` and animations are seeked per frame, so output is deterministic. Includes a theme/motion kit (`--w-*` variables following the brand, `w-*` classes), validator rules (size, no remote URLs/scripts/fetch/@import/web fonts, no wall-clock animation) and `references/html-scenes.md`.
 - ElevenLabs cloned-voice flow: `ve:voices --cloned` lists only cloned/professional voices, the skill offers your cloned voice before the approval gate, and config `cloned` (`ask`|`always`|`never`, default `ask`) controls it and is surfaced in `ve:status init --json`.
+- Design guidance for html scenes in `references/html-scenes.md`, based on the public Astryx design system (Meta, MIT): tokens mapped onto the `--w-*` kit, with Astryx defaults when there is no brand.
 
 ## [0.2.0] - 2026-10-26
 
