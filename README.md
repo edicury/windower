@@ -79,6 +79,22 @@ Narration providers:
 - Keys come from your shell environment only. They are never read from `.windower.json` and never written to disk.
 - The provider is resolved from `.windower.json`, then available keys, then falls back to silent.
 - `pnpm ve:voices` lists the voices on your ElevenLabs account (`--cloned` shows only your cloned voices; with ElevenLabs the agent offers your cloned voice before the approval gate, see the `cloned` config key); pass the chosen id with `--voice <id>` (and `--provider`, `--model`) to `ve:gate` and `ve:synth`, or persist it in `.windower.json`.
+
+Cloned voice example (ElevenLabs):
+
+```
+pnpm ve:voices --cloned          # lists only your cloned voices, with their ids
+```
+
+Before the approval gate the skill asks "Use your cloned voice <name> or the default?". Answer yes and it passes the voice to the gate and to synthesis, which you can also do by hand:
+
+```
+pnpm ve:gate "$RUN" --provider elevenlabs --voice <id>
+pnpm ve:synth "$RUN" --provider elevenlabs --voice <id>
+```
+
+Set `"cloned": "always"` or `"never"` in `.windower.json` to skip the question.
+
 - Cost is driven by the number of characters in the narration. The gate shows the character count; windower makes no price claim, so check your provider's current pricing.
 - Changing voice or model bills again.
 
@@ -102,6 +118,44 @@ If `pnpm ve:*` fails with `EPERM` or an IPC pipe error inside a sandbox, use `sh
 `ve:render` (and `ve:snapshots`) need Chrome and a local port. Under a sandboxed harness such as Codex `workspace-write` on macOS (seatbelt: Chromium bootstrap permission denied, listen on 127.0.0.1 EPERM), run render outside the sandbox or via the harness's escalation request. `ve:synth` needs network access.
 
 `ve:prepare` writes narration audio into `$WINDOWER_HOME/template/public/audio`. When the windower directory is read-only (sandbox), use a writable copy of the plugin and point `WINDOWER_HOME` at it.
+
+## Scene types
+
+The storyboard is built from eight scene types: `title`, `bullets`, `code`, `architecture`, `sequence`, `timeline`, `outro` and `html` (see [scene-catalog.md](skills/windower/references/scene-catalog.md)).
+
+### HTML scenes
+
+An `html` scene is a designed 1920x1080 page, narrated like any other scene. Use it when a point is best shown as a composed page (a metrics card, a before/after, a comparison). Give inline `html`, or a `file` path next to the storyboard (inlined at prepare time):
+
+```json
+{
+  "id": "s03",
+  "type": "html",
+  "title": "Q4 revenue",
+  "html": "<main class=\"w-stage\"><div class=\"w-eyebrow w-reveal\">Q4 revenue</div><h1 class=\"w-h1 w-reveal\" style=\"--d:.3\">Up 38% on Q3</h1><div class=\"w-kpi w-pop\" style=\"--d:.8\">$4.2M</div><div class=\"w-bar\" style=\"width:calc(var(--p) * 60%)\"></div></main>",
+  "narration": "Revenue reached four point two million dollars in the fourth quarter, up thirty eight percent.",
+  "sources": [{"kind": "file", "ref": "data/q4.csv:1-12"}]
+}
+```
+
+The `file` variant replaces `html` with a path relative to the storyboard: `"file": "scenes/revenue.html"`.
+
+- Time is injected as `--t` (seconds into the scene) and `--p` (progress 0..1); every animation is seeked per frame, so the output is deterministic. Animate with CSS `@keyframes`, the kit's motion classes (`w-reveal`, `w-fade`, `w-pop`, `w-slide`, `w-grow`, `w-draw`) or `calc()` on `--t`/`--p`.
+- Style with the kit's `w-*` classes (`w-stage`, `w-h1`, `w-card`, `w-kpi`, ...) and the `--w-*` theme variables (`--w-bg`, `--w-text`, `--w-accent`, `--w-font`, ...), which follow your `brand` so branded runs restyle automatically.
+- The page is offline and script-less: no remote URLs, `<script>`, `fetch`, `@import` or web fonts; assets must be `data:` URIs (inline SVG is simplest). The validator rejects wall-clock animation and warns about text under 28 px.
+- Fonts must be installed on the machine that renders; anything else falls back to the system stack.
+
+Design guidance for these pages is based on the public Astryx design system (Meta, MIT). The full contract, kit reference and guidance are in [skills/windower/references/html-scenes.md](skills/windower/references/html-scenes.md).
+
+## Example prompts
+
+```
+/explain-video the checkout retry logic --audience onboarding
+/explain-video PR 482 --mode quick --audience pr-review
+Make a video showcasing Q4 revenue for a mock company, explained in my voice, using html to render nice visuals.
+```
+
+The last one is plain words: "explained in my voice" selects your ElevenLabs cloned voice and "using html" asks for designed `html` scenes.
 
 ## Privacy
 
@@ -132,6 +186,12 @@ Optional `.windower.json` at the root of the repository you are explaining (the 
 }
 ```
 
+An ElevenLabs setup that always narrates in your cloned voice:
+
+```json
+{"provider": "elevenlabs", "cloned": "always"}
+```
+
 Every key is optional. The full option reference is in [Customizing the video](#customizing-the-video) below.
 
 Never put API keys here; a field that looks like a secret is rejected. Unknown keys give a warning; invalid values stop with the field path.
@@ -147,6 +207,7 @@ Everything you can change lives in `.windower.json` at the repository root (the 
   "voice": "EXAVITQu4vr4xnSDxMaL", // provider-specific voice id
   "model": "eleven_multilingual_v2", // provider-specific model id
   "defaultMode": "normal", // quick | normal | deep, used when the request names no mode
+  "cloned": "ask", // ask | always | never: offer your ElevenLabs cloned voice
   "brand": {
     "primary": "#0A84FF", // required, hex
     "background": "#0B0D12", // required, hex
@@ -159,20 +220,21 @@ Everything you can change lives in `.windower.json` at the repository root (the 
 }
 ```
 
-| Key                  | Type     | Default                                                  | Notes                                                                                                                             |
-| -------------------- | -------- | -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `provider`           | string   | first available key, else `null` (silent)                | `elevenlabs`, `openai`, `piper` or `null` (silent). Flag `--provider` overrides; `--no-voice` forces `null`.                      |
-| `providers`          | string[] | none                                                     | Must be an array of strings; accepted but not loaded by any script yet.                                                           |
-| `voice`              | string   | `EXAVITQu4vr4xnSDxMaL` / `alloy` / `en_US-lessac-medium` | Per-provider default shown for elevenlabs / openai / piper. Flag `--voice` overrides.                                             |
-| `model`              | string   | `eleven_multilingual_v2` / `gpt-4o-mini-tts` / `piper`   | Same order as above. Flag `--model` overrides.                                                                                    |
-| `defaultMode`        | string   | `normal`                                                 | `quick`, `normal` or `deep`; used when the request names no mode. `defaultLengthSec` is deprecated and ignored in favour of this. |
-| `brand.primary`      | hex      | built-in palette (no brand)                              | Required if `brand` is present. Accent color of the scenes.                                                                       |
-| `brand.background`   | hex      | `#0b1020`                                                | Required if `brand` is present.                                                                                                   |
-| `brand.accent`       | hex      | none                                                     | Secondary accent.                                                                                                                 |
-| `brand.text`         | hex      | `#e8ecff`                                                | Text color. Panels, borders, muted text and the captions bar are derived by mixing it with the background.                        |
-| `brand.font`         | string   | Inter, then system fonts                                 | Family name only: letters, digits, spaces and hyphens, up to 64 characters.                                                       |
-| `brand.logo`         | path     | none                                                     | `.svg` or `.png`, at most 256 KB, path relative to the repo root, file must exist.                                                |
-| `brand.logoPosition` | string   | `top-right`                                              | `top-left`, `top-right`, `bottom-left` or `bottom-right`.                                                                         |
+| Key                  | Type     | Default                                                  | Notes                                                                                                                                          |
+| -------------------- | -------- | -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider`           | string   | first available key, else `null` (silent)                | `elevenlabs`, `openai`, `piper` or `null` (silent). Flag `--provider` overrides; `--no-voice` forces `null`.                                   |
+| `providers`          | string[] | none                                                     | Must be an array of strings; accepted but not loaded by any script yet.                                                                        |
+| `voice`              | string   | `EXAVITQu4vr4xnSDxMaL` / `alloy` / `en_US-lessac-medium` | Per-provider default shown for elevenlabs / openai / piper. Flag `--voice` overrides.                                                          |
+| `model`              | string   | `eleven_multilingual_v2` / `gpt-4o-mini-tts` / `piper`   | Same order as above. Flag `--model` overrides.                                                                                                 |
+| `defaultMode`        | string   | `normal`                                                 | `quick`, `normal` or `deep`; used when the request names no mode. `defaultLengthSec` is deprecated and ignored in favour of this.              |
+| `cloned`             | string   | `ask`                                                    | ElevenLabs only. `ask` offers your cloned voice before the gate, `always` uses it, `never` skips it. Ignored when `--voice` or `voice` is set. |
+| `brand.primary`      | hex      | built-in palette (no brand)                              | Required if `brand` is present. Accent color of the scenes.                                                                                    |
+| `brand.background`   | hex      | `#0b1020`                                                | Required if `brand` is present.                                                                                                                |
+| `brand.accent`       | hex      | none                                                     | Secondary accent.                                                                                                                              |
+| `brand.text`         | hex      | `#e8ecff`                                                | Text color. Panels, borders, muted text and the captions bar are derived by mixing it with the background.                                     |
+| `brand.font`         | string   | Inter, then system fonts                                 | Family name only: letters, digits, spaces and hyphens, up to 64 characters.                                                                    |
+| `brand.logo`         | path     | none                                                     | `.svg` or `.png`, at most 256 KB, path relative to the repo root, file must exist.                                                             |
+| `brand.logoPosition` | string   | `top-right`                                              | `top-left`, `top-right`, `bottom-left` or `bottom-right`.                                                                                      |
 
 Colors are hex only: `#rgb` or `#rrggbb`.
 
@@ -196,7 +258,7 @@ Pick one with `--mode quick|normal|deep` or words such as "quick" or "deep dive"
 
 **Chapters (deep videos).** Scenes take an optional `chapter` label (max 40 chars); consecutive scenes sharing a label form a chapter, and a label may not reappear later (validator error). The validator suggests chapters for deep videos over 150 s, and warns if they are used outside deep mode. The approval gate shows per-chapter scenes, seconds and narration characters, plus each chapter's credit share when voiced, and a frame-count note for videos over 150 s. Synthesis is cached per scene (provider, voice, model, text and neighboring narration), so editing one scene re-synthesizes only it and its two neighbors; other chapters reuse their audio and use no credits.
 
-**Per run, in the request.** The audience (`onboarding`, `pr-review`, `stakeholder`, `docs`) and the mode are inferred from your request, so say them in plain words ("a quick stakeholder video", "a deep dive for onboarding") or pass `--mode quick|normal|deep` to `/explain-video`. With no signal the mode is `normal`. The storyboard is built from eight scene types (title, bullets, code, architecture, sequence, timeline, outro and `html` for designed pages) (see `skills/windower/references/scene-catalog.md`) and you review it at the approval gate; ask for edits there before rendering.
+**Per run, in the request.** The audience (`onboarding`, `pr-review`, `stakeholder`, `docs`) and the mode are inferred from your request, so say them in plain words ("a quick stakeholder video", "a deep dive for onboarding") or pass `--mode quick|normal|deep` to `/explain-video`. With no signal the mode is `normal`. The storyboard is built from eight scene types (see [Scene types](#scene-types) and `skills/windower/references/scene-catalog.md`) and you review it at the approval gate; ask for edits there before rendering.
 
 **Not customizable.** Scene layout and design, caption style, transition duration (12 frames; only the per-scene `fade`, `slide` or `none` choice is set in the storyboard), fonts from files or URLs, background music (the only audio is narration), size (1920x1080, 16:9), frame rate (30 fps), and lengths outside the mode limits below.
 

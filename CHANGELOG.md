@@ -4,6 +4,8 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-25
+
 ### Added
 
 - `html` scene type: a designed 1920x1080 HTML page (inline `html` or a `file` next to the storyboard) narrated like any scene. Rendered in a sandboxed, script-less iframe; time is injected as `--t`/`--p` and animations are seeked per frame, so output is deterministic. Includes a theme/motion kit (`--w-*` variables following the brand, `w-*` classes), validator rules (size, no remote URLs/scripts/fetch/@import/web fonts, no wall-clock animation) and `references/html-scenes.md`.
